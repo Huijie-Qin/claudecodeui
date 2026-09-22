@@ -492,6 +492,7 @@
       "ariaLabel": "子代理执行时间线",
       "title": "调用过程",
       "waiting": "正在等待首次工具调用…",
+      "syncing": "正在加载子代理执行记录…",
       "noActivity": "没有记录到工具调用。"
     },
     "activity": {

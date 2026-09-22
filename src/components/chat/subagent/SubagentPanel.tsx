@@ -685,7 +685,11 @@ export function SubagentPanel({
                       )}
                       <p className="text-xs text-muted-foreground">
                         {['running', 'waiting'].includes(selectedTrace.status)
-                          ? t('subagentPanel.timeline.waiting', {
+                          ? Number(selectedTrace.usage.tool_uses) > 0
+                            ? t('subagentPanel.timeline.syncing', {
+                                defaultValue: 'Loading subagent activity…',
+                              })
+                            : t('subagentPanel.timeline.waiting', {
                               defaultValue: 'Waiting for the first tool call…',
                             })
                           : t('subagentPanel.timeline.noActivity', {

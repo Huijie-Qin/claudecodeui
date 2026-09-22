@@ -511,6 +511,7 @@
       "ariaLabel": "Subagent execution timeline",
       "title": "Activity",
       "waiting": "Waiting for the first tool call…",
+      "syncing": "Loading subagent activity…",
       "noActivity": "No tool activity was recorded."
     },
     "activity": {

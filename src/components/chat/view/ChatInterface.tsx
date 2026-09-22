@@ -18,6 +18,7 @@ import { shouldRefreshSessionHistoryForRealtimeMessage } from '../hooks/chatReal
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { createSessionStreamAccumulator } from '../hooks/sessionStreamAccumulator';
 import { buildSubagentTraces } from '../subagent/buildSubagentTraces';
+import { startSubagentHistorySync } from '../subagent/subagentHistorySync';
 import { SubagentPanel } from '../subagent/SubagentPanel';
 import {
   applySubagentPermissionWaitingState,
@@ -424,7 +425,7 @@ function ChatInterface({
       provider: reconnectProvider,
       sessionId: isConcreteSessionId(candidateSessionId) ? candidateSessionId : null,
     };
-  }, [currentSessionId, selectedSession]);
+  }, [currentSessionId, selectedSession?.id, selectedSession?.__provider]);
 
   const probeCurrentSessionStatus = useCallback(() => {
     const { provider: probeProvider, sessionId } = getCurrentConcreteSessionId();
@@ -543,6 +544,30 @@ function ChatInterface({
       });
     });
   }, [getCurrentConcreteSessionId, selectedProject, sessionStore, subscribeMessage]);
+
+  const recoveryProjectName = selectedProject?.name;
+  const recoveryProjectPath = selectedProject?.fullPath || selectedProject?.path || '';
+  const recoveryWorkspaceId = selectedProject?.workspaceId;
+
+  const hasRunningSubagents = subagentTraces.some((trace) => (
+    trace.status === 'running' || trace.status === 'waiting'
+  ));
+  useEffect(() => {
+    const { provider: historyProvider, sessionId } = getCurrentConcreteSessionId();
+    if (!isSubagentPanelOpen || historyProvider !== 'claude' || !sessionId || !recoveryProjectName) {
+      return undefined;
+    }
+    return startSubagentHistorySync({
+      isRunning: hasRunningSubagents,
+      refreshHistory: () => sessionStore.refreshFromServer(sessionId, {
+        provider: historyProvider,
+        projectName: recoveryProjectName,
+        projectPath: recoveryProjectPath,
+        workspaceId: recoveryWorkspaceId,
+      }),
+      onError: (error) => console.error('[Chat] Subagent history sync failed:', error),
+    });
+  }, [getCurrentConcreteSessionId, hasRunningSubagents, isSubagentPanelOpen, recoveryProjectName, recoveryProjectPath, recoveryWorkspaceId, sessionStore]);
 
   useEffect(() => {
     if (!isLoading) {
