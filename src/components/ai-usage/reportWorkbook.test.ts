@@ -104,7 +104,7 @@ test('XLSX preserves zero, null, precision, safe literal names and sortable Shan
   assert.deepEqual(book.SheetNames, ['统计 数据', '统计 数据 (2)']);
   const sheet = book.Sheets[book.SheetNames[0]];
   assert.equal(sheet.A5.t, 's'); assert.equal(sheet.A5.f, undefined);
-  assert.equal(sheet.B5.t, 'n'); assert.equal(sheet.B5.v, 0); assert.equal(sheet.C5, undefined);
+  assert.equal(sheet.B5.t, 'n'); assert.equal(sheet.B5.v, 0); assert.equal(sheet.C5?.v, undefined);
   assert.equal(sheet.B5.w, '0');
   assert.equal(sheet.D5.v, 1.23456789); assert.equal(sheet.E5.w, '2026-09-12 09:02:03');
 });
@@ -146,9 +146,38 @@ test('long names wrap with fitted heights and missing values remain blank', asyn
   assert.doesNotMatch(await zip.file('xl/worksheets/sheet1.xml')!.async('string'), /<pane |<autoFilter/);
   const book = XLSX.read(bytes, { type: 'array', cellStyles: true });
   const sheet = book.Sheets['长字段'];
-  assert.equal(sheet.B5, undefined);
+  assert.equal(sheet.B5?.v, undefined);
   assert.ok(sheet['!rows']![4].hpt! > 25);
   assert.ok(sheet['!cols']![0].wch! <= 48);
+});
+
+test('tables have four-sided borders including blank cells and spacer rows are not compressed', async () => {
+  const bytes = await workbookBytes([{ title: '边框及行高', rows: [
+    ['筛选与汇总', '', ''], ['开始日期', '结束日期', '用户'], ['2026-09-01', '2026-09-12', '全部'],
+    ['工作区', '分组', '名称'], ['全部', '用户', '全部'], [],
+    ['次数', '时长', '未知'], [0, 1.25, null], [], [], ['明细', '', ''],
+    ['用户', '次数', '时长'], ['小王', 0, null], ['小李', 2], [null, null, null],
+  ], sectionRows: [0, 10], summaryHeaderRows: [6], metadataHeaderRows: [1, 3],
+  headerRows: [11], detailHeaderRow: 11, detailRowCount: 3 }]);
+  const zip = await JSZip.loadAsync(bytes);
+  const xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
+  const styles = await zip.file('xl/styles.xml')!.async('string');
+  const borders = [...styles.matchAll(/<border(?:\s[^>]*)?>[\s\S]*?<\/border>|<border\/>/g)].map(match => match[0]);
+  const formats = [...styles.match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/)![1].matchAll(/<xf\b[^>]*borderId="(\d+)"/g)].map(match => Number(match[1]));
+  for (const row of [10, 11, 15, 16, 17, 18]) {
+    for (const col of ['A', 'B', 'C']) {
+      const cell = xml.match(new RegExp(`<c\\b[^>]*r="${col}${row}"[^>]*>`))![0];
+      const border = borders[formats[Number(cell.match(/\bs="(\d+)"/)![1])]];
+      for (const edge of ['left', 'right', 'top', 'bottom']) assert.ok(border.includes(`<${edge} style="thin">`), `${col}${row}: ${edge}`);
+    }
+  }
+  const sheet = XLSX.read(bytes, { type: 'array', cellStyles: true }).Sheets['边框及行高'];
+  for (const row of [1, 3, 9, 12, 13]) assert.equal(sheet['!rows']![row - 1].hpt, 20, `row ${row}`);
+  assert.equal(sheet.B16.v, 0);
+  assert.equal(sheet.C16?.v, undefined);
+  assert.equal(sheet.C17?.v, undefined);
+  assert.match(xml, /<c r="C16" s="\d+"\/>/);
+  assert.equal(XLSX.utils.decode_range(sheet['!ref']!).e.c, 2);
 });
 
 test('worksheet print settings precede ignored errors as required by Excel OOXML', async () => {

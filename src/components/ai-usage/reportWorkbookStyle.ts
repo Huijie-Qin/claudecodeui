@@ -9,6 +9,7 @@ const span = (value: unknown) => Math.max(0, ...String(value ?? '').split('\n').
 // using the existing JSZip dependency; never reserialize untrusted cell values.
 const font = (color: string, bold = false, size = 11) => `<font><sz val="${size}"/><color rgb="FF${color}"/><name val="Arial"/>${bold ? '<b/>' : ''}</font>`;
 const fill = (color: string) => `<fill><patternFill patternType="solid"><fgColor rgb="FF${color}"/><bgColor indexed="64"/></patternFill></fill>`;
+const border = (color: string) => `<border>${['left', 'right', 'top', 'bottom'].map(edge => `<${edge} style="thin"><color rgb="FF${color}"/></${edge}>`).join('')}</border>`;
 const xf = (fontId = 0, fillId = 0, numFmtId = 0, align = 'left', borderId = 0, wrap = true) =>
   `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="${align}" vertical="center" wrapText="${wrap ? 1 : 0}"/></xf>`;
 const formats = [
@@ -18,7 +19,7 @@ const formats = [
   xf(0, 0, 164, 'right', 1, false), xf(0, 3, 164, 'right', 1, false),
   xf(0, 0, 165, 'center', 1, false), xf(0, 3, 165, 'center', 1, false),
   xf(0, 0, 166, 'center', 1, false), xf(0, 3, 166, 'center', 1, false),
-  xf(4, 4, 0, 'left'), xf(2, 4, 3, 'left', 0, false), xf(2, 4, 164, 'left', 0, false),
+  xf(4, 4, 0, 'left', 1), xf(2, 4, 3, 'left', 1, false), xf(2, 4, 164, 'left', 1, false),
   xf(2, 0, 0, 'left', 3, false), xf(0, 0, 0, 'left', 3), xf(0, 0, 165, 'left', 0, false),
 ];
 const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -26,7 +27,7 @@ const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <numFmts count="3"><numFmt numFmtId="164" formatCode="#,##0.########"/><numFmt numFmtId="165" formatCode="yyyy-mm-dd"/><numFmt numFmtId="166" formatCode="yyyy-mm-dd hh:mm:ss"/></numFmts>
 <fonts count="5">${font('243247')}${font('FFFFFF', true)}${font('244CA0', true)}${font('19345B', true, 16)}${font('64748B')}</fonts>
 <fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>${fill('294B7A')}${fill('F4F7FC')}${fill('EDF3FC')}</fills>
-<borders count="4"><border/><border><bottom style="hair"><color rgb="FFE2E8F0"/></bottom></border><border><right style="thin"><color rgb="FFFFFFFF"/></right></border><border><bottom style="thin"><color rgb="FFCAD7EB"/></bottom></border></borders>
+<borders count="4"><border/>${border('CAD5E3')}${border('CAD5E3')}<border><bottom style="thin"><color rgb="FFCAD7EB"/></bottom></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
 <cellXfs count="${formats.length}">${formats.join('')}</cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><dxfs count="0"/>
@@ -36,7 +37,7 @@ export async function styledWorkbookBytes(sheets: WorkbookSheet[]): Promise<Arra
   const [XLSX, { default: JSZip }] = await Promise.all([import('xlsx'), import('jszip')]);
   const book = XLSX.utils.book_new();
   const used = new Set<string>();
-  const layouts: { styles: Map<string, number>; freeze: number; columns: number }[] = [];
+  const layouts: { styles: Map<string, number>; blankCells: Set<string>; freeze: number; columns: number }[] = [];
   book.Props = { Title: 'AI Reports', Author: 'AI Dashboard' };
   book.Workbook = { Names: [] };
   for (const [index, sheet] of sheets.entries()) {
@@ -78,23 +79,32 @@ export async function styledWorkbookBytes(sheets: WorkbookSheet[]): Promise<Arra
     ws['!rows'] = rows.map((row, r) => {
       const sourceRow = r - offset;
       const lines = row.reduce<number>((n, value, c) => Math.max(n, Math.ceil(span(value) / Math.max(1, widths[c] - 3)), String(value ?? '').split('\n').length), 1);
-      const hpt = offset && r === 0 ? 10 : offset && r === 1 ? Math.max(32, Math.ceil(span(sheet.title) / widths.reduce((a, b) => a + b, 0)) * 22)
-        : offset && r === 2 ? 8 : !row.length ? 10 : summaryHeaders.has(sourceRow) ? 24
+      const hpt = offset && r === 0 ? 20 : offset && r === 1 ? Math.max(32, Math.ceil(span(sheet.title) / widths.reduce((a, b) => a + b, 0)) * 22)
+        : offset && r === 2 ? 20 : !row.length ? 20 : summaryHeaders.has(sourceRow) ? 24
           : summaryValues.has(sourceRow) ? 32 : sheet.sectionRows?.includes(sourceRow) ? 30
             : headers.has(sourceRow) ? Math.max(30, lines * 16 + 8) : Math.max(25, lines * 15 + 8);
       return { hpt: Math.min(409, hpt) };
     });
     const cells = new Map<string, number>();
+    const blankCells = new Set<string>();
     let activeHeader = -1;
     for (const [r, row] of rows.entries()) {
       const sourceRow = r - offset;
       if (sheet.sectionRows?.includes(sourceRow)) activeHeader = -1;
       if (headers.has(sourceRow)) activeHeader = sourceRow;
       const band = activeHeader >= 0 && (sourceRow - activeHeader) % 2 === 0 ? 1 : 0;
-      for (let c = 0; c < row.length; c++) {
+      // Materialize visually blank cells only inside real table boundaries so
+      // missing values keep their borders without becoming zero or extra columns.
+      const tableWidth = activeHeader >= 0 && row.length ? sheet.rows[activeHeader].length
+        : summaryValues.has(sourceRow) ? sheet.rows[sourceRow - 1].length : 0;
+      for (let c = 0; c < Math.max(row.length, tableWidth); c++) {
         const address = XLSX.utils.encode_cell({ r, c });
         const value = row[c];
-        if (value == null) continue;
+        if (value == null) {
+          if (c >= tableWidth) continue;
+          ws[address] = { t: 's', v: '' };
+          blankCells.add(address);
+        }
         let style = typeof value === 'number' ? (Number.isInteger(value) ? 7 : 9) + band : 5 + band;
         if (dates.has(address)) style = (dates.get(address) ? 11 : 13) + band;
         if (offset && r === 1) style = 1;
@@ -117,7 +127,7 @@ export async function styledWorkbookBytes(sheets: WorkbookSheet[]): Promise<Arra
     const quotedName = `'${name.replace(/'/g, "''")}'`;
     book.Workbook.Names!.push({ Name: '_xlnm.Print_Area', Sheet: index, Ref: `${quotedName}!$A$1:$${XLSX.utils.encode_col(width - 1)}$${rows.length}` });
     if (sheet.detailHeaderRow != null) book.Workbook.Names!.push({ Name: '_xlnm.Print_Titles', Sheet: index, Ref: `${quotedName}!$${mainHeader! + offset + 1}:$${mainHeader! + offset + 1}` });
-    layouts.push({ styles: cells, freeze: sheet.detailHeaderRow != null && sheet.rows.length > 25 ? mainHeader + offset + 1 : 0, columns: width });
+    layouts.push({ styles: cells, blankCells, freeze: sheet.detailHeaderRow != null && sheet.rows.length > 25 ? mainHeader + offset + 1 : 0, columns: width });
     XLSX.utils.book_append_sheet(book, ws, name);
   }
   const zip = await JSZip.loadAsync(XLSX.write(book, { bookType: 'xlsx', type: 'array' }));
@@ -127,6 +137,12 @@ export async function styledWorkbookBytes(sheets: WorkbookSheet[]): Promise<Arra
     const part = zip.file(path);
     if (!part) throw new Error('exportFailed');
     let xml = await part.async('string');
+    // Keep missing data truly empty in Excel (e.g. COUNTA must not count it),
+    // while retaining a serializable cell on which to place the border.
+    xml = xml.replace(/<c\b([^>]*)><v><\/v><\/c>/g, (full, attrs: string) => {
+      const address = /\br="([A-Z]+\d+)"/.exec(attrs)?.[1];
+      return address && layout.blankCells.has(address) ? `<c r="${address}"/>` : full;
+    });
     xml = xml.replace(/<c\b([^>]*?)(\/?>)/g, (full, attrs: string, close: string) => {
       const address = /\br="([A-Z]+\d+)"/.exec(attrs)?.[1];
       const style = address ? layout.styles.get(address) : undefined;
