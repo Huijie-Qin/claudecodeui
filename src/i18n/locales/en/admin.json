@@ -933,6 +933,37 @@
       "ask": "Ask user"
     },
     "actions": {
+      "completionReview": {
+        "label": "Model review",
+        "tooltip": "Available only for the main agent's Stop; add it once per Hook as the final post-action. Adding it disables subagent execution.",
+        "description": "When the main agent finishes, a fresh subagent independently reviews the result against the original user task and any optional acceptance criteria. If it does not pass, the main agent continues. Artifact paths can guide the review.",
+        "maxReviews": "Maximum reviews",
+        "maxReviewsHint": "Choose 1–5 reviews; the default is 3. Automatic continuation stops at the limit.",
+        "model": "Review model (optional)",
+        "modelPlaceholder": "Leave blank to use the main model",
+        "modelHint": "Enter the model name for reviews, or leave blank to use the main agent's model.",
+        "criteria": "Acceptance criteria (optional)",
+        "criteriaPlaceholder": "For example: The result includes runnable code and explains how it was verified.",
+        "criteriaHint": "Both the original user task and these criteria must pass. Leave blank to keep the existing task-completion review.",
+        "artifactPaths": "Artifact path hints (optional)",
+        "artifactPathsPlaceholder": "reports/final.md\nscreenshots/*.png",
+        "artifactPathsHint": "Enter one workspace-relative path or glob per line; up to {{maxPaths}} entries, each at most {{length}} characters.",
+        "validationResult": "Program validation result (optional)",
+        "noValidationResult": "Do not use a program validation result",
+        "validationResultHint": "Select an object output declared by this Hook's script or an earlier MCP call result. The result must include a boolean passed field; it may include string issues and JSON evidence. Model review cannot approve when program validation fails.",
+        "mainAgentOnly": "Model review runs only for the main agent. Remove it before enabling subagent execution.",
+        "returnFieldsManaged": "Model review controls continue, stopReason, decision, and reason automatically. Custom bindings for these fields are unavailable.",
+        "terminalHint": "Model review is the final action. Remove it to add other actions.",
+        "errors": {
+          "maxReviews": "Review count must be an integer from 1 to 5.",
+          "model": "The model name must be at most 200 characters.",
+          "criteria": "Acceptance criteria must be at most 8,000 characters.",
+          "validationResultPath": "Invalid program validation result reference. Select a declared object script output or an earlier MCP call result.",
+          "artifactPathsCount": "Enter at most 20 artifact path hints.",
+          "artifactPathLength": "Each artifact path hint must be at most 500 characters.",
+          "artifactPathFormat": "Use workspace-relative paths or globs. Do not start with / or ~ or include a .. segment, backslash, colon, or control character."
+        }
+      },
       "selectToolFirst": "Select a specific tool in the matcher first",
       "empty": "Choose an action above and configure it here.",
       "tool": "MCP tool",

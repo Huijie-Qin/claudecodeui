@@ -76,6 +76,7 @@ const POST_ACTION_TYPES = Object.freeze([
   'invoke_skill',
   'send_agent_message',
   'request_confirmation',
+  'review_completion',
 ]);
 const AGENT_TURN_ACTION_EVENTS = new Set(['Stop', 'StopFailure']);
 const SCRIPT_OUTPUT_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array']);
@@ -98,6 +99,7 @@ const ENVIRONMENT_VARIABLE_PATHS = new Set([
   'ccui.env.workspaceId',
   'ccui.env.sessionId',
   'ccui.env.sqlCheckRuleIds',
+  'ccui.env.hookInvocationCount',
 ]);
 const COMMON_CLAUDE_OUTPUTS = Object.freeze([
   'continue',
@@ -150,6 +152,7 @@ function allowedPostActions(eventName) {
   return new Set(actions.filter((type) => (
     (type !== 'mcp_loop_run' || eventName === 'PostToolUse')
     && (type !== 'request_confirmation' || eventName === 'PreToolUse')
+    && (type !== 'review_completion' || eventName === 'Stop')
   )));
 }
 
@@ -192,6 +195,21 @@ function requireInteger(value, name, { min = 1, max = Number.MAX_SAFE_INTEGER } 
     throw createHttpError(`${name} must be an integer between ${min} and ${max}`);
   }
   return number;
+}
+
+function normalizeReviewArtifactPaths(value, name) {
+  const paths = value ?? [];
+  if (!Array.isArray(paths)) throw createHttpError(`${name} must be an array`);
+  if (paths.length > 20) throw createHttpError(`${name} must contain 20 paths or fewer`);
+  return [...new Set(paths.map((entry, index) => {
+    const candidate = requireString(entry, `${name}[${index}]`, { max: 500 });
+    if (candidate.startsWith('/') || candidate.startsWith('~') || candidate.includes('\\')
+        || candidate.includes(':') || /[\u0000-\u001f\u007f]/.test(candidate)
+        || candidate.split('/').includes('..')) {
+      throw createHttpError(`${name}[${index}] must be a workspace-relative path or glob`);
+    }
+    return candidate;
+  }))];
 }
 
 function normalizeEqualityCondition(value, name, { optional = false } = {}) {
@@ -413,6 +431,9 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
       if (action.type === 'request_confirmation') {
         throw createHttpError('request_confirmation is only supported for PreToolUse');
       }
+      if (action.type === 'review_completion') {
+        throw createHttpError('review_completion is only supported for Stop');
+      }
       throw createHttpError(`postActions[${index}].type is not supported`);
     }
     if (action.type === 'call_mcp_tool') {
@@ -477,6 +498,43 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
             `postActions[${index}].config.waitingLabel`,
             { max: 200, allowEmpty: true },
           ),
+        },
+      };
+    }
+    if (action.type === 'review_completion') {
+      const validationResultPath = config.validationResultPath == null
+        || config.validationResultPath === ''
+        ? ''
+        : requireString(
+          config.validationResultPath,
+          `postActions[${index}].config.validationResultPath`,
+          { max: 300 },
+        );
+      return {
+        id,
+        type: 'review_completion',
+        position: index,
+        config: {
+          maxReviews: requireInteger(
+            config.maxReviews ?? 3,
+            `postActions[${index}].config.maxReviews`,
+            { min: 1, max: 10 },
+          ),
+          model: requireString(
+            typeof config.model === 'string' ? config.model : '',
+            `postActions[${index}].config.model`,
+            { max: 200, allowEmpty: true },
+          ),
+          criteria: requireString(
+            config.criteria ?? '',
+            `postActions[${index}].config.criteria`,
+            { max: 8_000, allowEmpty: true },
+          ),
+          artifactPaths: normalizeReviewArtifactPaths(
+            config.artifactPaths,
+            `postActions[${index}].config.artifactPaths`,
+          ),
+          ...(validationResultPath ? { validationResultPath } : {}),
         },
       };
     }
@@ -574,6 +632,13 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
   if (confirmationActions.length === 1 && normalizedActions.at(-1)?.type !== 'request_confirmation') {
     throw createHttpError('request_confirmation must be the final post action');
   }
+  const reviewActions = normalizedActions.filter((action) => action.type === 'review_completion');
+  if (reviewActions.length > 1) {
+    throw createHttpError('Stop supports at most one review_completion post action');
+  }
+  if (reviewActions.length === 1 && normalizedActions.at(-1)?.type !== 'review_completion') {
+    throw createHttpError('review_completion must be the final post action');
+  }
   return normalizedActions;
 }
 
@@ -631,6 +696,28 @@ function validateHookReferences(hook) {
   const allActionIds = new Set(hook.postActions.map((action) => action.id));
   const precedingActionIds = new Set();
   for (const action of hook.postActions) {
+    if (action.type === 'review_completion') {
+      const validationResultPath = action.config.validationResultPath;
+      if (validationResultPath) {
+        const scriptMatch = /^script\.output\.([A-Za-z_$][A-Za-z0-9_$]*)$/.exec(validationResultPath);
+        const actionMatch = /^actions\.([^.]+)\.output$/.exec(validationResultPath);
+        if (scriptMatch) {
+          const output = hook.extensionLogic?.outputs?.find((entry) => entry.name === scriptMatch[1]);
+          if (output?.type !== 'object') {
+            throw createHttpError(`review_completion validationResultPath ${validationResultPath} requires a declared object script output`);
+          }
+        } else if (actionMatch) {
+          const sourceAction = hook.postActions.find((entry) => entry.id === actionMatch[1]);
+          if (!precedingActionIds.has(actionMatch[1]) || sourceAction?.type !== 'call_mcp_tool') {
+            throw createHttpError(`review_completion validationResultPath ${validationResultPath} requires a preceding call_mcp_tool action`);
+          }
+        } else {
+          throw createHttpError('review_completion validationResultPath must reference a script object output or preceding MCP result');
+        }
+      }
+      precedingActionIds.add(action.id);
+      continue;
+    }
     if (['call_mcp_tool', 'mcp_loop_run', 'write_record'].includes(action.type)) {
       const bindings = action.type === 'call_mcp_tool'
         ? [action.config.condition, ...Object.values(action.config.inputs)].filter(Boolean)
@@ -698,8 +785,23 @@ function normalizeHookInput(input, { strict = false } = {}) {
     postActions: normalizePostActions(input.postActions, eventName),
     claudeResponse: normalizeClaudeResponse(input.claudeResponse),
   };
+  if (normalized.includeSubagents && normalized.postActions.some((action) => action.type === 'review_completion')) {
+    throw createHttpError('review_completion only supports the main agent; disable includeSubagents');
+  }
+  if (normalized.postActions.some((action) => action.type === 'review_completion')) {
+    for (const field of ['continue', 'stopReason', 'decision', 'reason']) {
+      if (Object.hasOwn(normalized.claudeResponse.bindings, field)) {
+        throw createHttpError(`review_completion controls Claude response field ${field}`);
+      }
+    }
+  }
   validateHookReferences(normalized);
   if (strict) {
+    for (const action of normalized.postActions) {
+      if (action.type === 'review_completion' && action.config.maxReviews > 5) {
+        throw createHttpError('review_completion maxReviews must be 5 or fewer when publishing');
+      }
+    }
     const allowedOutputs = allowedClaudeOutputs(eventName);
     for (const path of Object.keys(normalized.claudeResponse.bindings)) {
       if (!allowedOutputs.has(path)) {
@@ -1146,6 +1248,8 @@ function validatePublishResources(hook, hookMcpCatalog, validatedSkills) {
       }
     } else if (action.type === 'request_confirmation' && !action.config.messageTemplate.trim()) {
       throw createHttpError(`Post action ${action.id} must set a confirmation message`);
+    } else if (action.type === 'review_completion') {
+      // The reviewer uses the current Stop transcript; no resource binding is needed.
     } else if (!action.config.messageTemplate.trim()) {
       throw createHttpError(`Post action ${action.id} must set an Agent message`);
     }
@@ -2971,6 +3075,7 @@ export function createHookConfigService({
         { path: 'ccui.env.workspaceId', type: 'number' },
         { path: 'ccui.env.sessionId', type: 'string' },
         { path: 'ccui.env.sqlCheckRuleIds', type: 'array' },
+        { path: 'ccui.env.hookInvocationCount', type: 'number' },
       ],
     }),
   };

@@ -496,7 +496,7 @@ test('Hook example endpoints list choices and create only the selected drafts', 
 
   const catalog = await requestJson(router, '/hooks/examples');
   assert.equal(catalog.response.status, 200);
-  assert.equal(catalog.payload.examples.length, 6);
+  assert.equal(catalog.payload.examples.length, 8);
   assert.equal(catalog.payload.examples.every((example) => example.exists === false), true);
 
   const selectedIds = catalog.payload.examples.map((example) => example.id);
@@ -506,17 +506,22 @@ test('Hook example endpoints list choices and create only the selected drafts', 
   });
 
   assert.equal(response.status, 201);
-  assert.equal(payload.createdCount, 6);
+  assert.equal(payload.createdCount, selectedIds.length);
   assert.equal(payload.hooks.every((hook) => hook.status === 'draft'), true);
   const sqlCheckExample = payload.hooks.find((hook) => hook.name.includes('SQL Check'));
   const sqlRecordExample = payload.hooks.find((hook) => hook.name.includes('SQL 行数'));
+  const completionReviewExample = payload.hooks.find((hook) => hook.name.includes('任务完成度复核'));
+  const reportDataReviewExample = payload.hooks.find((hook) => hook.name.includes('报告与数据交付验收'));
   const skillExamples = payload.hooks.filter((hook) => hook.postActions[0]?.type === 'invoke_skill');
   assert.equal(sqlCheckExample.postActions[0].config.toolName, 'mcp__sql-syntax-checker__check_sql_syntax');
   assert.equal(sqlCheckExample.postActions.some((action) => action.type === 'write_record'), false);
   assert.equal(sqlRecordExample.postActions[0].type, 'write_record');
   assert.equal(sqlRecordExample.postActions.some((action) => action.type === 'call_mcp_tool'), false);
+  assert.equal(completionReviewExample.postActions[0].type, 'review_completion');
+  assert.equal(reportDataReviewExample.postActions[0].type, 'review_completion');
+  assert.equal(reportDataReviewExample.postActions[0].config.artifactPaths.length, 2);
   assert.equal(skillExamples.every((hook) => hook.postActions[0].config.skillId === 'builtin:hook-notification'), true);
-  assert.deepEqual(payload.visibleEvents, ['Stop', 'StopFailure']);
+  assert.deepEqual(payload.visibleEvents, ['Stop', 'PreToolUse', 'StopFailure']);
 });
 
 test('Hook list returns stored Hooks without creating presets', async () => {

@@ -29,14 +29,24 @@ import {
   CCUI_SCRIPT_APIS,
   EVENT_BY_NAME,
   buildFieldChoices,
+  buildCompletionReviewValidationChoices,
   buildReferenceChoices,
   buildScriptTemplate,
+  canAddCompletionReviewAction,
   canAddConfirmationAction,
+  COMPLETION_REVIEW_ARTIFACT_PATH_LENGTH_LIMIT,
+  COMPLETION_REVIEW_ARTIFACT_PATH_LIMIT,
+  COMPLETION_REVIEW_CRITERIA_LIMIT,
+  COMPLETION_REVIEW_MAX_REVIEWS,
+  createDefaultCompletionReviewConfig,
   findMatchedTool,
   getClaudeOutputFields,
+  getCompletionReviewConfigError,
   hasTerminalPostAction,
   inferNativeMatcherMode,
+  parseCompletionReviewArtifactPaths,
   retainCompatiblePostActions,
+  retainReviewCompatibleClaudeBindings,
   scriptApiName,
 } from './catalog';
 import { createHookItemId } from './editorUtils';
@@ -1076,6 +1086,137 @@ function RecordActionEditor({
   );
 }
 
+function CompletionReviewActionEditor({
+  action,
+  validationChoices,
+  onChange,
+}: {
+  action: HookPostAction;
+  validationChoices: FieldChoice[];
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const { t } = useTranslation('admin');
+  const config = asRecord(action.config);
+  const maxReviews = typeof config.maxReviews === 'number'
+    ? config.maxReviews
+    : config.maxReviews === null ? '' : 3;
+  const model = typeof config.model === 'string' ? config.model : '';
+  const criteria = typeof config.criteria === 'string' ? config.criteria : '';
+  const validationResultPath = typeof config.validationResultPath === 'string' ? config.validationResultPath : '';
+  const artifactPaths = Array.isArray(config.artifactPaths) ? config.artifactPaths : [];
+  const [artifactPathsText, setArtifactPathsText] = useState(() => artifactPaths.join('\n'));
+  const configError = getCompletionReviewConfigError(config, validationChoices.map((choice) => choice.path));
+
+  return (
+    <div className="space-y-4">
+      <p className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs leading-5 text-muted-foreground">
+        {t('hooks.actions.completionReview.description')}
+      </p>
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="space-y-1.5">
+          <span className="text-xs font-medium text-foreground">{t('hooks.actions.completionReview.maxReviews')}</span>
+          <Input
+            type="number"
+            min={1}
+            max={COMPLETION_REVIEW_MAX_REVIEWS}
+            step={1}
+            value={maxReviews}
+            onChange={(event) => {
+              if (event.target.value === '') {
+                onChange({ ...config, maxReviews: null });
+                return;
+              }
+              const value = Number(event.target.value);
+              if (Number.isFinite(value)) {
+                onChange({ ...config, maxReviews: value });
+              }
+            }}
+            className="h-10 rounded-xl"
+          />
+          <p className="text-[11px] leading-5 text-muted-foreground">{t('hooks.actions.completionReview.maxReviewsHint')}</p>
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-medium text-foreground">{t('hooks.actions.completionReview.model')}</span>
+          <Input
+            value={model}
+            onChange={(event) => onChange({ ...config, model: event.target.value })}
+            placeholder={t('hooks.actions.completionReview.modelPlaceholder')}
+            maxLength={200}
+            className="h-10 rounded-xl font-mono text-xs"
+          />
+          <p className="text-[11px] leading-5 text-muted-foreground">{t('hooks.actions.completionReview.modelHint')}</p>
+        </label>
+      </div>
+      <label className="block space-y-1.5">
+        <span className="flex items-center justify-between gap-3 text-xs font-medium text-foreground">
+          {t('hooks.actions.completionReview.criteria')}
+          <span className="font-normal text-muted-foreground">{criteria.length}/{COMPLETION_REVIEW_CRITERIA_LIMIT}</span>
+        </span>
+        <textarea
+          rows={4}
+          value={criteria}
+          maxLength={COMPLETION_REVIEW_CRITERIA_LIMIT}
+          aria-invalid={configError === 'criteria'}
+          onChange={(event) => onChange({ ...config, criteria: event.target.value })}
+          placeholder={t('hooks.actions.completionReview.criteriaPlaceholder')}
+          className="w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none focus-visible:ring-4 focus-visible:ring-primary/10"
+        />
+        <p className="text-[11px] leading-5 text-muted-foreground">{t('hooks.actions.completionReview.criteriaHint')}</p>
+      </label>
+      <label className="block space-y-1.5">
+        <span className="flex items-center justify-between gap-3 text-xs font-medium text-foreground">
+          {t('hooks.actions.completionReview.artifactPaths')}
+          <span className="font-normal text-muted-foreground">{artifactPaths.length}/{COMPLETION_REVIEW_ARTIFACT_PATH_LIMIT}</span>
+        </span>
+        <textarea
+          rows={4}
+          value={artifactPathsText}
+          aria-invalid={Boolean(configError?.startsWith('artifactPath'))}
+          onChange={(event) => {
+            const value = event.target.value;
+            setArtifactPathsText(value);
+            onChange({ ...config, artifactPaths: parseCompletionReviewArtifactPaths(value) });
+          }}
+          onBlur={() => setArtifactPathsText(parseCompletionReviewArtifactPaths(artifactPathsText).join('\n'))}
+          placeholder={t('hooks.actions.completionReview.artifactPathsPlaceholder')}
+          className="w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 font-mono text-xs outline-none focus-visible:ring-4 focus-visible:ring-primary/10"
+        />
+        <p className="text-[11px] leading-5 text-muted-foreground">
+          {t('hooks.actions.completionReview.artifactPathsHint', {
+            maxPaths: COMPLETION_REVIEW_ARTIFACT_PATH_LIMIT,
+            length: COMPLETION_REVIEW_ARTIFACT_PATH_LENGTH_LIMIT,
+          })}
+        </p>
+      </label>
+      <div className="space-y-1.5">
+        <span className="text-xs font-medium text-foreground">{t('hooks.actions.completionReview.validationResult')}</span>
+        <HookSelect
+          value={validationResultPath}
+          options={[
+            { value: '', label: t('hooks.actions.completionReview.noValidationResult') },
+            ...validationChoices.map((choice) => ({
+              value: choice.path,
+              label: choice.label || choice.path,
+              description: choice.path,
+              group: fieldGroup(t, choice),
+            })),
+          ]}
+          onChange={(path) => onChange({ ...config, validationResultPath: path })}
+          placeholder={t('hooks.actions.completionReview.noValidationResult')}
+          ariaLabel={t('hooks.actions.completionReview.validationResult')}
+        />
+        {validationResultPath ? <code className="block break-all text-[11px] text-muted-foreground">{validationResultPath}</code> : null}
+        <p className="text-[11px] leading-5 text-muted-foreground">{t('hooks.actions.completionReview.validationResultHint')}</p>
+      </div>
+      {configError ? (
+        <p className="text-xs leading-5 text-destructive" role="alert">
+          {t(`hooks.actions.completionReview.errors.${configError}`)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function PostActionsEditor({
   hook,
   resources,
@@ -1087,6 +1228,7 @@ function PostActionsEditor({
   references: FieldChoice[];
   onChange: (actions: HookPostAction[]) => void;
 }) {
+  const { t } = useTranslation('admin');
   const canQueueAgentTurn = hook.eventName === 'Stop' || hook.eventName === 'StopFailure';
   const includeSubagents = resolveIncludeSubagents(hook);
   const matchedTool = findMatchedTool(resources, hook.matcher.value, hook.matcher.mode);
@@ -1096,8 +1238,11 @@ function PostActionsEditor({
     && !hasTerminalPostAction(hook.postActions);
   const hasTerminalAction = hasTerminalPostAction(hook.postActions);
   const canAddConfirmation = canAddConfirmationAction(hook);
+  const canAddCompletionReview = canAddCompletionReviewAction(hook);
   const addAction = (type: HookPostAction['type']) => {
-    if (hasTerminalAction || (type === 'request_confirmation' && !canAddConfirmation)) return;
+    if (hasTerminalAction
+      || (type === 'request_confirmation' && !canAddConfirmation)
+      || (type === 'review_completion' && !canAddCompletionReview)) return;
     const action: HookPostAction = {
       id: createHookItemId(),
       type,
@@ -1116,6 +1261,8 @@ function PostActionsEditor({
           ? { recordType: '', condition: null, fields: {} }
           : type === 'invoke_skill'
             ? { skillId: '', skillName: '', condition: null, argumentsTemplate: '' }
+            : type === 'review_completion'
+              ? createDefaultCompletionReviewConfig()
             : { messageTemplate: type === 'request_confirmation' ? DEFAULT_CONFIRMATION_MESSAGE : '', condition: null },
     };
     onChange([...hook.postActions, action]);
@@ -1188,13 +1335,30 @@ function PostActionsEditor({
             </Button>
           </span>
         </Tooltip>
+        <Tooltip content={t('hooks.actions.completionReview.tooltip')}>
+          <span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => addAction('review_completion')}
+              disabled={!canAddCompletionReview}
+            >
+              <Sparkles className="h-4 w-4" />
+              {t('hooks.actions.completionReview.label')}
+            </Button>
+          </span>
+        </Tooltip>
       </div>
       {hook.postActions.some((action) => action.type === 'request_confirmation') ? (
         <p className="text-xs leading-5 text-muted-foreground">“请求用户确认”已作为最后一个行为；删除它后可继续添加其他行为。</p>
       ) : null}
+      {hook.postActions.some((action) => action.type === 'review_completion') ? (
+        <p className="text-xs leading-5 text-muted-foreground">{t('hooks.actions.completionReview.terminalHint')}</p>
+      ) : null}
       {!hook.postActions.length ? (
         <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-          没有配置后置行为。可添加业务数据写入、MCP 工具、请求用户确认、循环调用、Skill 或 Agent 消息，也可只返回字段给 Claude。
+          没有配置后置行为。可添加业务数据写入、MCP 工具、请求用户确认、循环调用、Skill、Agent 消息或模型验收，也可只返回字段给 Claude。
         </div>
       ) : null}
       {hook.postActions.map((action, index) => {
@@ -1214,8 +1378,10 @@ function PostActionsEditor({
                   ? <Database className="h-4 w-4 text-primary" />
                   : action.type === 'invoke_skill'
                     ? <Sparkles className="h-4 w-4 text-primary" />
-                    : action.type === 'request_confirmation'
+                  : action.type === 'request_confirmation'
                       ? <CircleAlert className="h-4 w-4 text-primary" />
+                      : action.type === 'review_completion'
+                        ? <Sparkles className="h-4 w-4 text-primary" />
                       : <MessageSquare className="h-4 w-4 text-primary" />}
               <span className="text-xs font-semibold text-foreground">
                 {index + 1}. {action.type === 'call_mcp_tool'
@@ -1228,6 +1394,8 @@ function PostActionsEditor({
                       ? includeSubagents ? '调用 Skill（继续任务）' : '调用 Skill（恢复回合）'
                       : action.type === 'request_confirmation'
                         ? '请求用户确认'
+                        : action.type === 'review_completion'
+                          ? t('hooks.actions.completionReview.label')
                         : includeSubagents ? '发送 Agent 消息（继续任务）' : '发送 Agent 消息（下一回合）'}
               </span>
               <code className="ml-1 hidden text-[10px] text-muted-foreground sm:inline">actions.{action.id}.output</code>
@@ -1275,6 +1443,12 @@ function PostActionsEditor({
                 <ConfirmationActionEditor
                   action={action}
                   references={availableReferences}
+                  onChange={(config) => updateAction(index, config)}
+                />
+              ) : action.type === 'review_completion' ? (
+                <CompletionReviewActionEditor
+                  action={action}
+                  validationChoices={buildCompletionReviewValidationChoices(hook, action.id)}
                   onChange={(config) => updateAction(index, config)}
                 />
               ) : (
@@ -1464,7 +1638,9 @@ function ClaudeResponseEditor({
   references: FieldChoice[];
   onChange: (bindings: Record<string, HookValueBinding>) => void;
 }) {
-  const outputs = getClaudeOutputFields(hook.eventName);
+  const { t } = useTranslation('admin');
+  const hasCompletionReview = hook.postActions.some((action) => action.type === 'review_completion');
+  const outputs = getClaudeOutputFields(hook.eventName, hook.postActions);
   const bindings = hook.claudeResponse.bindings;
 
   if (!outputs.length) {
@@ -1479,6 +1655,11 @@ function ClaudeResponseEditor({
 
   return (
     <div className="space-y-3">
+      {hasCompletionReview ? (
+        <p className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs leading-5 text-muted-foreground">
+          {t('hooks.actions.completionReview.returnFieldsManaged')}
+        </p>
+      ) : null}
       {outputs.map((output) => {
         const binding = bindings[output.path];
         const enabled = Boolean(binding);
@@ -1583,6 +1764,7 @@ export default function HookConfigEditor({
   const matcherValue = hook.matcher.value || '';
   const hasMcpLoop = hook.postActions.some((action) => action.type === 'mcp_loop_run');
   const hasConfirmation = hook.postActions.some((action) => action.type === 'request_confirmation');
+  const hasCompletionReview = hook.postActions.some((action) => action.type === 'review_completion');
   const nativeMatcherMode = inferNativeMatcherMode(hook.eventName, matcherValue);
   const matcherRegexError = useMemo(() => {
     if (!eventDefinition?.matcherField || eventDefinition.matcherKind === 'fileNames') return false;
@@ -1622,7 +1804,12 @@ export default function HookConfigEditor({
   const hasEffect = Boolean(hook.extensionLogic?.code.trim())
     || hook.postActions.length > 0
     || Object.keys(hook.claudeResponse.bindings).length > 0;
-  const canSave = Boolean(hook.name.trim()) && !matcherRegexError;
+  const reviewConfigValid = hook.postActions.every((action) => action.type !== 'review_completion'
+    || !getCompletionReviewConfigError(
+      action.config,
+      buildCompletionReviewValidationChoices(hook, action.id).map((choice) => choice.path),
+    ));
+  const canSave = Boolean(hook.name.trim()) && !matcherRegexError && reviewConfigValid;
   const canPublish = canSave && hasEffect;
   const handleBack = () => {
     if (dirty) {
@@ -1739,7 +1926,11 @@ export default function HookConfigEditor({
                     <p id="hook-include-subagents-label" className="text-xs font-medium text-foreground">同时对子代理生效</p>
                     <p id="hook-include-subagents-description" className="mt-1 text-xs leading-5 text-muted-foreground">
                       开启后，主代理和每个子代理分别执行同一套 Hook 规则；关闭后仅主代理执行。
-                      {hook.eventName === 'Stop' ? ' 子代理结束时也会独立校验，未通过时继续处理自己的任务。' : ' Matcher 仍用于匹配工具名称。'}
+                      {hasCompletionReview
+                        ? ` ${t('hooks.actions.completionReview.mainAgentOnly')}`
+                        : hook.eventName === 'Stop'
+                          ? ' 子代理结束时也会独立校验，未通过时继续处理自己的任务。'
+                          : ' Matcher 仍用于匹配工具名称。'}
                     </p>
                   </div>
                   <button
@@ -1748,7 +1939,7 @@ export default function HookConfigEditor({
                     aria-checked={resolveIncludeSubagents(hook)}
                     aria-labelledby="hook-include-subagents-label"
                     aria-describedby="hook-include-subagents-description"
-                    disabled={busy}
+                    disabled={busy || (hasCompletionReview && !resolveIncludeSubagents(hook))}
                     onClick={() => updateDraft({ includeSubagents: !resolveIncludeSubagents(hook) })}
                     className={cn(
                       'relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50',
@@ -1982,6 +2173,14 @@ export default function HookConfigEditor({
               references={references}
               onChange={(postActions) => updateDraft({
                 postActions,
+                ...(postActions.some((action) => action.type === 'review_completion')
+                  ? {
+                      includeSubagents: false,
+                      claudeResponse: {
+                        bindings: retainReviewCompatibleClaudeBindings(hook.claudeResponse.bindings, postActions),
+                      },
+                    }
+                  : {}),
                 ...(postActions.some((action) => action.type === 'mcp_loop_run')
                   ? { claudeResponse: { bindings: {} } }
                   : {}),

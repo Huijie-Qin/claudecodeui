@@ -775,6 +775,7 @@ async function executePublishedMatrixHook({
   enqueueSkillRecovery,
   enqueueAgentMessage = enqueueSkillRecovery,
   enqueueMcpLoop = async () => ({ scheduled: true, jobId: 'matrix-loop', status: 'queued' }),
+  reviewCompletion = async () => ({ complete: true, reason: '任务已完成', nextStep: '' }),
   eventOverrides = {},
 }) {
   const runtime = createHookRuntimeSession({
@@ -792,6 +793,7 @@ async function executePublishedMatrixHook({
     enqueueSkillRecovery,
     enqueueAgentMessage,
     enqueueMcpLoop,
+    reviewCompletion,
     database,
   });
   const compiled = runtime.hooks[hook.eventName];
@@ -842,6 +844,7 @@ test('every Hook event publishes and executes every behavior allowed by its capa
     invokeSkill: 0,
     sendAgentMessage: 0,
     requestConfirmation: 0,
+    reviewCompletion: 0,
     claudeOutputs: 0,
   };
   const executedHookIds = new Set();
@@ -898,6 +901,24 @@ test('every Hook event publishes and executes every behavior allowed by its capa
       }
 
       for (const actionType of allowedPostActions(eventName)) {
+        if (actionType === 'review_completion') {
+          const hook = publishBoundMatrixHook(service, eventName, 'action-review-completion', {
+            includeSubagents: false,
+            postActions: [{ id: 'review', type: 'review_completion',
+              config: { maxReviews: 3, model: '' } }],
+          });
+          const { execution, output } = await executePublishedMatrixHook({
+            database, hook, workspaceRoot, mcpServers, enqueueSkillRecovery,
+          });
+          assert.deepEqual(output, { decision: 'approve', reason: '任务已完成' });
+          assert.deepEqual(JSON.parse(execution.actions_json), { review: { output: {
+            complete: true, reason: '任务已完成', nextStep: '',
+            reviewNumber: 1, maxReviews: 3, failed: false,
+          } } });
+          coverage.reviewCompletion += 1;
+          executedHookIds.add(hook.id);
+          continue;
+        }
         if (actionType === 'call_mcp_tool') {
           const inputs = {
             event_name: { source: 'reference', path: 'event.hook_event_name' },
@@ -1180,10 +1201,11 @@ test('every Hook event publishes and executes every behavior allowed by its capa
       invokeSkill: 2,
       sendAgentMessage: 2,
       requestConfirmation: 1,
+      reviewCompletion: 1,
       claudeOutputs: expectedClaudeOutputs,
     });
     assert.equal(recoveries.length, 4);
-    assert.equal(executedHookIds.size, (HOOK_EVENTS.length * 4) + 6 + expectedClaudeOutputs);
+    assert.equal(executedHookIds.size, (HOOK_EVENTS.length * 4) + 7 + expectedClaudeOutputs);
 
     const publishedCounts = database.prepare(`
       SELECT COUNT(*) AS total,

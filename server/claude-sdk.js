@@ -75,6 +75,7 @@ import { createMcpRuntimeDiagnostics } from './services/mcp-runtime-diagnostics.
 import { hookConfigService } from './services/hook-configs.js';
 import { hookMcpCatalogService } from './services/hook-mcp-catalog.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './services/hook-runtime.js';
+import { reviewHookCompletion } from './services/hook-completion-review.js';
 import { createClaudeQueryWithHookFallback, createRequiredHookError, isRequiredHook } from './services/claude-hook-policy.js';
 import { resolveMcpToolConfirmation } from './services/mcp-tool-confirmation.js';
 import { hookWorkspaceResourcesService } from './services/hook-workspace-resources.js';
@@ -2010,6 +2011,27 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
             workspaceRoot: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
             sessionId: () => capturedSessionId || sessionId || null,
             suppressSkillRecovery: Boolean(runtimeOptions.hookRecovery),
+            reviewCompletion: ({ event, model, criteria, artifactPaths, validationResult, signal }) => {
+              const transcriptPath = event?.transcript_path;
+              const hostTranscriptPath = runtimeContext.mode === 'docker'
+                && runtimeContext.runtimeHomePath
+                && typeof transcriptPath === 'string'
+                && transcriptPath.startsWith('/home/cloudcli/')
+                ? path.join(runtimeContext.runtimeHomePath, transcriptPath.slice('/home/cloudcli/'.length))
+                : transcriptPath;
+              return reviewHookCompletion({
+                event: { ...event, transcript_path: hostTranscriptPath },
+                workspaceRoot: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
+                executionWorkspaceRoot: runtimeContext.mode === 'docker' ? runtimeContext.containerCwd : undefined,
+                userPrompt: command,
+                model,
+                criteria,
+                artifactPaths,
+                validationResult,
+                sdkOptions,
+                signal,
+              });
+            },
             headersHelperRunner,
             resolveMcpAction: async ({ action }) => {
               const toolResources = hookMcpCatalogService.listToolResources();

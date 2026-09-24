@@ -887,6 +887,37 @@
       "ask": "询问用户"
     },
     "actions": {
+      "completionReview": {
+        "label": "模型验收",
+        "tooltip": "仅适用于主代理的 Stop；一个 Hook 最多添加一次，且必须作为最后一个后置行为。添加后会关闭对子代理生效。",
+        "description": "主代理回答结束时，启动空白上下文的子代理，根据原始用户任务和可选验收要求独立验收结果；未通过则让主代理继续处理。产物路径可提示子代理重点查看。",
+        "maxReviews": "最多验收次数",
+        "maxReviewsHint": "范围为 1–5；默认 3 次。达到上限后停止自动继续。",
+        "model": "验收模型（可选）",
+        "modelPlaceholder": "留空则继承主模型",
+        "modelHint": "填写用于验收的模型名称；留空时使用主代理的模型。",
+        "criteria": "验收要求（可选）",
+        "criteriaPlaceholder": "例如：结果包含可运行代码，并说明验证方法。",
+        "criteriaHint": "原始用户任务与这里的要求都必须满足；留空则沿用原有的任务完成度判断。",
+        "artifactPaths": "产物路径提示（可选）",
+        "artifactPathsPlaceholder": "reports/final.md\nscreenshots/*.png",
+        "artifactPathsHint": "每行填写一条工作区相对路径或 Glob；最多 {{maxPaths}} 条，每条不超过 {{length}} 个字符。",
+        "validationResult": "程序校验结果（可选）",
+        "noValidationResult": "不引用程序校验结果",
+        "validationResultHint": "选择当前 Hook 中声明为 object 的脚本输出，或前序 MCP 调用结果。结果必须包含 passed 布尔值；可附带 issues 字符串列表和 evidence 证据。程序校验未通过时，模型验收不能放行。",
+        "mainAgentOnly": "模型验收仅对主代理生效；删除该行为后才能开启对子代理生效。",
+        "returnFieldsManaged": "模型验收会自动控制 continue、stopReason、decision 和 reason，不能再为这些返回字段配置自定义绑定。",
+        "terminalHint": "“模型验收”已作为最后一个行为；删除它后可继续添加其他行为。",
+        "errors": {
+          "maxReviews": "验收次数必须为 1–5 的整数。",
+          "model": "模型名称不能超过 200 个字符。",
+          "criteria": "验收要求不能超过 8,000 个字符。",
+          "validationResultPath": "程序校验结果引用无效；请选择当前脚本声明的 object 输出或前序 MCP 调用结果。",
+          "artifactPathsCount": "最多填写 20 条产物路径提示。",
+          "artifactPathLength": "每条产物路径提示不能超过 500 个字符。",
+          "artifactPathFormat": "请使用工作区相对路径或 Glob；不能以 / 或 ~ 开头，也不能包含 .. 路径段、反斜杠、冒号或控制字符。"
+        }
+      },
       "selectToolFirst": "请先在匹配条件中选择具体工具",
       "empty": "选择上方行为并在这里完成配置。",
       "tool": "MCP 工具",

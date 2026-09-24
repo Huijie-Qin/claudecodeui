@@ -3,6 +3,7 @@ import { canIncludeSubagents, resolveIncludeSubagents } from '../../../../shared
 import type {
   FieldChoice,
   FieldType,
+  HookCompletionReviewConfig,
   HookConfig,
   HookConfigDraft,
   HookEventDefinition,
@@ -13,6 +14,7 @@ import type {
   HookScriptLanguage,
   HookScriptOutput,
   HookToolResource,
+  HookValueBinding,
 } from './types';
 
 const COMMON_EVENT_FIELDS: HookEventDefinition['fields'] = [
@@ -541,8 +543,19 @@ const EVENT_CLAUDE_OUTPUTS: Partial<Record<HookEventName, HookOutputField[]>> = 
 };
 
 const OUTPUT_IGNORED_EVENTS = new Set<HookEventName>(['StopFailure']);
+const COMPLETION_REVIEW_CONTROLLED_OUTPUTS = new Set(['continue', 'stopReason', 'decision', 'reason']);
 
-export function getClaudeOutputFields(eventName: HookEventName): HookOutputField[] {
+export function retainReviewCompatibleClaudeBindings(
+  bindings: Record<string, HookValueBinding>,
+  actions: HookPostAction[],
+): Record<string, HookValueBinding> {
+  if (!actions.some((action) => action.type === 'review_completion')) return bindings;
+  return Object.fromEntries(
+    Object.entries(bindings).filter(([path]) => !COMPLETION_REVIEW_CONTROLLED_OUTPUTS.has(path)),
+  );
+}
+
+export function getClaudeOutputFields(eventName: HookEventName, actions: HookPostAction[] = []): HookOutputField[] {
   if (OUTPUT_IGNORED_EVENTS.has(eventName)) return [];
   const decisionOutputs: HookOutputField[] = DECISION_EVENTS.has(eventName)
     ? [
@@ -559,7 +572,10 @@ export function getClaudeOutputFields(eventName: HookEventName): HookOutputField
       ]
     : [];
   const specific = EVENT_CLAUDE_OUTPUTS[eventName] || [];
-  return [...COMMON_CLAUDE_OUTPUTS, ...decisionOutputs, ...specific];
+  const fields = [...COMMON_CLAUDE_OUTPUTS, ...decisionOutputs, ...specific];
+  return actions.some((action) => action.type === 'review_completion')
+    ? fields.filter((field) => !COMPLETION_REVIEW_CONTROLLED_OUTPUTS.has(field.path))
+    : fields;
 }
 
 export const CCUI_SCRIPT_APIS = [
@@ -669,22 +685,104 @@ export function shouldShowBusinessData(
 }
 
 export function hasTerminalPostAction(actions: HookPostAction[]): boolean {
-  return actions.some((action) => action.type === 'mcp_loop_run' || action.type === 'request_confirmation');
+  return actions.some((action) => action.type === 'mcp_loop_run' || action.type === 'request_confirmation' || action.type === 'review_completion');
 }
 
 export function canAddConfirmationAction(draft: HookConfigDraft): boolean {
   return draft.eventName === 'PreToolUse' && !hasTerminalPostAction(draft.postActions);
 }
 
+export function canAddCompletionReviewAction(draft: HookConfigDraft): boolean {
+  return draft.eventName === 'Stop' && !hasTerminalPostAction(draft.postActions);
+}
+
+export const COMPLETION_REVIEW_CRITERIA_LIMIT = 8000;
+export const COMPLETION_REVIEW_ARTIFACT_PATH_LIMIT = 20;
+export const COMPLETION_REVIEW_ARTIFACT_PATH_LENGTH_LIMIT = 500;
+export const COMPLETION_REVIEW_MAX_REVIEWS = 5;
+
+export function createDefaultCompletionReviewConfig(): HookCompletionReviewConfig {
+  return { maxReviews: 3, model: '', criteria: '', artifactPaths: [] };
+}
+
+export function parseCompletionReviewArtifactPaths(value: string): string[] {
+  return value.split(/\r?\n/).map((path) => path.trim()).filter(Boolean);
+}
+
+export function buildCompletionReviewValidationChoices(
+  hook: Pick<HookConfigDraft, 'extensionLogic' | 'postActions'>,
+  reviewActionId: string,
+): FieldChoice[] {
+  const reviewIndex = hook.postActions.findIndex((action) => action.id === reviewActionId);
+  if (reviewIndex < 0) return [];
+  const scriptOutputs: FieldChoice[] = (hook.extensionLogic?.outputs || [])
+    .filter((output) => output.type === 'object')
+    .map((output) => ({
+      path: `script.output.${output.name}`,
+      label: output.name,
+      type: 'object',
+      group: 'script',
+    }));
+  const mcpOutputs: FieldChoice[] = hook.postActions.slice(0, reviewIndex)
+    .filter((action) => action.type === 'call_mcp_tool')
+    .map((action) => ({
+      path: `actions.${action.id}.output`,
+      label: String(action.config.toolName || action.id),
+      type: 'object',
+      group: 'action',
+    }));
+  return [...scriptOutputs, ...mcpOutputs];
+}
+
+export type CompletionReviewConfigError =
+  | 'maxReviews'
+  | 'model'
+  | 'criteria'
+  | 'validationResultPath'
+  | 'artifactPathsCount'
+  | 'artifactPathLength'
+  | 'artifactPathFormat';
+
+export function getCompletionReviewConfigError(
+  config: Record<string, unknown>,
+  validationPaths?: string[],
+): CompletionReviewConfigError | null {
+  const maxReviews = config.maxReviews === undefined ? 3 : config.maxReviews;
+  if (!Number.isInteger(maxReviews) || (maxReviews as number) < 1 || (maxReviews as number) > COMPLETION_REVIEW_MAX_REVIEWS) return 'maxReviews';
+  const model = config.model ?? '';
+  if (typeof model !== 'string' || model.length > 200) return 'model';
+  const criteria = config.criteria ?? '';
+  if (typeof criteria !== 'string' || criteria.length > COMPLETION_REVIEW_CRITERIA_LIMIT) return 'criteria';
+  const validationResultPath = config.validationResultPath ?? '';
+  if (typeof validationResultPath !== 'string'
+    || (validationResultPath !== '' && (
+      !/^(?:script\.output\.[A-Za-z_$][A-Za-z0-9_$]*|actions\.[A-Za-z0-9_-]+\.output)$/.test(validationResultPath)
+      || (validationPaths && !validationPaths.includes(validationResultPath))
+    ))) return 'validationResultPath';
+  const artifactPaths = config.artifactPaths ?? [];
+  if (!Array.isArray(artifactPaths) || artifactPaths.length > COMPLETION_REVIEW_ARTIFACT_PATH_LIMIT) return 'artifactPathsCount';
+  for (const path of artifactPaths) {
+    if (typeof path !== 'string') return 'artifactPathFormat';
+    if (path.length > COMPLETION_REVIEW_ARTIFACT_PATH_LENGTH_LIMIT) return 'artifactPathLength';
+    if (!path || path.startsWith('/') || path.startsWith('~') || path.includes('\\') || path.includes(':')
+      || /[\x00-\x1f\x7f]/.test(path) || path.split('/').includes('..')) return 'artifactPathFormat';
+  }
+  return null;
+}
+
 export function retainCompatiblePostActions(actions: HookPostAction[], eventName: HookEventName): HookPostAction[] {
-  return actions.filter((action) => {
+  const compatible = actions.filter((action) => {
     if (action.type === 'request_confirmation') return eventName === 'PreToolUse';
     if (action.type === 'mcp_loop_run') return eventName === 'PostToolUse';
+    if (action.type === 'review_completion') return eventName === 'Stop';
     if (action.type === 'invoke_skill' || action.type === 'send_agent_message') {
       return eventName === 'Stop' || eventName === 'StopFailure';
     }
     return true;
-  }).map((action, position) => ({ ...action, position }));
+  });
+  const review = compatible.find((action) => action.type === 'review_completion');
+  return [...compatible.filter((action) => action.type !== 'review_completion'), ...(review ? [review] : [])]
+    .map((action, position) => ({ ...action, position }));
 }
 
 function normalizePropertyType(type?: string): FieldType {
@@ -772,7 +870,9 @@ export function buildReferenceChoices(draft: HookConfigDraft, resources: HookRes
             ? 'Skill 调用结果'
             : action.type === 'request_confirmation'
               ? '用户确认请求'
-              : 'Agent 消息发送结果',
+              : action.type === 'review_completion'
+                ? '模型验收结果'
+                : 'Agent 消息发送结果',
       type: 'object',
       group: 'action',
     });
@@ -784,6 +884,24 @@ export function buildReferenceChoices(draft: HookConfigDraft, resources: HookRes
         { name: 'toolInput', type: 'object', label: '待确认的完整工具参数' },
       ];
       for (const field of confirmationFields) {
+        fields.push({
+          path: `actions.${action.id}.output.${field.name}`,
+          label: field.label,
+          type: field.type,
+          group: 'action',
+        });
+      }
+    }
+    if (action.type === 'review_completion') {
+      const reviewFields: Array<{ name: string; type: FieldType; label: string }> = [
+        { name: 'complete', type: 'boolean', label: '验收通过' },
+        { name: 'reason', type: 'string', label: '验收理由' },
+        { name: 'nextStep', type: 'string', label: '建议下一步' },
+        { name: 'reviewNumber', type: 'number', label: '当前验收次数' },
+        { name: 'maxReviews', type: 'number', label: '最多验收次数' },
+        { name: 'failed', type: 'boolean', label: '验收执行异常' },
+      ];
+      for (const field of reviewFields) {
         fields.push({
           path: `actions.${action.id}.output.${field.name}`,
           label: field.label,

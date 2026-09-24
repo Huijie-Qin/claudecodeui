@@ -2851,6 +2851,7 @@ test('resource catalog exposes only runtime-backed environment fields', () => {
       { path: 'ccui.env.workspaceId', type: 'number' },
       { path: 'ccui.env.sessionId', type: 'string' },
       { path: 'ccui.env.sqlCheckRuleIds', type: 'array' },
+      { path: 'ccui.env.hookInvocationCount', type: 'number' },
     ]);
   } finally {
     database.close();
