@@ -36,11 +36,13 @@ test('only the selected statistic is displayed, with sample counts retained in d
 
 test('statistic selector offers four exclusive choices and reflects the inherited selection', () => {
   const html = renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(HookStatisticSelect, { value: 'average', onChange: () => {} })));
-  assert.equal((html.match(/<select/g) || []).length, 1);
-  assert.equal((html.match(/<option /g) || []).length, 4);
-  assert.equal((html.match(/selected=""/g) || []).length, 1);
-  assert.match(html, /value="average" selected="">平均值/);
-  assert.doesNotMatch(html, /multiple/);
+  assert.equal((html.match(/role="combobox"/g) || []).length, 1);
+  assert.match(html, /aria-haspopup="listbox"/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.match(html, /title="平均值"/);
+  assert.match(html, />统计方式</);
+  assert.deepEqual(hookNumberMetrics.map(({ key }) => key), ['sum', 'average', 'min', 'max']);
+  assert.doesNotMatch(html, /multiple|role="listbox"|<select/);
 });
 
 test('switching a sorted statistic follows its new value, preserving other sort columns and direction', () => {

@@ -28,6 +28,8 @@ export default function ReportOverlay({ title, children, onClose, compact = fals
     closeRef.current?.focus({ preventScroll: true });
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        // Let the focused select dismiss its own popup before dismissing this dialog.
+        if (event.target instanceof Element && event.target.closest('[data-report-select][aria-expanded="true"]')) return;
         event.preventDefault(); event.stopPropagation(); onCloseRef.current();
       }
       if (event.key !== 'Tab') return;

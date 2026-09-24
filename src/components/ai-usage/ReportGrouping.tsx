@@ -3,6 +3,7 @@ import { CalendarDays, UsersRound } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import MetricDefinition from './MetricDefinition';
+import ReportSelect from './ReportSelect';
 import { isTimeGroup, splitReportGroups } from './groupingState';
 
 export default function ReportGrouping({ value, options, onChange, labels = {} }: {
@@ -23,9 +24,8 @@ export default function ReportGrouping({ value, options, onChange, labels = {} }
       <button type="button" aria-pressed={!time} onClick={() => select(objects.includes(lastObject.current) ? lastObject.current : objects[0])}><UsersRound aria-hidden="true" />{t('grouping.objects')}</button>
       <button type="button" aria-pressed={time} onClick={() => select(periods.includes(lastPeriod.current) ? lastPeriod.current : periods[0])}><CalendarDays aria-hidden="true" />{t('grouping.time')}</button>
     </div>}
-    <label>{t(time ? 'grouping.granularity' : 'grouping.object')}<select value={value} onChange={event => select(event.target.value)}>
-      {(time ? periods : objects).map(group => <option key={group} value={group}>{labels[group] || t(time ? `grouping.${group}` : `group.${group}`)}</option>)}
-    </select></label>
+    <ReportSelect label={t(time ? 'grouping.granularity' : 'grouping.object')} value={value} onChange={select} menuMinWidth={160}
+      options={(time ? periods : objects).map(group => ({ value: group, label: labels[group] || t(time ? `grouping.${group}` : `group.${group}`) }))} />
     {time && <MetricDefinition><span className="ai-report-grouping-hint">{t(value === 'week' ? 'grouping.weekHint' : value === 'month' ? 'grouping.monthHint' : 'grouping.dayHint')}</span></MetricDefinition>}
   </div>;
 }

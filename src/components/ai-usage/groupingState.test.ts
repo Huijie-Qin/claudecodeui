@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { I18nextProvider } from 'react-i18next';
 import i18next from 'i18next';
+
 import { isTimeGroup, reportGroupLabel, splitReportGroups } from './groupingState';
 import { analysisMetrics, visibleAnalysisMetrics, visibleAnalysisSort } from './analysisState';
 import { reportCsv } from './reportExport';
@@ -58,18 +60,21 @@ test('CSV exports the visible metrics and the same date-range labels', () => {
   const periods = reportCsv([{key:'groupLabel',title:'统计日期区间',exportValue: row => reportGroupLabel('week',row.groupLabel,{from:'2026-08-14',to:'2026-08-16'})}], [{groupLabel:'2026-08-10'}]);
   assert.ok(periods.includes('2026/08/14 — 2026/08/16'));
 });
-test('grouping controls present only the choices for the selected view', async () => {
+test('grouping controls label the selected entity or time view without hidden native selects', async () => {
   const i18n = i18next.createInstance();
   await i18n.init({ lng:'en', resources:{en:{aiUsage:{ grouping:{view:'View mode', objects:'By entity',time:'By time',object:'Entity',granularity:'Time interval',day:'Daily',week:'Weekly',month:'Monthly'}, group:{user:'User',workspace:'Workspace'} }}} });
   const render = (value: string, options = ['user','workspace','day','week','month']) => renderToStaticMarkup(createElement(I18nextProvider,{i18n}, createElement(ReportGrouping,{value,options,onChange:()=>{}})));
   const objects = render('user');
   assert.ok(objects.includes('aria-pressed="true"'));
-  assert.ok(objects.includes('value="workspace"'));
-  assert.ok(!objects.includes('value="week"'));
+  assert.ok(objects.includes('role="combobox"'));
+  assert.ok(objects.includes('title="User"'));
+  assert.ok(objects.includes('Entity'));
+  assert.ok(!objects.includes('Time interval'));
   const weeks = render('week');
   assert.ok(weeks.includes('Time interval'));
-  assert.ok(weeks.includes('value="week" selected=""'));
-  assert.ok(!weeks.includes('value="user"'));
+  assert.ok(weeks.includes('title="Weekly"'));
+  assert.ok(!weeks.includes('title="User"'));
+  assert.ok(!weeks.includes('<select'));
   assert.ok(!render('user',['user','workspace']).includes('By time'));
   assert.equal(render('template',['template']), '');
 });

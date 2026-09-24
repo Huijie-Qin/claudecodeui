@@ -1,4 +1,4 @@
-.ai-report, .ai-report-dialog {
+.ai-report, .ai-report-dialog, .ai-report-select-menu {
   --ai-report-accent: #315eec;
   --ai-report-series-light: #a9bdfb;
   --primary: 226 82% 56%;
@@ -14,7 +14,7 @@
   color: hsl(var(--foreground));
   font-size: 13px;
 }
-.dark .ai-report, .dark .ai-report-dialog {
+.dark .ai-report, .dark .ai-report-dialog, .dark .ai-report-select-menu {
   --ai-report-accent: #8ba8ff;
   --ai-report-series-light: #4963a3;
   --primary: 225 100% 77%;
@@ -136,6 +136,31 @@
 .ai-report-view-switch button svg { width:13px; height:13px; }
 .ai-report .ai-report-view-switch button[aria-pressed=true], .ai-report-dialog .ai-report-view-switch button[aria-pressed=true] { background:hsl(var(--card)); color:var(--ai-report-accent); box-shadow:0 1px 3px rgb(25 36 56 / 8%); font-weight:600; }
 .ai-report-grouping-hint { flex-basis:100%; color:hsl(var(--muted-foreground)); font-size:10px; }
+.ai-report-select { display:flex; flex-direction:column; gap:6px; min-width:0; max-width:100%; }
+.ai-report-select-label { font-size:11px; font-weight:500; color:hsl(var(--muted-foreground)); white-space:nowrap; }
+.ai-report-select-trigger { display:flex; align-items:center; gap:9px; width:100%; height:36px; min-width:100px; padding:0 11px; border:1px solid hsl(var(--input)); border-radius:8px; background:hsl(var(--card)); color:hsl(var(--foreground)); text-align:left; cursor:pointer; transition:background .15s,border-color .15s,box-shadow .15s; }
+.ai-report-select-trigger:hover:not(:disabled) { border-color:hsl(var(--primary)/.5); background:hsl(var(--muted)/.35); }
+.ai-report .ai-report-select-trigger:focus-visible, .ai-report-dialog .ai-report-select-trigger:focus-visible, .ai-report-select-trigger[aria-expanded=true] { outline:none; border-color:hsl(var(--primary)/.7); box-shadow:0 0 0 3px hsl(var(--primary)/.1); }
+.ai-report-select-trigger:disabled { cursor:not-allowed; opacity:.55; }
+.ai-report-select-value { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ai-report-select-icon { display:flex; color:hsl(var(--muted-foreground)); }
+.ai-report-select-icon svg { width:15px; height:15px; }
+.ai-report-select-chevron { flex-shrink:0; width:14px; height:14px; margin-left:8px; color:hsl(var(--muted-foreground)); transition:transform .15s; }
+.ai-report-select-trigger[aria-expanded=true] .ai-report-select-chevron { transform:rotate(180deg); }
+.ai-report-field-select { width:220px; }
+.ai-report-statistic-select { width:132px; }
+.ai-report-grouping > .ai-report-select { flex-direction:row; align-items:center; gap:8px; }
+.ai-report-grouping > .ai-report-select .ai-report-select-trigger { width:auto; min-width:102px; }
+.ai-report-select-menu { position:fixed; z-index:110; overflow-y:auto; overscroll-behavior:contain; padding:5px; border:1px solid hsl(var(--border)); border-radius:11px; background:hsl(var(--card)); box-shadow:0 12px 32px rgb(16 37 72 / 14%),0 2px 6px rgb(16 37 72 / 5%); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif; }
+.ai-report-select-option { display:flex; align-items:center; gap:12px; min-height:36px; margin:2px 0; padding:9px 11px; border-radius:7px; cursor:pointer; font-size:12px; line-height:1.5; }
+.ai-report-select-option[data-active=true] { background:hsl(var(--muted)); }
+.ai-report-select-option[aria-selected=true] { background:hsl(var(--primary)/.08); color:var(--ai-report-accent); }
+.ai-report-select-option[aria-selected=true][data-active=true] { background:hsl(var(--primary)/.13); }
+.ai-report-select-option-text { flex:1; min-width:0; overflow-wrap:anywhere; }
+.ai-report-select-option-text > span { display:block; font-weight:500; }
+.ai-report-select-option-text small { display:block; margin-top:3px; color:hsl(var(--muted-foreground)); font-size:11px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+.ai-report-select-option > svg { width:15px; height:15px; flex-shrink:0; }
+@media(pointer:coarse) { .ai-report-select-option { min-height:44px; } }
 .ai-report-totals { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px 18px; padding:12px 18px; }
 .ai-report-totals > p { margin:0; }
 .ai-report-totals > div { gap:12px 24px; }

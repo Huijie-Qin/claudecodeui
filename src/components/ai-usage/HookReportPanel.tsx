@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Hash } from 'lucide-react';
 
 import { Button } from '../../shared/view/ui';
 
@@ -13,6 +14,7 @@ import { usageFilterParams, type UsageFilters } from './filterState';
 import { hookNumberColumns } from './HookNumberColumns';
 import HookStatisticSelect from './HookStatisticSelect';
 import ReportGrouping from './ReportGrouping';
+import ReportSelect from './ReportSelect';
 import { isTimeGroup, reportGroupLabel } from './groupingState';
 import { ReportPagination, ReportTable, type ReportColumn, type ReportSort } from './ReportTable';
 import { isUsageAccessFailure, usageFailureKey } from './requestState';
@@ -104,7 +106,10 @@ export default function HookReportPanel({ row, params, through, onAccessError }:
       </div><MetricDefinition><details className="ai-report-help"><summary>{t('redesign.definitions')}</summary><p>{t('hookNumericHint')}</p></details></MetricDefinition></header>
       <div className="flex flex-wrap items-end gap-3 border-b border-border px-5 py-4">
         <ReportGrouping value={groupBy} options={groups} labels={{ hook: t('detailStatsAll') }} onChange={value => { setGroupBy(value as typeof groupBy); if (isTimeGroup(value)) setStatsSort({ sortBy: 'groupLabel', sortDir: 'asc' }); setStatsPage(1); }} />
-        <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">{t('numberField')}<select className={inputClass} value={fieldKey} disabled={loading} onChange={(event) => { setFieldKey(event.target.value); resetPages(); }}><option value="">{t('allNumberFields')}</option>{fields.map((field) => <option key={field.key} value={field.key}>{field.label || field.key} · {field.key}</option>)}{fieldKey && !fields.some((field) => field.key === fieldKey) && <option value={fieldKey}>{fieldKey}</option>}</select></label>
+        <ReportSelect label={t('numberField')} value={fieldKey} disabled={loading} className="ai-report-field-select" icon={<Hash />} menuMinWidth={280}
+          options={[{ value: '', label: t('allNumberFields') }, ...fields.map(field => ({ value: field.key, label: field.label || field.key, description: field.key })),
+            ...(fieldKey && !fields.some(field => field.key === fieldKey) ? [{ value: fieldKey, label: fieldKey }] : [])]}
+          onChange={value => { setFieldKey(value); resetPages(); }} />
         <HookStatisticSelect value={metric} onChange={(value) => { setMetric(value); setStatsSort((old) => hookStatisticSort(old, value)); setStatsPage(1); }} />
       </div>
       {error && <p role="alert" className="p-5 text-sm text-destructive">{t(error)}</p>}
