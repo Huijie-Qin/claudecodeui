@@ -16,7 +16,7 @@ import { readAiUsageConfig } from './ai-usage-config.js';
 import { seedAiUsageSimulation, simulationNight } from './ai-usage-simulation-fixture.js';
 
 const config = readAiUsageConfig({ AI_USAGE_ENABLED: 'true' });
-const coverage = { activeUsers: 'complete', hooks: 'complete', duration: 'complete', skillPublications: 'complete', skillInvocations: 'complete', codeSubmissions: 'complete' };
+const coverage = { activeUsers: 'complete', generatedSql: 'partial', hooks: 'complete', duration: 'complete', skillPublications: 'complete', skillInvocations: 'complete', codeSubmissions: 'complete' };
 const clock = () => new Date('2026-09-13T18:10:00Z');
 const rows = (db, table) => db.prepare(`SELECT * FROM ${table} ORDER BY tenant_id,id`).all();
 function parity(db, stagingBatch = null) {
@@ -41,8 +41,8 @@ function seedFacts(f) {
   f.row({ id: 'duration', dataset: 'turns', date: '2026-09-12', value: { status: 'completed', durationMs: 180000 } });
   f.row({ id: 'pub', dataset: 'skill_publications', subjectId: 'skill-a', value: { skillName: 'Skill A', publisherUserId: 3 } });
   f.row({ id: 'call', dataset: 'skill_invocations', subjectId: 'skill-a', value: { skillName: 'Skill A', publisherUserId: 3, callerUserId: 4 } });
-  f.row({ id: 'sql', dataset: 'hook_records', subjectId: 'hook-sql', value: { recordType: 'sql_response_metrics', fields: [{ key: 'sqlLineCount', type: 'number', value: 0 }] } });
-  f.row({ id: 'sql-unknown', dataset: 'hook_records', value: { recordType: 'sql_response_metrics', fields: [] } });
+  f.row({ id: 'sql', dataset: 'sql_generations', value: { generatedLines: 0 } });
+  f.row({ id: 'sql-unknown', dataset: 'sql_generations', value: { generatedLines: null } });
   f.row({ id: 'code', dataset: 'code_submissions', value: { submittedLines: 50, repositoryUrl: 'repo', commitSha: 'sha' } });
 }
 function unchanged(db) {
@@ -473,15 +473,15 @@ test('real fixture nightly runs publish all five topics, merged additions correc
     publications: db.prepare('SELECT COUNT(*) AS n FROM ai_dashboard_skill_publication_detail').get().n,
     calls: db.prepare('SELECT COUNT(*) AS n FROM ai_dashboard_skill_invocation_detail').get().n,
   });
-  assert.deepEqual(sums(), { sql: 13800, code: 90, publications: 30, calls: 600 });
+  assert.deepEqual(sums(), { sql: 3300, code: 90, publications: 30, calls: 600 });
   // Exercise six-to-five verification/backfill across multiple 500-row pages.
   const beforeMigration = unchanged(db);
   downgradeToSixTables(db); migrateSplitDetails(db); parity(db);
   assert.deepEqual(unchanged(db), beforeMigration);
-  assert.deepEqual(sums(), { sql: 13800, code: 90, publications: 30, calls: 600 });
+  assert.deepEqual(sums(), { sql: 3300, code: 90, publications: 30, calls: 600 });
   downgradeToThreeTables(db); migrateSplitDetails(db); parity(db);
   assert.deepEqual(unchanged(db), beforeMigration);
-  assert.deepEqual(sums(), { sql: 13800, code: 90, publications: 30, calls: 600 });
+  assert.deepEqual(sums(), { sql: 3300, code: 90, publications: 30, calls: 600 });
   db.exec('UPDATE ai_mr_submissions SET additions=40 WHERE id=1; DELETE FROM ai_mr_submissions WHERE id=2');
   assert.equal(sums().code, 90, 'ordinary corrections wait for nightly publication');
   const next = await runAiUsageWindow({ database: db, config, now: clock });

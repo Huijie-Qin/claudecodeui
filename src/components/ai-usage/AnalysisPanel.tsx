@@ -4,10 +4,10 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../shared/view/ui';
 
+import MetricDefinition from './MetricDefinition';
 import { analysisGroups, analysisMetrics, hasAnalysisRecords, nextReportSort, visibleAnalysisMetrics, visibleAnalysisSort } from './analysisState';
 import { tableNameFilter } from './filterState';
 import { usageRequest } from './client';
-import ReportExportButton from './ReportExportButton';
 import ReportIdentity from './ReportIdentity';
 import ReportGrouping from './ReportGrouping';
 import { isTimeGroup, reportGroupLabel } from './groupingState';
@@ -87,11 +87,11 @@ export default function AnalysisPanel({ tab, params, onAccessError, onDetails, h
   if (onTemplate && groupBy === 'template') columns.push({ key: 'templateUsage', title: '', render: row =>
     row.groupKey != null && row.groupKey !== '__unknown__' ? <Button variant="ghost" size="sm" onClick={() => onTemplate(row)}>{t('exploreTemplate')}</Button> : null });
   return <section className="ai-report-panel overflow-hidden rounded-xl border border-border bg-card" aria-label={tableTitle}>
-    <header className="ai-report-section-head"><div className="ai-report-section-title"><h3>{tableTitle}</h3><details className="ai-report-help"><summary>{t('redesign.definitions')}</summary><p>{t(hookDirectory ? 'hookDirectoryHint' : tab === 'usage' ? 'usageTableHint' : tab === 'templates' ? params.templateId ? 'templateExploreHint' : 'templateTableHint' : 'unifiedTableHint')}</p></details></div>
+    <header className="ai-report-section-head"><div className="ai-report-section-title"><h3>{tableTitle}</h3><MetricDefinition><details className="ai-report-help"><summary>{t('redesign.definitions')}</summary><p>{t(hookDirectory ? 'hookDirectoryHint' : tab === 'usage' ? 'usageTableHint' : tab === 'templates' ? params.templateId ? 'templateExploreHint' : 'templateTableHint' : 'unifiedTableHint')}</p></details></MetricDefinition></div>
     <form aria-label={t('tableFilters')} className="ai-report-local-controls" onSubmit={(event) => { event.preventDefault(); setNameSearch(nameDraft.trim()); setPage(1); }}>
       {!hookDirectory && <ReportGrouping value={groupBy} options={groupOptions} onChange={setGroupBy} />}
       {nameFilter && !params.templateId && <><label className="flex flex-col gap-1.5 text-xs text-muted-foreground">{t(nameFilter.label)}<input type="text" maxLength={150} className={inputClass} placeholder={t('nameSearchPlaceholder')} value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} /></label><Button type="submit" variant="outline" disabled={loading}>{t('apply')}</Button><Button type="button" variant="ghost" onClick={() => { setNameDraft(''); setNameSearch(''); setPage(1); }}>{t('redesign.reset')}</Button></>}
-      <ReportExportButton compact endpoint="analysis" params={{ ...params, dataset: tab, groupBy, ...sort, ...(tab !== 'usage' ? { search: nameSearch } : {}), ...(tab === 'usage' && groupBy === 'user' ? { includeZeroUsers: true } : {}) }} columns={columns} total={result?.total || 0} title={tableTitle} disabled={loading || !result || Boolean(error)} onAccessError={onAccessError} />
+
     </form></header>
     {error && <p role="alert" className="p-5 text-sm text-destructive">{t(error)}</p>}
     {loading ? <p role="status" className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground"><RefreshCw className="h-4 w-4 animate-spin" />{t('loading')}</p> : <>

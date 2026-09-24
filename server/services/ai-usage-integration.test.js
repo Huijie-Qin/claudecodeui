@@ -13,7 +13,7 @@ import { buildSplitCandidate } from './ai-dashboard-split.js';
 
 const config = readAiUsageConfig({ AI_USAGE_ENABLED: 'true' });
 const night = day => () => new Date(`2026-09-${day}T18:10:00.000Z`);
-const coverage = { activeUsers: 'complete', hooks: 'complete', duration: 'complete', skillPublications: 'complete', skillInvocations: 'complete', codeSubmissions: 'complete' };
+const coverage = { activeUsers: 'complete', generatedSql: 'partial', hooks: 'complete', duration: 'complete', skillPublications: 'complete', skillInvocations: 'complete', codeSubmissions: 'complete' };
 const old = (dataset, value = {}, extra = {}) => ({ tenant_id: 10, dataset, row_key: 'source-1', stat_date: '2026-09-12',
   user_id: 3, workspace_id: 7, subject_id: 'subject-1', session_key: 'session-1', occurred_at: '2026-09-11T16:01:02.987Z', value_json: JSON.stringify(value), ...extra });
 const project = row => projectIntegrationRow(row, '2026-09-13 02:10:00');
@@ -34,10 +34,11 @@ test('scalar projection preserves sparse types, Shanghai timestamps, source iden
   assert.equal(invocation.user_name, 'caller'); assert.equal(invocation.publisher_user_name, 'publisher');
   assert.equal(project(old('skill_invocations', {})).user_id, null);
   const fields = value => ({ recordType: 'sql_response_metrics', fields: [{ key: 'sqlLineCount', type: 'number', value }] });
-  assert.equal(project(old('hook_records', fields(0))).generated_sql_lines, 0);
-  for (const value of [null, '50', -1, 1.2, Number.MAX_SAFE_INTEGER + 1]) assert.equal(project(old('hook_records', fields(value))).generated_sql_lines, null);
+  assert.equal(project(old('sql_generations', { generatedLines: 0 })).generated_sql_lines, 0);
+  for (const value of [null, '50', -1, 1.2, Number.MAX_SAFE_INTEGER + 1]) assert.equal(project(old('sql_generations', { generatedLines: value })).generated_sql_lines, null);
+  assert.equal(project(old('hook_records', fields(50))), null);
   assert.equal(project(old('hook_records', { ...fields(50), recordType: 'another_type' })), null);
-  assert.throws(() => project(old('hook_records', { ...fields(50), fields: [...fields(50).fields, ...fields(50).fields] })), /DUPLICATE/);
+  assert.equal(project(old('hook_records', { ...fields(50), fields: [...fields(50).fields, ...fields(50).fields] })), null);
   assert.equal(project(old('code_submissions', { submittedLines: 50 })).submitted_code_lines, 50);
 });
 
@@ -47,6 +48,7 @@ test('core views read only the new facts; Hook and Agent views still read the ol
   f.row({ id: 'duration', dataset: 'turns', value: { status: 'completed', durationMs: 20 } });
   f.row({ id: 'pub', dataset: 'skill_publications', subjectId: 'skill-1', value: { skillName: 'Skill' } });
   f.row({ id: 'sql', dataset: 'hook_records', subjectId: 'hook-1', value: { hookName: 'SQL', recordType: 'sql_response_metrics', fields: [{ key: 'sqlLineCount', type: 'number', value: 41 }] } });
+  f.row({ id: 'reply-sql', dataset: 'sql_generations', value: { generatedLines: 41 } });
   f.row({ id: 'mr', dataset: 'code_submissions', value: { submittedLines: 50 } });
   const queries = [];
   const prepare = f.db.prepare.bind(f.db);
@@ -67,7 +69,7 @@ test('core views read only the new facts; Hook and Agent views still read the ol
 
 test('code filters, server-side totals, pagination and records use one population; nulls remain unknown', t => {
   const f = fixture(t); f.batch('batch-1', 10, 'published', coverage);
-  f.row({ id: 'sql', dataset: 'hook_records', value: { recordType: 'sql_response_metrics', fields: [{ key: 'sqlLineCount', type: 'number', value: 41 }] } });
+  f.row({ id: 'sql', dataset: 'sql_generations', value: { generatedLines: 41 } });
   f.row({ id: 'mr1', dataset: 'code_submissions', value: { submittedLines: 50 } });
   f.row({ id: 'mr2', dataset: 'code_submissions', userId: 4, workspaceId: 8, date: '2026-09-12', value: { submittedLines: 40 } });
   f.row({ id: 'mr3', dataset: 'code_submissions', userId: 2, date: '2026-09-12', value: { submittedLines: null } });
@@ -164,7 +166,7 @@ test('new-table insertion failure rolls back BOTH formal tables and metadata; pr
 test('id rename preserves published/staged values, is idempotent, and keeps live legacy previews readable', t => {
   const f = fixture(t); f.batch('batch-1', 10, 'published', coverage);
   f.row({ id: 'rename-interaction', dataset: 'interactions' });
-  f.row({ id: 'rename-sql', dataset: 'hook_records', value: { recordType: 'sql_response_metrics', fields: [{ key: 'sqlLineCount', type: 'number', value: 41 }] } });
+  f.row({ id: 'rename-sql', dataset: 'sql_generations', value: { generatedLines: 41 } });
   f.db.exec("INSERT INTO ai_dashboard_integration_staging SELECT 'prepared-batch',d.* FROM ai_dashboard_integration_detail d");
   const published = f.db.prepare('SELECT * FROM ai_dashboard_integration_detail ORDER BY id').all();
   const staged = f.db.prepare('SELECT * FROM ai_dashboard_integration_staging ORDER BY id').all();

@@ -45,9 +45,13 @@
 
 打点失败会输出 `[AiUsage] Skill ... requires reconciliation` 日志，不重试市场发布、也不把已经成功的发布业务改为失败。进程退出或响应丢失可能留下 `requested/unknown`，这些记录不自动认定成功；当前没有自动核对外部市场的补偿任务。
 
-## 代码产出如何对应 Hook
+## 代码产出来源（2026-09-24 更新）
 
-“生成 SQL 行数”**不绑定某个 Hook ID 或名称**，按业务记录协议识别：
+“生成 SQL 行数”现已改为夜间扫描会话中各轮 AI 回复，不再从 Hook 业务记录取数，也不需要绑定或启用 SQL 记录 Hook。来源、文本识别和去重规则见 [AI 使用报表统计口径](ai-usage-metric-definitions.md#sql-提取与去重)。数据仍先进入 `ai_usage_report_rows`，再投影到 SQL 明细表；CodeHub 仍按已合并 MR 的 `additions` 统计。
+
+### 旧 SQL Hook 的业务记录配置（不再计入代码产出）
+
+以下配置仅用于保留的 Hook 业务字段统计，不是代码产出页的取数要求：
 
 | 配置 | 要求 |
 | --- | --- |
@@ -61,8 +65,8 @@
 
 内置示例是“SQL 行数记录”（`sql-line-record`），事件为 `Stop`，后置行为 `record-sql-response-metrics` 将 `script.output.sqlLineCount` 写入业务记录。只统计该脚本实际识别出的 SQL，不代表所有 AI 生成的代码。示例存在不代表已在实际租户绑定、启用或产生真实记录。
 
-原始记录位于 `hook_data_records.data_json`。夜间按记录对应的 Hook 发布版本提取已开放字段，再经 `ai_usage_report_rows` 投影到 `ai_dashboard_sql_generation_detail`。读取的是历史发布配置，而不是最新草稿。旧内置 SQL 示例未声明 `reportFields` 时有兼容白名单；新配置应显式开放字段。
+原始记录位于 `hook_data_records.data_json`。夜间按记录对应的 Hook 发布版本提取已开放字段，写入 `ai_usage_report_rows` 供 Hook 业务报表使用，不再投影到 `ai_dashboard_sql_generation_detail`。读取的是历史发布配置，而不是最新草稿。旧内置 SQL 示例未声明 `reportFields` 时有兼容白名单；新配置应显式开放字段。
 
-多个 Hook 若都写入上述协议，都会计入；当前没有“只选一个 Hook”的看板配置，不应重复部署多份同义记录 Hook。
+多个 Hook 的记录分别在 Hook 业务报表中统计，不会再次加到会话 SQL 的生成量中。
 
 “提交代码行数”是另一条来源：`ai_mr_submissions` 中 `status='merged'` 的 `additions`，按合并时间统计，**与 Hook 无关**。

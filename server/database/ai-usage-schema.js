@@ -124,16 +124,17 @@ export function migrateAiUsageSchema(database) {
   migrateAiUsageSkillContext(database);
   // Immediate redaction is metadata-driven and affects both published views.
   // Ordinary corrections still wait for the atomic nightly refresh.
-  database.exec(`CREATE TRIGGER IF NOT EXISTS ai_usage_integration_suppress_insert
+  database.exec(`DROP TRIGGER IF EXISTS ai_usage_integration_suppress_insert;
+    CREATE TRIGGER ai_usage_integration_suppress_insert
     AFTER INSERT ON ai_usage_suppressed_rows BEGIN
       DELETE FROM ai_dashboard_integration_detail WHERE tenant_id=NEW.tenant_id AND (
-        (NEW.dataset='hook_records' AND sql_record_id=NEW.row_key) OR
+        (NEW.dataset IN ('sql_generations','hook_records') AND sql_record_id=NEW.row_key) OR
         (NEW.dataset='code_submissions' AND code_submission_id=NEW.row_key) OR
         (NEW.dataset='skill_publications' AND skill_publish_count=1 AND skill_id IN (
           SELECT subject_id FROM ai_usage_report_rows WHERE tenant_id=NEW.tenant_id
             AND dataset=NEW.dataset AND row_key=NEW.row_key)));
       DELETE FROM ai_dashboard_integration_staging WHERE tenant_id=NEW.tenant_id AND (
-        (NEW.dataset='hook_records' AND sql_record_id=NEW.row_key) OR
+        (NEW.dataset IN ('sql_generations','hook_records') AND sql_record_id=NEW.row_key) OR
         (NEW.dataset='code_submissions' AND code_submission_id=NEW.row_key) OR
         (NEW.dataset='skill_publications' AND skill_publish_count=1 AND skill_id IN (
           SELECT subject_id FROM ai_usage_report_rows WHERE tenant_id=NEW.tenant_id

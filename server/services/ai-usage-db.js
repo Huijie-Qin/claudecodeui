@@ -40,6 +40,16 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
       const old = database.prepare(`SELECT stat_date FROM ai_usage_fact_rows WHERE tenant_id=? AND source_key=? AND dataset=? AND row_key=?`)
         .get(tenantId, sourceKey, row.dataset, row.row_key);
       if (old && old.stat_date !== row.stat_date) markDirty(tenantId, { ...row, stat_date: old.stat_date });
+      // A corrected native message may no longer contain SQL. Remove its old
+      // contribution instead of leaving stale lines or counting every prose reply.
+      if (row.dataset === 'sql_generations' && row.value?.generatedLines === 0) {
+        if (old) {
+          database.prepare('DELETE FROM ai_usage_fact_rows WHERE tenant_id=? AND source_key=? AND dataset=? AND row_key=?')
+            .run(tenantId, sourceKey, row.dataset, row.row_key);
+          markDirty(tenantId, { ...row, stat_date: old.stat_date });
+        }
+        continue;
+      }
       write.run({ tenant_id: tenantId, source_key: sourceKey, user_id: null, workspace_id: null,
         subject_id: null, session_key: null, occurred_at: null, ...row,
         value_json: JSON.stringify(row.value ?? {}), priority });

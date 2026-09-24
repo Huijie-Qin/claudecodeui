@@ -3,9 +3,9 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../shared/view/ui';
 
+import MetricDefinition from './MetricDefinition';
 import { nextReportSort } from './analysisState';
 import { usageRequest } from './client';
-import ReportExportButton from './ReportExportButton';
 import ReportIdentity from './ReportIdentity';
 import ReportGrouping from './ReportGrouping';
 import { ReportPagination, ReportTable, type ReportColumn, type ReportSort } from './ReportTable';
@@ -52,12 +52,12 @@ export default function SkillsReport({ params, onAccessError }: { params: Record
     { key: 'lastInvokedAt', title: t('lastInvokedAt'), sortKey: 'lastInvokedAt', render: row => timestamp(row.lastInvokedAt), exportValue: row => timestamp(row.lastInvokedAt) },
   ];
   return <section className="ai-report-panel overflow-hidden rounded-xl border border-border bg-card" aria-label={t('skillsTitle')}>
-    <header className="ai-report-section-head"><div className="ai-report-section-title"><h3>{t('skillsTitle')}</h3><details className="ai-report-help"><summary>{t('redesign.definitions')}</summary><p>{t('skillsHint')}</p></details></div>
+    <header className="ai-report-section-head"><div className="ai-report-section-title"><h3>{t('skillsTitle')}</h3><MetricDefinition><details className="ai-report-help"><summary>{t('redesign.definitions')}</summary><p>{t('skillsHint')}</p></details></MetricDefinition></div>
     <form aria-label={t('tableFilters')} className="ai-report-local-controls" onSubmit={event => { event.preventDefault(); setView(old => ({ ...old, search: draft.trim(), page: 1 })); }}>
       <ReportGrouping value={groupBy} options={['skill','publisher']} labels={{ publisher: t('publisher') }} onChange={value => setView(old => ({ ...old, groupBy: value, page: 1, sort: { sortBy: 'invocationCount', sortDir: 'desc' } }))} />
       <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">{t('skillNameFilter')}<input className={inputClass} maxLength={150} placeholder={t('nameSearchPlaceholder')} value={draft} onChange={event => setView(old => ({ ...old, draft: event.target.value }))} /></label>
       <Button type="submit" variant="outline" disabled={loading}>{t('apply')}</Button><Button type="button" variant="ghost" onClick={() => setView(old => ({ ...old, draft: '', search: '', page: 1 }))}>{t('redesign.reset')}</Button>
-      <ReportExportButton compact endpoint="skills" params={{ ...params, groupBy, ...sort, search }} columns={columns} total={result?.total || 0} title={t('skillsTitle')} disabled={loading || !result || Boolean(error)} onAccessError={onAccessError} />
+
     </form></header>
     {error && <p role="alert" className="p-5 text-sm text-destructive">{t(error)}</p>}
     {loading ? <p role="status" className="py-12 text-center text-sm text-muted-foreground">{t('loading')}</p> : <>

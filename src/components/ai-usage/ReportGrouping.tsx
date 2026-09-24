@@ -1,6 +1,8 @@
 import { useRef } from 'react';
 import { CalendarDays, UsersRound } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
+import MetricDefinition from './MetricDefinition';
 import { isTimeGroup, splitReportGroups } from './groupingState';
 
 export default function ReportGrouping({ value, options, onChange, labels = {} }: {
@@ -24,6 +26,6 @@ export default function ReportGrouping({ value, options, onChange, labels = {} }
     <label>{t(time ? 'grouping.granularity' : 'grouping.object')}<select value={value} onChange={event => select(event.target.value)}>
       {(time ? periods : objects).map(group => <option key={group} value={group}>{labels[group] || t(time ? `grouping.${group}` : `group.${group}`)}</option>)}
     </select></label>
-    {time && <span className="ai-report-grouping-hint">{t(value === 'week' ? 'grouping.weekHint' : value === 'month' ? 'grouping.monthHint' : 'grouping.dayHint')}</span>}
+    {time && <MetricDefinition><span className="ai-report-grouping-hint">{t(value === 'week' ? 'grouping.weekHint' : value === 'month' ? 'grouping.monthHint' : 'grouping.dayHint')}</span></MetricDefinition>}
   </div>;
 }

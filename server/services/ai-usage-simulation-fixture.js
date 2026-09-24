@@ -6,7 +6,7 @@ import { migrateAiUsageExportSchema } from '../database/ai-usage-export-schema.j
 import { shiftDate } from './ai-usage-config.js';
 
 export const simulationNight = () => new Date('2026-09-12T18:10:00.000Z');
-export const simulationCounts = Object.freeze({ users: 43, skills: 30, requests: 600, toolMessages: 400, hookExecutions: 1200, hookRecords: 1200, turns: 121, templates: 5, businessRows: 3556 });
+export const simulationCounts = Object.freeze({ users: 43, skills: 30, requests: 600, toolMessages: 400, sqlMessages: 600, generatedSqlLines: 3300, hookExecutions: 1200, hookRecords: 1200, turns: 121, templates: 5, businessRows: 4156 });
 
 export function seedAiUsageSimulation(db) {
   if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get()) {
@@ -77,6 +77,11 @@ export function seedAiUsageSimulation(db) {
         const end = new Date(Date.parse(at) + (i % 5 + 1) * 60000).toISOString();
         turn.run(`turn-${i}`, user, ws, sid, at, end, end);
       }
+      // Independent transcript evidence, deliberately different from Hook metrics.
+      const replyAt = `${date}T02:00:05.000Z`;
+      const reply = { uuid: `sql-response-${i}`, timestamp: replyAt, type: 'assistant',
+        message: { role: 'assistant', content: `\`\`\`sql\n${Array.from({ length: i % 10 + 1 }, (_, n) => `SELECT ${n + 1};`).join('\n')}\n\`\`\`` } };
+      message.run(ws, user, sid, reply.uuid, replyAt, replyAt, JSON.stringify(reply), `runtime-${i}`, 3);
     }
     // One actual request spanning midnight: 2 + 3 minutes, no fabricated next-day user message.
     turn.run('cross-midnight', 3, 7, 'cross-midnight', '2026-09-11T15:58:00.000Z', '2026-09-11T16:03:00.000Z', '2026-09-11T16:03:00.000Z');

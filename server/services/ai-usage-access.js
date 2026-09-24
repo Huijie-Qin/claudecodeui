@@ -25,7 +25,7 @@ export function createAiUsageAccessService({ db }) {
     const selectedScope = scope ?? (canViewTenant ? 'tenant' : 'self');
     if (!['self', 'tenant'].includes(selectedScope)) throw aiUsageError(400, 'invalidFilter', 'scope must be self or tenant');
     if (selectedScope === 'tenant' && !canViewTenant) throw aiUsageError(403, 'tenantReportDenied', 'Tenant report access required');
-    return { tenantId: id, userId: user.id, scope: selectedScope, canViewTenant, canExport: true, defaultScope: canViewTenant ? 'tenant' : 'self' };
+    return { tenantId: id, userId: user.id, scope: selectedScope, canViewTenant, canViewDefinitions: systemAdmin, canExport: true, defaultScope: canViewTenant ? 'tenant' : 'self' };
   }
   return { resolve };
 }

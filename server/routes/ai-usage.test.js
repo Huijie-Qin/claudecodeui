@@ -80,6 +80,9 @@ test('HTTP capabilities, tenant scope and immediate revocation use real current 
   const { request, db, batch } = await httpFixture(t);
   batch();
   assert.equal((await request('/capabilities?tenantId=10')).body.canViewTenant, true);
+  assert.equal((await request('/capabilities?tenantId=10')).body.canViewDefinitions, false);
+  assert.equal((await request('/capabilities?tenantId=10', { userId: 1 })).body.canViewDefinitions, true);
+  assert.equal((await request('/capabilities?tenantId=10', { userId: 3 })).body.canViewDefinitions, false);
   assert.equal((await request('/capabilities?tenantId=10', { userId: 3 })).body.canViewTenant, false);
   assert.equal((await request('/overview?tenantId=10&scope=tenant', { userId: 3 })).status, 403);
   assert.equal((await request('/overview?tenantId=20', { userId: 2 })).status, 403);

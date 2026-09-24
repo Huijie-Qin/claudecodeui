@@ -34,9 +34,9 @@ CREATE TABLE ai_dashboard_integration_detail (
   skill_call_count TINYINT UNSIGNED NULL
     COMMENT '一次去重后的有效调用发起记 1；不要求成功；其他事实为空',
 
-  sql_record_id VARCHAR(255) NULL COMMENT 'SQL 行数记录的原始 Hook 业务记录 ID',
+  sql_record_id VARCHAR(255) NULL COMMENT '会话 SQL 输出记录的稳定标识',
   generated_sql_lines BIGINT UNSIGNED NULL
-    COMMENT '指定 SQL 行数记录的有效 sqlLineCount 原值；不是所有生成代码行数',
+    COMMENT '夜间扫描各轮 AI 回复得到的 SQL 行数；不读取 Hook',
 
   code_submission_id VARCHAR(255) NULL COMMENT '可信代码提交事实 ID；采集粒度须在对接时确认',
   repository_url VARCHAR(2048) NULL COMMENT '提交代码所属仓库 URL；不由 SQL 记录推测',

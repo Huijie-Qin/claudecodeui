@@ -95,7 +95,7 @@ CREATE TABLE ai_dashboard_skill_invocation_detail (
 
 ## 4. SQL 生成明细表
 
-表名：`ai_dashboard_sql_generation_detail`。一条 SQL 业务记录一行，仅统计 sql_response_metrics 中的 sqlLineCount，不推断其他代码产出。
+表名：`ai_dashboard_sql_generation_detail`。每条含 SQL 的 AI 回复一行；夜间扫描会话文本，不依赖 Hook 记录，不推断其他语言代码产出。
 
 ```sql
 CREATE TABLE ai_dashboard_sql_generation_detail (
@@ -107,8 +107,8 @@ CREATE TABLE ai_dashboard_sql_generation_detail (
   user_name TEXT, -- 行为用户的用户名快照
   workspace_id INTEGER, -- 所属工作区 ID；未知时为 NULL
   workspace_name TEXT, -- 工作区名称快照；未知时为 NULL
-  sql_record_id TEXT, -- 原 SQL 记录标识
-  generated_sql_lines INTEGER, -- SQL 记录的 sqlLineCount 数值；未知为 NULL
+  sql_record_id TEXT, -- 会话 SQL 输出稳定标识，包含会话／消息／分支作用域，不是 Hook 记录 ID
+  generated_sql_lines INTEGER, -- 会话回复中提取的 SQL 行数；未知为 NULL
   PRIMARY KEY (tenant_id, id) -- 同租户内唯一，不混用不同租户的数据
 );
 ```

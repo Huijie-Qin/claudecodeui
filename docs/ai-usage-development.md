@@ -1,5 +1,9 @@
 # AI 使用报表：首版开发与运行说明
 
+## 2026-09-24 会话 SQL 采集
+
+生成行数已改为夜间扫描各轮 AI 回复中的 SQL，不再依赖 Hook 记录。入口 `ai-usage-indexer.js` 调用纯文本提取器 `ai-usage-sql.js`；稳定消息标识去重，经原表 `sql_generations`、宽表投影至 SQL 明细表。升级首次夜间窗口回扫保留历史，随后增量更新；完整候选准备好才事务发布，不新增环境变量。SQL 正文不入统计表。识别范围、注释／空行和重复片段规则见 [当前口径](ai-usage-metric-definitions.md#sql-提取与去重)。下文 SQL Hook 取数描述仅为历史开发记录，不代表当前实现。
+
 ## 2026-09-17 新旧双表固定分工
 
 当前实现以 [专用明细及取数方案](ai-dashboard-integration-detail.md) 为准：整体概览、AI 使用、Skill、代码产出查询 `ai_dashboard_integration_detail`；Hook 和 Agent 模板查询 `ai_usage_report_rows`。新表仅投影同批旧结果，双表在同一事务发布。CodeHub 使用 `ai_mr_submissions.additions` 且仅 `status='merged'`，按 `merged_at` 上海业务日统计。

@@ -20,7 +20,7 @@ test('template tables retain only active users and conversations while Hook dril
 });
 
 test('Skill call statistics is a peer tab with its own supported sorting, not a template or usage analysis', () => {
-  assert.deepEqual(reportTabOrder, ['usage', 'skills', 'hookExecutions', 'hooks', 'templates']);
+  assert.deepEqual(reportTabOrder, ['usage', 'skills', 'hooks', 'templates']);
   assert.deepEqual(defaultReportSort('skills'), { sortBy: 'invocationCount', sortDir: 'desc' });
   assert.equal('skills' in analysisGroups, false);
   assert.equal('skills' in analysisMetrics, false);

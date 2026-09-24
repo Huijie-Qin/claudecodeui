@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../shared/view/ui';
 
+import MetricDefinition from './MetricDefinition';
 import { usageRequest } from './client';
 import { nextReportSort } from './analysisState';
 import { useReportView } from './ReportViewContext';
@@ -13,7 +14,6 @@ import { isTimeGroup, reportGroupLabel } from './groupingState';
 import { ReportPagination, ReportTable, type ReportColumn, type ReportSort } from './ReportTable';
 import ReportGrouping from './ReportGrouping';
 import ReportIdentity from './ReportIdentity';
-import ReportExportButton from './ReportExportButton';
 import ReportTrend from './ReportTrend';
 import Overlay from './ReportOverlay';
 import type { UsageList, UsageRow } from './types';
@@ -59,7 +59,7 @@ export default function CodeReport({ params, onAccessError }: { params: Record<s
       <div className="ai-code-metrics">{[
         [t('codeReport.generated'), number(result?.summary?.generatedLines), t('splitGeneratedHint')],
         [t('codeReport.realSubmitted'), number(result?.summary?.submittedLines), t('codeReport.realSubmittedHint')],
-      ].map(([title, value, hint]) => <div key={title}><span>{title}</span><strong>{value}</strong><p>{hint}</p></div>)}</div>
+      ].map(([title, value, hint]) => <div key={title}><span>{title}</span><strong>{value}</strong><MetricDefinition><p>{hint}</p></MetricDefinition></div>)}</div>
       {Boolean(result?.summary?.unknownSqlRecords || result?.summary?.unknownSubmissions) && <p className="ai-report-coverage-note">{t('codeReport.unknownValues')}</p>}
       <header><h3>{t('codeReport.trend')}</h3><div className="ai-code-legend"><span><i className="secondary" />{t('codeReport.generatedShort')}</span><span><i />{t('codeReport.realSubmittedShort')}</span></div></header>
       {result?.trend.length ? <ReportTrend rows={result.trend.map(row => ({ date: String(row.date),
@@ -70,11 +70,10 @@ export default function CodeReport({ params, onAccessError }: { params: Record<s
       <footer><span>{scope.from} — {scope.to} · {t('codeReport.daily')}</span></footer>
     </section>
     <section className="ai-report-panel" aria-label={t('codeReport.table')}>
-      <header className="ai-report-section-head"><div><h3>{t('codeReport.table')}</h3><p className="ai-report-caption">{t('codeReport.tableHint')}</p></div>
+      <header className="ai-report-section-head"><div><h3>{t('codeReport.table')}</h3><MetricDefinition><p className="ai-report-caption">{t('codeReport.tableHint')}</p></MetricDefinition></div>
         <div className="ai-report-local-controls"><ReportGrouping value={groupBy} options={['user', 'workspace', 'day', 'week', 'month']}
           onChange={value => setView(old => ({ ...old, groupBy: value, page: 1, sort: isTimeGroup(value) ? { sortBy: 'groupLabel', sortDir: 'asc' } : { sortBy: 'generatedLines', sortDir: 'desc' } }))} />
-          <ReportExportButton compact endpoint="code" params={{ ...params, groupBy, ...sort }} columns={columns} total={result?.total || 0} title={t('codeReport.table')}
-            disabled={!result || Boolean(error)} onAccessError={onAccessError} /></div>
+          </div>
       </header>
       <ReportTable columns={columns} rows={result?.items || []} empty={t(!result && !error ? 'loading' : 'empty')} sort={sort}
         onSort={key => setView(old => ({ ...old, sort: nextReportSort(sort, key), page: 1 }))} />
@@ -112,8 +111,8 @@ function CodeRecords({ params, onAccessError }: { params: Record<string, unknown
     { key: 'repositoryUrl', title: t('codeReport.realRepository') }, { key: 'commitSha', title: t('codeReport.realCommit') },
     { key: 'submittedLines', title: t('codeReport.realSubmitted'), numeric: true },
   ];
-  return <><div className="mb-4 flex items-start justify-between gap-4"><p className="text-xs text-muted-foreground">{t('codeReport.realSubmittedHint')}</p>
-    <ReportExportButton compact endpoint="code-records" params={params} columns={columns} total={result?.total || 0} title={t('codeReport.records')} disabled={!result || Boolean(error)} onAccessError={onAccessError} /></div>
+  return <><div className="mb-4 flex items-start justify-between gap-4"><MetricDefinition><p className="text-xs text-muted-foreground">{t('codeReport.realSubmittedHint')}</p></MetricDefinition>
+    </div>
     {error && <p role="alert" className="ai-report-error">{t(error)}</p>}
     <ReportTable columns={columns} rows={result?.items || []} empty={t(!result && !error ? 'loading' : 'empty')} />
     <ReportPagination page={page} pageSize={20} total={result?.total || 0} onPage={setPage} />

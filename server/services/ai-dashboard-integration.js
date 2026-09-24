@@ -19,7 +19,7 @@ const name = value => typeof value === 'string' && value.trim() ? value.trim() :
 
 // The only metric input is one already-computed OLD report row. Never scan raw sources here.
 export function projectIntegrationRow(row, refreshedAt) {
-  if (!['interactions', 'turns', 'skill_publications', 'skill_invocations', 'hook_records', 'code_submissions'].includes(row.dataset)) return null;
+  if (!['interactions', 'turns', 'skill_publications', 'skill_invocations', 'sql_generations', 'code_submissions'].includes(row.dataset)) return null;
   const value = JSON.parse(row.value_json);
   const out = Object.fromEntries(INTEGRATION_COLUMNS.map(column => [column, null]));
   Object.assign(out, { id: hash([row.tenant_id, row.dataset, row.stat_date, row.row_key]),
@@ -49,14 +49,10 @@ export function projectIntegrationRow(row, refreshedAt) {
       out.user_id = value.callerUserId ?? null;
       out.user_name = name(value.callerUserName);
     }
-  } else if (row.dataset === 'hook_records') {
-    // The built-in SQL-record contract, not a guessed Hook display name.
-    if (value.recordType !== 'sql_response_metrics') return null;
-    const fields = Array.isArray(value.fields) ? value.fields.filter(f => f.key === 'sqlLineCount') : [];
-    if (fields.length > 1) throw new Error('AI_INTEGRATION_DUPLICATE_SQL_FIELD');
+  } else if (row.dataset === 'sql_generations') {
+    // Produced by the nightly session scanner, never by Hook records.
     out.sql_record_id = row.row_key;
-    const field = fields[0];
-    out.generated_sql_lines = !value.fieldsUnavailable && field?.type === 'number' ? number(field.value) : null;
+    out.generated_sql_lines = number(value.generatedLines);
   } else {
     out.code_submission_id = row.row_key;
     out.repository_url = name(value.repositoryUrl); out.commit_sha = name(value.commitSha);
@@ -67,7 +63,7 @@ export function projectIntegrationRow(row, refreshedAt) {
 
 export function integrationCoverage(coverage = {}) {
   return { ...coverage, integrationVersion: 1,
-    generatedSql: coverage.hooks === 'unavailable' ? 'unavailable' : 'partial',
+    generatedSql: coverage.generatedSql || 'unavailable',
     submittedCode: coverage.codeSubmissions || 'unavailable' };
 }
 

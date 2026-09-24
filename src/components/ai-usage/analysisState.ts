@@ -1,7 +1,7 @@
 import type { ReportSort } from './ReportTable';
 import type { AnalysisTab, ReportTab } from './types';
 
-export const reportTabOrder = ['usage', 'skills', 'hookExecutions', 'hooks', 'templates'] as const satisfies readonly ReportTab[];
+export const reportTabOrder = ['usage', 'skills', 'hooks', 'templates'] as const satisfies readonly ReportTab[];
 
 export const analysisGroups = {
   usage: ['user', 'workspace', 'day', 'week', 'month'],

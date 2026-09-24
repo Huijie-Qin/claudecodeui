@@ -39,7 +39,7 @@ DDL 已简化为字段、必要的非空声明和联合主键，不额外配置�
 | 已完成 AI 请求时长的当日切片 | `ai_active_duration_ms` | `ai_session_id`；切片所属 `stat_date` | NULL |
 | Skill 确认首次发布 | `skill_publish_count=1` | `skill_id`、发布者、首次发布时间 | NULL |
 | 一次有效 Skill 调用发起 | `skill_call_count=1` | `skill_id`、调用者、可信发布者、调用时间 | NULL |
-| 指定 SQL Hook 的业务记录 | `generated_sql_lines` | `sql_record_id`、所属用户／工作区、记录时间 | NULL |
+| 会话中含 SQL 的 AI 回复 | `generated_sql_lines` | `sql_record_id`、所属用户／工作区、记录时间 | NULL |
 | 可信代码提交记录 | `submitted_code_lines` | `code_submission_id`、仓库、提交用户／工作区、业务提交时间 | NULL |
 
 现有正式表的 AI 交互行可能已按会话和日期去重：写入专用表时可以保留这种交互证明粒度，**不得把行数称为用户消息数或请求次数**。需要消息级审计时，应另接原始可信交互来源，本对接表不承诺恢复已经聚合掉的明细。
@@ -53,7 +53,7 @@ DDL 已简化为字段、必要的非空声明和联合主键，不额外配置�
 | 公共标识与筛选 | `tenant_id`、`id`、`stat_date`、`occurred_at`、`user_id`、`user_name`、`workspace_id`、`workspace_name` | 始终按租户授权；按 ID 分组、名称展示 |
 | AI 使用 | `ai_session_id`、`has_ai_interaction`、`ai_active_duration_ms` | 会话与人数去重计算，不在每种事实上重复记 1 |
 | Skill | `skill_id`、`skill_name`、`publisher_user_id`、`publisher_user_name`、`skill_publish_count`、`skill_call_count` | 发布归发布者；调用行为归调用者，调用贡献按发布者计算 |
-| SQL 生成 | `sql_record_id`、`generated_sql_lines` | 只取指定 SQL 行数记录，不扩大成所有生成代码 |
+| SQL 生成 | `sql_record_id`、`generated_sql_lines` | 夜间扫描各轮 AI 回复的 SQL，不统计其他语言 |
 | 代码提交 | `code_submission_id`、`repository_url`、`commit_sha`、`submitted_code_lines` | 仅已合并 MR 的 additions，按 merged_at 归属；SHA 仅用于追溯 |
 | 刷新信息 | `refreshed_at` | 完整结果的发布时间，不参与业务日期筛选 |
 
@@ -130,7 +130,7 @@ GROUP BY user_id;
 | AI 时长 | 旧表 `turns` | 只取 completed 的非负整数 durationMs；不从格式化后的时间反算 |
 | Skill 发布 | 旧表 `skill_publications` | 同 Skill 保留最早确认发布；缺少证据不推断 |
 | Skill 调用 | 旧表 `skill_invocations` | 发布者与调用者分开；沿用旧表去重结果 |
-| SQL 行数 | 旧表 `hook_records` 的安全字段 | `recordType='sql_response_metrics'` 且字段键为 `sqlLineCount`、type 为 number、值为非负安全整数。按记录类型契约识别，不硬编码当前机器的 Hook ID，不按显示名猜测 |
+| SQL 行数 | 会话记录 → 旧表 `sql_generations` → 新表 | 夜间扫描 AI 回复，提取 SQL 物理行数；不读 Hook、不计用户输入和工具结果。按消息稳定标识去重，同批原明细投影；详见统计口径文档 |
 | 提交代码行数 | `ai_mr_submissions` → 旧表 `code_submissions` → 新表 | 仅 `status='merged'`，取 `additions`，按 `merged_at` 转上海日期；同提交记录 ID 一次 |
 
 CodeHub 口径已由用户确认：使用主表的 additions（用户称 add），只统计 merged。

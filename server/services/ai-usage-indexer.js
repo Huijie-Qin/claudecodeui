@@ -8,6 +8,7 @@ import { isInheritedUsageMessage } from './ai-usage-inheritance.js';
 import { collectSkillEvidence } from './ai-usage-skill-evidence.js';
 import { createAiUsageSkillIndexer } from './ai-usage-skill-indexer.js';
 import { createSkillPublisherResolver } from './ai-usage-skill-publishers.js';
+import { parseSqlGeneration } from './ai-usage-sql.js';
 
 const safeJson = (value, fallback = {}) => { try { return JSON.parse(value); } catch { return fallback; } };
 const MAX_LINE_BYTES = 2 * 1024 * 1024;
@@ -197,6 +198,7 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
     // Native tool events are evidence, not final counts. Correlate them with
     // slash requests and trusted origins once per affected session at night.
     return [...parseUsageMessage(scope, message, { ...options, includeSkillTools: false }),
+      ...parseSqlGeneration(scope, message, options),
       ...collectSkillEvidence(scope, message, options)];
   }
 
@@ -463,7 +465,8 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
           (additions IS NULL OR typeof(additions) NOT IN ('integer','real') OR additions<0
             OR additions>9007199254740991 OR additions!=CAST(additions AS INTEGER))))`).get(tenantId, batch.target_through).n : 0;
     return { sessions: 'partial', duration: counts.completed ? 'partial' : 'unavailable', skillPublications: publications ? 'partial' : 'unavailable',
-      skillInvocations: 'partial', hooks: tables.has('hook_data_records') ? 'complete' : 'unavailable', hookExecutions: tables.has('hook_executions') ? 'complete' : 'unavailable',
+      skillInvocations: 'partial', generatedSql: tables.has('agent_session_messages') || tables.has('agent_session_runtime') ? 'partial' : 'unavailable',
+      generatedSqlSource: 'session_sql', hooks: tables.has('hook_data_records') ? 'complete' : 'unavailable', hookExecutions: tables.has('hook_executions') ? 'complete' : 'unavailable',
       templates: tables.has('workspace_agent_template_snapshots') ? 'complete' : 'unavailable',
       codeSubmissions: tables.has('ai_mr_submissions') ? invalidMerged ? 'partial' : 'complete' : 'unavailable', pendingTurns: counts.pending || 0,
       incompleteTurns: counts.incomplete || 0, failedTurns: counts.failed || 0,

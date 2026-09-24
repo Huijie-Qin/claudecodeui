@@ -3,7 +3,7 @@
 // No business database, .env file, model, scheduler, or real user session is used.
 import assert from 'node:assert/strict';
 import { createServer as createHttpServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -27,6 +27,7 @@ export async function createPreviewDatabase(nativeBinding, { seedCodeHub = false
   const db = new Database(':memory:', nativeBinding ? { nativeBinding } : {});
   try {
     seedAiUsageSimulation(db);
+    db.exec("INSERT INTO users VALUES(1,'系统管理员',1,1)");
     if (seedCodeHub) {
       db.exec(`CREATE TABLE ai_mr_submissions(id INTEGER PRIMARY KEY,tenant_id,user_id,workspace_id,repository_url,commit_sha,additions,deletions,status,merged_at,created_at);
         INSERT INTO ai_mr_submissions VALUES
@@ -66,7 +67,7 @@ function Preview() {
       React.createElement('select', { 'aria-label': '预览租户', value: tenantId, onChange: (event) => setTenantId(Number(event.target.value)), style: { padding: 6, borderRadius: 6 } },
         React.createElement('option', { value: 10 }, '示例租户（已发布）'), React.createElement('option', { value: 20 }, '空租户（尚未统计）')),
       React.createElement('select', { 'aria-label': '预览身份', value: userId, onChange: (event) => selectUser(event.target.value), style: { padding: 6, borderRadius: 6 } },
-        React.createElement('option', { value: 2 }, '租户管理员'), React.createElement('option', { value: 3 }, '普通用户')),
+        React.createElement('option', { value: 1 }, '系统管理员'), React.createElement('option', { value: 2 }, '租户管理员'), React.createElement('option', { value: 3 }, '普通用户')),
       React.createElement('button', { onClick: () => { document.documentElement.classList.toggle('dark', !dark); setDark(!dark); }, style: { padding: 6, border: '1px solid #fdba74', borderRadius: 6 } }, dark ? '浅色' : '深色')
     ),
     React.createElement(AiUsagePanel, { key: tenantId + ':' + userId, tenantId })
@@ -80,6 +81,7 @@ export async function startAiUsagePreview({ port = 4399, nativeBinding = process
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Preview port must be between 1024 and 65535');
   const { db, accessService } = await createPreviewDatabase(nativeBinding, { seedCodeHub });
   const cacheDirectory = await mkdtemp(path.join(os.tmpdir(), 'ccui-ai-usage-preview-'));
+  const dependencyRoot = await realpath(path.join(projectRoot, 'node_modules'));
   const app = express();
   const httpServer = createHttpServer(app);
   const vite = await createViteServer({
@@ -88,7 +90,7 @@ export async function startAiUsagePreview({ port = 4399, nativeBinding = process
     plugins: [react(), { name: 'ai-usage-fixture-entry', resolveId: (id) => id === entryId ? entryId : null, load: (id) => id === entryId ? previewEntry : null }],
     define: { 'import.meta.env.VITE_IS_PLATFORM': '"false"', 'import.meta.env.SQL_CHECK_BASE_URL': '""' },
     resolve: { alias: { '@': path.join(projectRoot, 'src') } },
-    server: { middlewareMode: true, hmr: { server: httpServer, host: '127.0.0.1', port }, host: '127.0.0.1', allowedHosts: ['127.0.0.1'], fs: { allow: [projectRoot, cacheDirectory], deny: ['**/.env', '**/.env.*', '**/*.db', '**/*.sqlite*', '**/.git/**'] } },
+    server: { middlewareMode: true, hmr: { server: httpServer, host: '127.0.0.1', port }, host: '127.0.0.1', allowedHosts: ['127.0.0.1'], fs: { allow: [projectRoot, cacheDirectory, dependencyRoot], deny: ['**/.env', '**/.env.*', '**/*.db', '**/*.sqlite*', '**/.git/**'] } },
   });
   const origin = `http://127.0.0.1:${port}`;
   app.use((req, res, next) => {
@@ -100,7 +102,7 @@ export async function startAiUsagePreview({ port = 4399, nativeBinding = process
   let routerFactory;
   let reportRouter;
   app.use('/api/ai-usage', express.json({ limit: '16kb' }), (req, res, next) => {
-    const match = String(req.headers.cookie || '').match(/(?:^|;\s*)ai-usage-preview-user=(2|3)(?:;|$)/);
+    const match = String(req.headers.cookie || '').match(/(?:^|;\s*)ai-usage-preview-user=(1|2|3)(?:;|$)/);
     req.user = { id: Number(match?.[1] || 2) }; // Isolated fixture identity; never a real auth bypass.
     next();
   }, async (req, res, next) => {
@@ -127,7 +129,7 @@ export async function startAiUsagePreview({ port = 4399, nativeBinding = process
     if (pathname.includes('..') || /(?:^|\/)\.[^/]/.test(pathname.replaceAll('/.vite/', '/vite/').replaceAll('/.pnpm/', '/pnpm/')) || /\.(?:db|sqlite|sqlite3)(?:-|$)/i.test(pathname)) return res.sendStatus(404);
     if (pathname.startsWith('/@fs/')) {
       const file = pathname.slice('/@fs'.length);
-      if (![path.join(projectRoot, 'src') + '/', path.join(projectRoot, 'shared') + '/', path.join(projectRoot, 'node_modules') + '/', cacheDirectory + '/'].some((prefix) => file.startsWith(prefix))) return res.sendStatus(404);
+      if (![path.join(projectRoot, 'src') + '/', path.join(projectRoot, 'shared') + '/', path.join(projectRoot, 'node_modules') + '/', dependencyRoot + '/', cacheDirectory + '/'].some((prefix) => file.startsWith(prefix))) return res.sendStatus(404);
     } else if (![entryId, '/src/', '/shared/', '/node_modules/', '/@vite/', '/@id/', '/@react-refresh'].some((prefix) => pathname.startsWith(prefix))) return res.sendStatus(404);
     next();
   });

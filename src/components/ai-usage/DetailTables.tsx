@@ -3,10 +3,10 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../shared/view/ui';
 
+import MetricDefinition from './MetricDefinition';
 import { nextReportSort } from './analysisState';
 import { tableNameFilter } from './filterState';
 import { usageRequest } from './client';
-import ReportExportButton from './ReportExportButton';
 import { ReportPagination, ReportTable, type ReportColumn, type ReportSort } from './ReportTable';
 import { isUsageAccessFailure } from './requestState';
 import { assertPublishedBatch, displayReportValue as display, formatReportTimestamp, formatExecutionDuration, reportUserName, reportWorkspaceName } from './usageUtils';
@@ -49,8 +49,8 @@ function DataTableSection({ params, onAccessError, endpoint, title, hint, column
   }, [queryKey, sort, page, pageSize, filter, filterKey, endpoint, onAccessError]);
   return <section className="overflow-hidden rounded-xl border border-border bg-card" aria-label={title}>
     <header className="border-b border-border px-5 py-4"><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-semibold">{title}</h3>
-      <ReportExportButton endpoint={endpoint} params={{ ...params, ...sort, ...(filterKey ? { [filterKey]: filter } : {}) }} columns={columns} total={result?.total || 0} title={title} disabled={loading || !result || Boolean(error)} onAccessError={onAccessError} />
-    </div><p className="mt-2 text-xs leading-5 text-muted-foreground">{hint}</p></header>
+
+    </div><MetricDefinition><p className="mt-2 text-xs leading-5 text-muted-foreground">{hint}</p></MetricDefinition></header>
     {(controls || filterKey) && <form className="flex flex-wrap items-end gap-3 border-b border-border px-5 py-3" onSubmit={(event) => { event.preventDefault(); setFilter(draft.trim()); setPage(1); }}>
       {controls}
       {filterKey && <><label className="flex flex-col gap-1 text-xs text-muted-foreground">{filterLabel}<input maxLength={150} placeholder={filterKey === 'search' ? t('nameSearchPlaceholder') : undefined} className="h-9 rounded border border-input bg-background px-3 text-sm text-foreground" value={draft} onChange={(event) => setDraft(event.target.value)} /></label>

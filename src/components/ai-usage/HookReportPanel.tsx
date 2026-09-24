@@ -3,12 +3,15 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '../../shared/view/ui';
 
+import MetricDefinition from './MetricDefinition';
+import { useMetricDefinitions } from './metricDefinitionAccess';
 import { nextReportSort } from './analysisState';
+import { useReportView } from './ReportViewContext';
+import { savedFilters } from './savedReportViews';
 import { usageRequest } from './client';
 import { usageFilterParams, type UsageFilters } from './filterState';
 import { hookNumberColumns } from './HookNumberColumns';
 import HookStatisticSelect from './HookStatisticSelect';
-import ReportExportButton from './ReportExportButton';
 import ReportGrouping from './ReportGrouping';
 import { isTimeGroup, reportGroupLabel } from './groupingState';
 import { ReportPagination, ReportTable, type ReportColumn, type ReportSort } from './ReportTable';
@@ -25,16 +28,23 @@ export default function HookReportPanel({ row, params, through, onAccessError }:
   row: UsageRow; params: Record<string, unknown>; through: string; onAccessError: () => void;
 }) {
   const { t, i18n } = useTranslation('aiUsage');
+  const showDefinitions = useMetricDefinitions();
   const initialFilters: UsageFilters = { from: String(params.from || ''), to: String(params.to || ''), userName: String(params.userSearch || ''), workspaceName: String(params.workspaceSearch || '') };
-  const [filters, setFilters] = useState(initialFilters);
+  const [saved, setSaved] = useReportView(`hook:${row.hookId}`, JSON.stringify(params), {
+    page: 1, filters: initialFilters, groupBy: 'user' as typeof groups[number], metric: 'sum' as HookNumberMetric, fieldKey: '',
+    hookId: String(row.hookId), hookName: row.hookName || String(row.hookId),
+    statsSort: { sortBy: 'groupLabel', sortDir: 'asc' } as ReportSort,
+    recordSort: { sortBy: 'occurredAt', sortDir: 'desc' } as ReportSort,
+  });
+  const [filters, setFilters] = useState(() => savedFilters(saved.filters, through));
   const [draft, setDraft] = useState(filters);
-  const [groupBy, setGroupBy] = useState<typeof groups[number]>('user');
-  const [metric, setMetric] = useState<HookNumberMetric>('sum');
-  const [fieldKey, setFieldKey] = useState('');
+  const [groupBy, setGroupBy] = useState<typeof groups[number]>(saved.groupBy);
+  const [metric, setMetric] = useState<HookNumberMetric>(saved.metric);
+  const [fieldKey, setFieldKey] = useState(saved.fieldKey);
   const [statsPage, setStatsPage] = useState(1);
   const [recordsPage, setRecordsPage] = useState(1);
-  const [statsSort, setStatsSort] = useState<ReportSort>({ sortBy: 'groupLabel', sortDir: 'asc' });
-  const [recordSort, setRecordSort] = useState<ReportSort>({ sortBy: 'occurredAt', sortDir: 'desc' });
+  const [statsSort, setStatsSort] = useState<ReportSort>(saved.statsSort);
+  const [recordSort, setRecordSort] = useState<ReportSort>(saved.recordSort);
   const [data, setData] = useState<{ statistics: Statistics; records: UsageList } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -60,6 +70,7 @@ export default function HookReportPanel({ row, params, through, onAccessError }:
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [queryKey, id, groupBy, statsSort, recordSort, statsPage, recordsPage, onAccessError]);
+  useEffect(() => { setSaved(old => ({ ...old, filters, groupBy, metric, fieldKey, statsSort, recordSort })); }, [filters, groupBy, metric, fieldKey, statsSort, recordSort, setSaved]);
   const resetPages = () => { setStatsPage(1); setRecordsPage(1); };
   const fields = Array.from(new Map((data?.statistics.availableFields || []).map((field) => [field.key, field])).values());
   const businessColumns = Array.from(new Map((data?.records.items || []).flatMap((item) => reportFields(item.fields)).map((field) => [field.key, field])).values())
@@ -77,7 +88,7 @@ export default function HookReportPanel({ row, params, through, onAccessError }:
     { key: 'postActionId', title: t('postAction') }, ...businessColumns,
   ];
   return <section className="space-y-5" aria-label={t('singleHookReport')}>
-    <details className="ai-report-help"><summary>{t('redesign.definitions')}</summary><p>{t('singleHookHint')}</p></details>
+    <MetricDefinition><details className="ai-report-help"><summary>{t('redesign.definitions')}</summary><p>{t('singleHookHint')}</p></details></MetricDefinition>
     <form className={`${sectionClass} flex flex-wrap items-end gap-3 p-4`} aria-label={t('hookReportFilters')} onSubmit={(event) => {
       event.preventDefault(); const problem = validateUsageRange(draft.from, draft.to, through);
       setRangeError(problem ? `range.${problem}` : ''); if (!problem) { setFilters(draft); resetPages(); }
@@ -85,12 +96,12 @@ export default function HookReportPanel({ row, params, through, onAccessError }:
       {(['from', 'to'] as const).map((key) => <label key={key} className="flex flex-col gap-1.5 text-xs text-muted-foreground">{t(key)}<input type="date" className={inputClass} required max={through} value={draft[key]} onChange={(event) => setDraft({ ...draft, [key]: event.target.value })} /></label>)}
       {(['userName', 'workspaceName'] as const).map((key) => <label key={key} className="flex flex-col gap-1.5 text-xs text-muted-foreground">{t(key)}<input type="text" className={`${inputClass} w-40`} maxLength={150} placeholder={t('nameSearchPlaceholder')} value={draft[key]} onChange={(event) => setDraft({ ...draft, [key]: event.target.value })} /></label>)}
       <Button type="submit" variant="outline" disabled={loading}>{t('apply')}</Button><Button type="button" variant="ghost" onClick={() => { setDraft(initialFilters); setFilters(initialFilters); setFieldKey(''); resetPages(); setRangeError(''); }}>{t('resetFilters')}</Button>
-      <p className="w-full text-xs text-muted-foreground">{rangeError ? <span role="alert" className="text-destructive">{t(rangeError)}</span> : t('hookReportFilterHint')}</p>
+      {rangeError ? <p role="alert" className="w-full text-xs text-destructive">{t(rangeError)}</p> : <MetricDefinition><p className="w-full text-xs text-muted-foreground">{t('hookReportFilterHint')}</p></MetricDefinition>}
     </form>
     <section className={sectionClass} aria-label={t('hookNumericResults')} aria-busy={loading}>
       <header className="border-b border-border px-5 py-4"><div className="flex flex-wrap items-center justify-between gap-3"><h4 className="font-semibold">{t('hookNumericResults')}</h4>
-        <ReportExportButton endpoint={`hooks/${id}/field-statistics`} params={{ ...JSON.parse(queryKey), groupBy, ...statsSort }} columns={statColumns} total={data?.statistics.total || 0} title={`${display(row.hookName)}_${t('hookNumericResults')}_${t(`hookReportFields.${metric === 'average' ? 'avg' : metric}`)}`} disabled={loading || !data || Boolean(error)} onAccessError={onAccessError} />
-      </div><details className="ai-report-help"><summary>{t('redesign.definitions')}</summary><p>{t('hookNumericHint')}</p></details></header>
+
+      </div><MetricDefinition><details className="ai-report-help"><summary>{t('redesign.definitions')}</summary><p>{t('hookNumericHint')}</p></details></MetricDefinition></header>
       <div className="flex flex-wrap items-end gap-3 border-b border-border px-5 py-4">
         <ReportGrouping value={groupBy} options={groups} labels={{ hook: t('detailStatsAll') }} onChange={value => { setGroupBy(value as typeof groupBy); if (isTimeGroup(value)) setStatsSort({ sortBy: 'groupLabel', sortDir: 'asc' }); setStatsPage(1); }} />
         <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">{t('numberField')}<select className={inputClass} value={fieldKey} disabled={loading} onChange={(event) => { setFieldKey(event.target.value); resetPages(); }}><option value="">{t('allNumberFields')}</option>{fields.map((field) => <option key={field.key} value={field.key}>{field.label || field.key} · {field.key}</option>)}{fieldKey && !fields.some((field) => field.key === fieldKey) && <option value={fieldKey}>{fieldKey}</option>}</select></label>
@@ -101,7 +112,7 @@ export default function HookReportPanel({ row, params, through, onAccessError }:
       <ReportPagination page={statsPage} total={data?.statistics.total || 0} onPage={setStatsPage} disabled={loading} />
     </section>
     <section className={sectionClass} aria-label={t('records')} aria-busy={loading}>
-      <header className="border-b border-border px-5 py-4"><h4 className="font-semibold">{t('records')}</h4><p className="mt-2 text-xs text-muted-foreground">{t('hookRecordsHint', { count: data?.records.total || 0 })}</p></header>
+      <header className="border-b border-border px-5 py-4"><h4 className="font-semibold">{t('records')}</h4><p className="mt-2 text-xs text-muted-foreground">{t(showDefinitions ? 'hookRecordsHint' : 'workbook.matchingRecords', { count: data?.records.total || 0 })}</p></header>
       {loading ? <p className="p-8 text-center text-sm text-muted-foreground">{t('loading')}</p> : <ReportTable columns={recordColumns} rows={data?.records.items || []} empty={t('empty')} sort={recordSort} onSort={(key) => { setRecordSort(nextReportSort(recordSort, key)); setRecordsPage(1); }} />}
       <ReportPagination page={recordsPage} total={data?.records.total || 0} onPage={setRecordsPage} disabled={loading} />
     </section>

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { MessageSquare, RefreshCw, Sparkles, UserCheck, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import MetricDefinition from './MetricDefinition';
+import { useMetricDefinitions } from './metricDefinitionAccess';
 import { usageRequest, UsageApiError } from './client';
 import { isUsageAccessFailure, usageFailureKey } from './requestState';
 import { assertUsageSummary, summaryPeriods, summaryRequestParams, type UsageSummary } from './summaryState';
@@ -18,6 +20,7 @@ const cards = [
 export default function SummaryCards({ tenantId, batchId, capabilities, onAccessError }: {
   tenantId: number; batchId: string; capabilities: UsageCapabilities; onAccessError: () => void;
 }) {
+  const showDefinitions = useMetricDefinitions();
   const { t } = useTranslation('aiUsage');
   const [result, setResult] = useState<UsageSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,20 +52,20 @@ export default function SummaryCards({ tenantId, batchId, capabilities, onAccess
         <h3 className="text-sm font-semibold">{t('summaryTitle')} · {t('tenantScope')}</h3>
         <p className="ai-report-summary-cutoff">{t('dataThrough')} <span>{periods.cutoff}</span></p>
       </div>
-      <p className="text-xs text-muted-foreground">{t('summaryHint')}</p>
+      <MetricDefinition><p className="text-xs text-muted-foreground">{t('summaryHint')}</p></MetricDefinition>
     </header>
     {error && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{t(error)}</p>}
     <div className="ai-report-summary-grid">
       {cards.map(({ key, title, hint, period, icon: Icon }) => <div key={key} className="ai-report-summary-card">
         <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground">{t(title)}</span><Icon className="h-4 w-4 shrink-0 text-primary/70" /></div>
         <p className="ai-report-summary-value">{loading ? <RefreshCw aria-label={t('loading')} className="h-7 w-7 animate-spin text-muted-foreground" /> : displayReportValue(current?.[key])}</p>
-        <p className="ai-report-summary-period" title={t(hint, { from: (key === 'mau' ? current?.mauFrom : current?.from) || '—', date: (key === 'dau' ? current?.activityDate : current?.to) || '—' })}>
+        <p className="ai-report-summary-period" title={showDefinitions ? t(hint, { from: (key === 'mau' ? current?.mauFrom : current?.from) || '—', date: (key === 'dau' ? current?.activityDate : current?.to) || '—' }) : undefined}>
           <span className="ai-report-summary-period-label">{t(`summaryPeriod.${period}`)}</span>
           <span>{key === 'publishedSkillCount' ? t('summaryThrough', { date: periods[key] }) : periods[key]}</span>
         </p>
       </div>)}
     </div>
-    <p className="text-xs text-muted-foreground">{t('summaryPeriodHint')}</p>
+    <MetricDefinition><p className="text-xs text-muted-foreground">{t('summaryPeriodHint')}</p></MetricDefinition>
     {!loading && current && current.dau == null && <p className="text-xs text-muted-foreground">{t('activityPending')}</p>}
   </section>;
 }

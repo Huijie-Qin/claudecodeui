@@ -29,7 +29,7 @@ CREATE TABLE ai_dashboard_integration_detail (
   skill_publish_count INTEGER,
   skill_call_count INTEGER,
 
-  -- 只取指定 SQL 行数记录的 sqlLineCount。
+  -- 夜间扫描 AI 会话回复中的 SQL 行数，不读取 Hook。
   sql_record_id TEXT,
   generated_sql_lines INTEGER,
 

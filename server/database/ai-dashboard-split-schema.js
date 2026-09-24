@@ -50,7 +50,7 @@ export const AI_DASHBOARD_SPLIT_REDACTION_SQL = `CREATE TRIGGER IF NOT EXISTS ai
 AFTER INSERT ON ai_usage_suppressed_rows BEGIN
 ${SPLIT_DETAILS.filter(d => ['sql_generation', 'code_submission', 'skill_publication'].includes(d.key)).flatMap(definition => {
   const condition = definition.key === 'sql_generation'
-    ? "NEW.dataset='hook_records' AND sql_record_id=NEW.row_key"
+    ? "NEW.dataset IN ('sql_generations','hook_records') AND sql_record_id=NEW.row_key"
     : definition.key === 'code_submission' ? "NEW.dataset='code_submissions' AND code_submission_id=NEW.row_key"
       : "NEW.dataset='skill_publications' AND skill_id IN (SELECT subject_id FROM ai_usage_report_rows WHERE tenant_id=NEW.tenant_id AND dataset=NEW.dataset AND row_key=NEW.row_key)";
   return [definition.table, definition.staging].map(table => `DELETE FROM ${table} WHERE tenant_id=NEW.tenant_id AND (${condition});`);

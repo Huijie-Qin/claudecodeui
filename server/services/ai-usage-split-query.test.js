@@ -5,7 +5,7 @@ import { fixture } from './ai-usage-test-fixture.js';
 import { splitReportCte } from './ai-dashboard-split-query.js';
 import { integrationReportCte } from './ai-dashboard-integration-query.js';
 
-const coverage = { activeUsers: 'complete', duration: 'complete', hooks: 'complete', hookExecutions: 'complete',
+const coverage = { activeUsers: 'complete', generatedSql: 'partial', duration: 'complete', hooks: 'complete', hookExecutions: 'complete',
   skillPublications: 'complete', skillInvocations: 'complete', templates: 'complete', codeSubmissions: 'complete' };
 
 function seed(t) {
@@ -21,8 +21,9 @@ function seed(t) {
   f.row({ id: 'pub', dataset: 'skill_publications', subjectId: 'skill-a', date: '2024-01-01', value: { skillName: 'Skill A', publisherUserId: 3 } });
   f.row({ id: 'pub-new', dataset: 'skill_publications', subjectId: 'skill-b', value: { skillName: 'Skill B', publisherUserId: 3 } });
   f.row({ id: 'call', dataset: 'skill_invocations', subjectId: 'skill-a', value: { skillName: 'Skill A', publisherUserId: 3, callerUserId: 4 } });
-  f.row({ id: 'sql', dataset: 'hook_records', subjectId: 'hook-sql', value: { hookName: 'SQL', recordType: 'sql_response_metrics', fields: [{ key: 'sqlLineCount', type: 'number', value: 41 }] } });
-  f.row({ id: 'sql-unknown', dataset: 'hook_records', userId: 4, workspaceId: 8, value: { recordType: 'sql_response_metrics', fields: [] } });
+  f.row({ id: 'hook-record', dataset: 'hook_records', subjectId: 'hook-sql', value: { hookName: 'SQL', recordType: 'sql_response_metrics', fields: [{ key: 'sqlLineCount', type: 'number', value: 900 }] } });
+  f.row({ id: 'sql', dataset: 'sql_generations', value: { generatedLines: 41 } });
+  f.row({ id: 'sql-unknown', dataset: 'sql_generations', userId: 4, workspaceId: 8, value: { generatedLines: null } });
   f.row({ id: 'code', dataset: 'code_submissions', value: { submittedLines: 50, repositoryUrl: 'repo', commitSha: 'sha' } });
   f.row({ id: 'code-unknown', dataset: 'code_submissions', userId: 4, workspaceId: 8, value: { submittedLines: null } });
   f.row({ id: 'execution', dataset: 'hook_executions', subjectId: 'hook-sql', value: { hookName: 'SQL', status: 'succeeded', durationMs: 20 } });
