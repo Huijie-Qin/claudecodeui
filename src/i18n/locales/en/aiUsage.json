@@ -120,7 +120,7 @@
   "workbook": {
     "download": "Download all reports",
     "busy": "Preparing workbook…",
-    "hint": "Export all matching rows using each report’s applied filters, grouping and sort into separate Excel sheets. Viewed Hook and template statistics get additional sheets.",
+    "hint": "Each sheet shows its applied filters and totals above a separate detail section. Export all matching rows with each report’s applied grouping and sort, including daily trends and viewed Hook and template statistics.",
     "savedFilters": "Filters saved for this report",
     "progress": "Exporting {{sheet}} · {{count}} rows",
     "complete": "Exported {{count}} sheets",
@@ -129,6 +129,9 @@
     "durationSeconds": "AI active duration (seconds)",
     "matchingRecords": "{{count}} matching records",
     "fieldKey": "Field key",
-    "statistic": "Statistic"
+    "statistic": "Statistic",
+    "dailyTrend": "Daily trend",
+    "information": "Filters and summary",
+    "details": "Details"
   }
 }

@@ -117,7 +117,7 @@
   "workbook": {
     "download": "下载全部报表",
     "busy": "正在打包…",
-    "hint": "按各页面已应用的筛选、分组和排序导出全部匹配结果，分别放在 Excel Sheet 中。已查看的 Hook 和模板统计另附 Sheet。",
+    "hint": "每个 Sheet 内，上方展示筛选条件与汇总，下方独立展示明细。按各页面已应用的筛选、分组和排序导出全部匹配结果，包含每日趋势及已查看的 Hook 和模板统计。",
     "savedFilters": "本页筛选已独立保存",
     "progress": "正在导出 {{sheet}} · {{count}} 行",
     "complete": "已导出 {{count}} 个 Sheet",
@@ -126,6 +126,9 @@
     "durationSeconds": "AI 活跃时长（秒）",
     "matchingRecords": "共 {{count}} 条匹配记录",
     "fieldKey": "字段键",
-    "statistic": "统计方式"
+    "statistic": "统计方式",
+    "dailyTrend": "每日趋势",
+    "information": "筛选与汇总",
+    "details": "明细"
   }
 }

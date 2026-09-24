@@ -13,7 +13,12 @@ import type { AnalysisTab, UsageCapabilities, UsageList, UsageRow } from './type
 import { assertPublishedBatch } from './usageUtils';
 
 export type WorkbookSpec = { title: string; endpoint: string; params: Record<string, unknown>; columns: ReportColumn[]; metrics?: string[]; metric?: string };
-export type WorkbookSheet = { title: string; rows: (string | number | boolean | null)[][]; headerRows: number[]; dateCells?: { row: number; col: number }[] };
+export type WorkbookSheet = {
+  title: string; rows: (string | number | boolean | null)[][]; headerRows: number[];
+  dateCells?: { row: number; col: number; dateOnly?: boolean }[];
+  summaryHeaderRows?: number[]; detailHeaderRow?: number; detailRowCount?: number; sectionRows?: number[];
+  metadataHeaderRows?: number[];
+};
 type ListResult = UsageList & { summary?: UsageRow; trend?: UsageRow[]; includeZeroUsers?: boolean; skillGroupingVersion?: number; codeReportVersion?: number; hookReportVersion?: number };
 type Tab = 'usage' | 'code' | 'skills' | 'hooks' | 'templates';
 
@@ -78,6 +83,40 @@ function cell(value: unknown): string | number | boolean | null {
     : typeof value === 'string' || typeof value === 'boolean' ? value : null;
 }
 
+type ReportInfo = { title: string; value: ReturnType<typeof cell>; dateOnly?: boolean };
+
+// Each sheet is self-contained: scope/totals above, an independent detail table
+// below. Information wraps within the real detail width, never adding columns.
+function reportLayout(title: string, columns: string[], info: ReportInfo[], totals: ReportInfo[], t: TFunction): WorkbookSheet {
+  const sheet: WorkbookSheet = { title, rows: [], headerRows: [], dateCells: [],
+    sectionRows: [], metadataHeaderRows: [], summaryHeaderRows: [] };
+  const section = (label: string) => {
+    sheet.sectionRows!.push(sheet.rows.length);
+    sheet.rows.push([label, ...Array<string>(Math.max(0, columns.length - 1)).fill('')]);
+  };
+  section(t('workbook.information'));
+  const block = (fields: ReportInfo[], summary: boolean) => {
+    const width = Math.max(1, Math.min(columns.length, summary ? columns.length : 3));
+    for (let i = 0; i < fields.length; i += width) {
+      const part = fields.slice(i, i + width);
+      (summary ? sheet.summaryHeaderRows! : sheet.metadataHeaderRows!).push(sheet.rows.length);
+      sheet.rows.push(part.map(field => field.title));
+      for (const [col, field] of part.entries()) {
+        if (field.dateOnly) sheet.dateCells!.push({ row: sheet.rows.length, col, dateOnly: true });
+      }
+      sheet.rows.push(part.map(field => field.value));
+    }
+  };
+  block(info, false);
+  if (totals.length) { sheet.rows.push([]); block(totals, true); }
+  sheet.rows.push([], []);
+  section(t('workbook.details'));
+  sheet.detailHeaderRow = sheet.rows.length;
+  sheet.headerRows.push(sheet.detailHeaderRow);
+  sheet.rows.push(columns);
+  return sheet;
+}
+
 export async function collectWorkbook({ specs, tenantId, batchId, request, signal, t, onProgress }: {
   specs: WorkbookSpec[]; tenantId: number; batchId: string; request: typeof usageRequest; signal: AbortSignal; t: TFunction;
   onProgress?: (sheet: string, count: number) => void;
@@ -90,13 +129,16 @@ export async function collectWorkbook({ specs, tenantId, batchId, request, signa
   };
   await authorize();
   const summary = assertUsageSummary(await request<UsageSummary>('summary', { tenantId, scope: 'tenant', batchId }, signal), batchId, 'tenant');
-  const sheets: WorkbookSheet[] = [{ title: t('summaryTitle'), headerRows: [1], rows: [
+  const overview: WorkbookSheet = { title: t('summaryTitle'), headerRows: [1], dateCells: [
+    { row: 0, col: 1, dateOnly: true }, ...[2, 3, 4, 5].flatMap(row => [2, 3].map(col => ({ row, col, dateOnly: true }))),
+  ], rows: [
     [t('dataThrough'), summary.to], [t('workbook.metric'), t('workbook.value'), t('from'), t('to')],
     [t('summarySessions'), cell(summary.sessionCount), summary.from, summary.to],
     [t('summaryPublications'), cell(summary.publishedSkillCount), null, summary.to],
     [t('dau'), cell(summary.dau), summary.activityDate, summary.activityDate],
     [t('mau'), cell(summary.mau), summary.mauFrom, summary.to],
-  ] }];
+  ] };
+  const sheets: WorkbookSheet[] = [overview];
   let count = 0;
   for (const spec of specs) {
     signal.throwIfAborted();
@@ -112,44 +154,57 @@ export async function collectWorkbook({ specs, tenantId, batchId, request, signa
     const fetchPage: typeof usageRequest = async <T,>(endpoint: string, params: Record<string, unknown> = {}, abort?: AbortSignal) =>
       endpoint === spec.endpoint && params.page === 1 ? first as T : request<T>(endpoint, params, abort);
     const data = await collectExportRows({ endpoint: spec.endpoint, params: spec.params, total: first.total, signal, request: fetchPage, onProgress: n => onProgress?.(spec.title, n) });
-    const rows: WorkbookSheet['rows'] = [
-      [t('from'), cell(spec.params.from), t('to'), cell(spec.params.to)],
-      [t('userName'), cell(spec.params.userSearch || t('all')), t('workspaceName'), cell(spec.params.workspaceSearch || t('all'))],
-      [t('groupBy'), t(`group.${spec.params.groupBy}`), t('search'), cell(spec.params.search || t('all'))],
+    const info: ReportInfo[] = [
+      { title: t('from'), value: cell(spec.params.from), dateOnly: true },
+      { title: t('to'), value: cell(spec.params.to), dateOnly: true },
+      { title: t('groupBy'), value: t(`group.${spec.params.groupBy}`) },
+      { title: t('userName'), value: cell(spec.params.userSearch || t('all')) },
+      { title: t('workspaceName'), value: cell(spec.params.workspaceSearch || t('all')) },
+      { title: t('search'), value: cell(spec.params.search || t('all')) },
     ];
-    if (spec.metric) rows.push([t('numberField'), cell(spec.params.fieldKey || t('all')), t('workbook.statistic'), t(`hookReportFields.${spec.metric === 'average' ? 'avg' : spec.metric}`)]);
-    const headerRows: number[] = [];
+    if (spec.metric) info.push({ title: t('numberField'), value: cell(spec.params.fieldKey || t('all')) },
+      { title: t('workbook.statistic'), value: t(`hookReportFields.${spec.metric === 'average' ? 'avg' : spec.metric}`) });
+    let totals: ReportInfo[] = [];
     if (first.summary && spec.metrics) {
-      rows.push([]); headerRows.push(rows.length); rows.push([t('workbook.metric'), t('workbook.value')]);
-      for (const metric of spec.metrics) {
+      const summary = first.summary;
+      // Retain API-provided distinct totals, not sums of already-grouped rows.
+      totals = spec.metrics.map(metric => {
         const col = spec.columns.find(col => col.key === metric);
-        const value = col?.exportValue ? col.exportValue(first.summary) : first.summary[metric];
-        rows.push([col?.title || t(metric), cell(value)]);
-      }
+        const value = col?.exportValue ? col.exportValue(summary) : summary[metric];
+        return { title: col?.title || t(metric), value: cell(value) };
+      });
     }
-    rows.push([]); headerRows.push(rows.length); rows.push(spec.columns.map(col => col.title));
-    const dateCells: { row: number; col: number }[] = [];
+    const sheet = reportLayout(spec.title, spec.columns.map(col => col.title), info, totals, t);
+    const { rows, dateCells } = sheet;
     for (const row of data) {
       const values = spec.columns.map((col, index) => {
         if (['firstPublishedAt', 'lastInvokedAt'].includes(col.key) && row[col.key]) {
           const serial = shanghaiExcelTime(row[col.key]);
-          if (serial !== null) dateCells.push({ row: rows.length, col: index });
+          if (serial !== null) dateCells!.push({ row: rows.length, col: index });
           return serial;
         }
         return cell(col.exportValue ? col.exportValue(row) : row[col.key]);
       });
       rows.push(values);
     }
+    sheet.detailRowCount = data.length;
+    sheets.push(sheet);
     const trend = spec.endpoint === 'analysis' && spec.params.dataset === 'usage'
       ? (await request<UsageList>('trend', spec.params, signal)) : null;
     if (trend) assertPublishedBatch(trend, batchId);
     const trendRows = trend?.items || first.trend;
     if (trendRows?.length) {
       const metrics = spec.endpoint === 'code' ? ['generatedLines', 'submittedLines'] : ['sessionCount', 'dau', 'mau'];
-      rows.push([]); headerRows.push(rows.length); rows.push([t('group.day'), ...metrics.map(key => spec.columns.find(col => col.key === key)?.title || t(key))]);
-      for (const row of trendRows) rows.push([cell(row.date), ...metrics.map(key => cell(row[key]))]);
+      const trendSheet = reportLayout(`${spec.title} · ${t('workbook.dailyTrend')}`,
+        [t('group.day'), ...metrics.map(key => spec.columns.find(col => col.key === key)?.title || t(key))],
+        info.map(field => field.title === t('groupBy') ? { ...field, value: t('group.day') } : field), [], t);
+      for (const row of trendRows) {
+        trendSheet.dateCells!.push({ row: trendSheet.rows.length, col: 0, dateOnly: true });
+        trendSheet.rows.push([cell(row.date), ...metrics.map(key => cell(row[key]))]);
+      }
+      trendSheet.detailRowCount = trendRows.length;
+      sheets.push(trendSheet);
     }
-    sheets.push({ title: spec.title, rows, headerRows, dateCells });
   }
   // Never emit a partial or cross-batch workbook, even if publishing happens near the end.
   const status = await request<{ batchId: string }>('status', { tenantId, scope: 'tenant' }, signal);
@@ -168,25 +223,6 @@ export function shanghaiExcelTime(value: unknown): number | null {
 
 export async function workbookBytes(sheets: WorkbookSheet[]): Promise<ArrayBuffer> {
   if (new TextEncoder().encode(JSON.stringify(sheets)).length > 10 * 1024 * 1024) throw new Error('exportTooLarge');
-  const XLSX = await import('xlsx');
-  const book = XLSX.utils.book_new();
-  const used = new Set<string>();
-  for (const sheet of sheets) {
-    const base = sheet.title.replace(/[\[\]:*?/\\]/g, ' ').replace(/^'+|'+$/g, '').slice(0, 31) || 'Report';
-    let name = base;
-    for (let suffix = 2; used.has(name.toLowerCase()); suffix++) name = `${base.slice(0, 26)} (${suffix})`;
-    used.add(name.toLowerCase());
-    // aoa_to_sheet creates literal strings, not formulas, for untrusted labels.
-    const ws = XLSX.utils.aoa_to_sheet(sheet.rows);
-    const width = Math.max(...sheet.rows.map(row => row.length));
-    ws['!cols'] = Array.from({ length: width }, (_, col) => ({ wch: Math.min(48, Math.max(16, ...sheet.rows.map(row => {
-      const value = row[col];
-      return typeof value === 'number' ? 16 : [...String(value ?? '')].reduce((n, char) => n + (char.charCodeAt(0) > 255 ? 2 : 1), 0) + 2;
-    }))) }));
-    ws['!rows'] = sheet.rows.map((_, row) => ({ hpt: sheet.headerRows.includes(row) ? 26 : 22 }));
-    for (const key of Object.keys(ws).filter(key => !key.startsWith('!'))) if (ws[key].t === 'n') ws[key].z = '#,##0.########';
-    for (const { row, col } of sheet.dateCells || []) ws[XLSX.utils.encode_cell({ r: row, c: col })].z = 'yyyy-mm-dd hh:mm:ss';
-    XLSX.utils.book_append_sheet(book, ws, name);
-  }
-  return XLSX.write(book, { bookType: 'xlsx', type: 'array', compression: true });
+  const { styledWorkbookBytes } = await import('./reportWorkbookStyle');
+  return styledWorkbookBytes(sheets);
 }
