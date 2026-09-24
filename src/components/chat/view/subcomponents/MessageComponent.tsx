@@ -16,7 +16,7 @@ import { formatUsageLimitText } from '../../utils/chatFormatting';
 import { getClaudePermissionSuggestion } from '../../utils/chatPermissions';
 import { formatTaskNotificationUsageLabel } from '../../utils/taskNotifications';
 import { getCancellableHookLoopJobId } from '../../utils/hookLoopControls';
-import { getHookDisplayFollowups, getHookFollowupDisplayStatus } from '../../utils/hookFollowupPresentation';
+import { getHookDisplayFollowups, getHookExecutionDisplayState, getHookFollowupDisplayStatus } from '../../utils/hookFollowupPresentation';
 import { canForkMessage } from '../../utils/sessionFork';
 import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
@@ -255,9 +255,15 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
   const inlineLoopStatus = isHookExecution && isSubagentHook ? hookActivity?.loopStatus : undefined;
   const terminalInlineLoopStatus = inlineLoopStatus === 'succeeded' || inlineLoopStatus === 'failed'
     || inlineLoopStatus === 'timed_out' || inlineLoopStatus === 'cancelled' ? inlineLoopStatus : undefined;
-  const hookStatus = hookActivity?.status === 'failed'
+  const hookDisplay = hookActivity && isHookExecution
+    ? getHookExecutionDisplayState(hookActivity, hookFollowups)
+    : undefined;
+  const standaloneFollowupStatus = hookActivity && !isHookExecution
+    ? getHookFollowupDisplayStatus({ ...hookActivity, timestamp: message.timestamp })
+    : undefined;
+  const hookStatus = hookDisplay?.status || standaloneFollowupStatus || (hookActivity?.status === 'failed'
     ? 'failed'
-    : terminalInlineLoopStatus || hookActivity?.status || 'running';
+    : terminalInlineLoopStatus || hookActivity?.status || 'running');
   const hookHasFailure = hookStatus === 'failed' || hookStatus === 'timed_out' || hookStatus === 'cancelled';
   const hookActionResults = hookActivity?.actionResults || [];
   const loopResult = hookActivity?.loopResult !== undefined
@@ -273,14 +279,32 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
     send_agent_message: t('hookActivity.actions.send_agent_message', { defaultValue: 'Send to Agent' }),
     request_confirmation: t('hookActivity.actions.request_confirmation', { defaultValue: 'Request confirmation' }),
   };
-  const hookStatusLabel = {
+  const loopResumeUnconfirmedLabel = (loopStatus?: string) => ({
+    succeeded: t('hookActivity.loopResumeUnconfirmedSucceeded', { defaultValue: 'Loop completed; Agent continuation unconfirmed' }),
+    failed: t('hookActivity.loopResumeUnconfirmedFailed', { defaultValue: 'Loop failed; Agent continuation unconfirmed' }),
+    timed_out: t('hookActivity.loopResumeUnconfirmedTimedOut', { defaultValue: 'Loop timed out; Agent continuation unconfirmed' }),
+    cancelled: t('hookActivity.loopResumeUnconfirmedCancelled', { defaultValue: 'Loop cancelled; Agent continuation unconfirmed' }),
+  }[loopStatus || ''] || t('hookActivity.loopResumeUnconfirmed', { defaultValue: 'Loop ended; Agent continuation unconfirmed' }));
+  const baseHookStatusLabel = {
     queued: t('hookActivity.status.queued', { defaultValue: 'Queued' }),
     running: t('hookActivity.status.running', { defaultValue: 'Running' }),
     succeeded: t('hookActivity.status.succeeded', { defaultValue: 'Completed' }),
     failed: t('hookActivity.status.failed', { defaultValue: 'Failed' }),
     timed_out: t('hookActivity.status.timed_out', { defaultValue: 'Timed out' }),
     cancelled: t('hookActivity.status.cancelled', { defaultValue: 'Cancelled' }),
+    unconfirmed: t('hookActivity.loopResumeUnconfirmed', { defaultValue: 'Loop ended; Agent continuation unconfirmed' }),
   }[hookStatus];
+  const hookStatusLabel = hookActivity?.activityKind === 'followup' && hookActivity.loopResumeStatus === 'unconfirmed'
+    ? loopResumeUnconfirmedLabel(hookActivity.loopStatus)
+    : hookDisplay?.phase === 'loop_resume_unconfirmed'
+    ? loopResumeUnconfirmedLabel(hookFollowups.find((followup) => followup.loopResumeStatus === 'unconfirmed')?.loopStatus)
+    : hookDisplay?.phase === 'loop_queued'
+    ? t('hookActivity.loopWaiting', { defaultValue: 'Waiting for loop' })
+    : hookDisplay?.phase === 'loop_running'
+      ? t('hookActivity.loopRunning', { defaultValue: 'Loop running' })
+      : hookDisplay?.phase === 'agent_continuing'
+        ? t('hookActivity.agentContinuing', { defaultValue: 'Agent continuing' })
+        : baseHookStatusLabel;
   const cancelMcpLoop = (jobId: string, sessionId?: string) => {
     setCancellingLoopJobs((current) => new Set(current).add(jobId));
     sendMessage({ type: 'cancel-mcp-loop', jobId, sessionId });
@@ -369,6 +393,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                     <XCircle className="h-3 w-3" aria-hidden="true" />
                   ) : hookStatus === 'succeeded' ? (
                     <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                  ) : hookStatus === 'unconfirmed' ? (
+                    <Clock3 className="h-3 w-3" aria-hidden="true" />
                   ) : (
                     <Loader2 className={`h-3 w-3 ${hookStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
                   )}
@@ -506,15 +532,30 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                     {hookFollowups.map((followup) => {
                       const followupStatus = getHookFollowupDisplayStatus(followup);
                       const followupHasFailure = ['failed', 'timed_out', 'cancelled'].includes(followupStatus);
+                      const agentContinuing = followup.actionType === 'mcp_loop_run'
+                        && followup.loopStatus === 'succeeded' && followupStatus === 'running';
+                      const loopPolling = followup.actionType === 'mcp_loop_run'
+                        && (followup.loopStatus === 'queued' || followup.loopStatus === 'running'
+                          || (!followup.loopStatus && followupStatus === 'running'));
                       const followupLoopJobId = getCancellableHookLoopJobId(followup);
-                      const followupStatusLabel = {
+                      const baseFollowupStatusLabel = {
                         queued: t('hookActivity.status.queued', { defaultValue: 'Queued' }),
                         running: t('hookActivity.status.running', { defaultValue: 'Running' }),
                         succeeded: t('hookActivity.status.succeeded', { defaultValue: 'Completed' }),
                         failed: t('hookActivity.status.failed', { defaultValue: 'Failed' }),
                         timed_out: t('hookActivity.status.timed_out', { defaultValue: 'Timed out' }),
                         cancelled: t('hookActivity.status.cancelled', { defaultValue: 'Cancelled' }),
+                        unconfirmed: t('hookActivity.loopResumeUnconfirmed', { defaultValue: 'Loop ended; Agent continuation unconfirmed' }),
                       }[followupStatus];
+                      const followupStatusLabel = followup.loopResumeStatus === 'unconfirmed'
+                        ? loopResumeUnconfirmedLabel(followup.loopStatus)
+                        : agentContinuing
+                        ? t('hookActivity.agentContinuing', { defaultValue: 'Agent continuing' })
+                        : loopPolling && followup.loopStatus === 'queued'
+                          ? t('hookActivity.loopWaiting', { defaultValue: 'Waiting for loop' })
+                          : loopPolling
+                            ? t('hookActivity.loopRunning', { defaultValue: 'Loop running' })
+                            : baseFollowupStatusLabel;
 
                       return (
                         <div
@@ -539,6 +580,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                                 <XCircle className="h-3 w-3" aria-hidden="true" />
                               ) : followupStatus === 'succeeded' ? (
                                 <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                              ) : followupStatus === 'unconfirmed' ? (
+                                <Clock3 className="h-3 w-3" aria-hidden="true" />
                               ) : (
                                 <Loader2 className={`h-3 w-3 ${followupStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
                               )}
@@ -554,7 +597,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                                   <span>{t('hookActivity.directMessage', { defaultValue: 'Sent to Agent' })}</span>
                                 ) : followup.actionType === 'mcp_loop_run' ? (
                                   <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
-                                    <RefreshCcw className={`h-3 w-3 shrink-0 ${followupStatus === 'running' ? 'animate-spin' : ''}`} aria-hidden="true" />
+                                    <RefreshCcw className={`h-3 w-3 shrink-0 ${loopPolling ? 'animate-spin' : ''}`} aria-hidden="true" />
                                     <span className="min-w-0 truncate" title={followup.loopTargetTool}>
                                       {followup.loopTargetTool || t('hookActivity.actions.mcp_loop_run', { defaultValue: 'MCP loop' })}
                                     </span>

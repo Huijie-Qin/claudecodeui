@@ -1,7 +1,8 @@
 import { multitenancyDb } from '../database/multitenancy-db.js';
+import { orderSupplementMessages } from '../../shared/messageDisplayOrder.js';
 
 import { hookConfigService } from './hook-configs.js';
-import { orderSupplementMessages } from '../../shared/messageDisplayOrder.js';
+import { mcpLoopService } from './mcp-loop-service.js';
 
 function generateUserPromptMessageId() {
   return `user_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -190,6 +191,60 @@ function mergeClaudeSyntheticMessages(transcriptMessages, syntheticMessages) {
       return leftTimestamp - rightTimestamp || left.index - right.index;
     })
     .map(({ message }) => message);
+}
+
+function reconcilePersistedMcpLoopActivity(message, mcpLoops, {
+  tenantId,
+  workspaceId,
+  userId,
+  providerSessionId,
+}) {
+  const isFollowup = message?.activityKind === 'followup'
+    && message.actionType === 'mcp_loop_run';
+  const isInlineSubagentExecution = message?.activityKind === 'execution'
+    && Boolean(message.agentId)
+    && message.actionTypes?.includes('mcp_loop_run');
+  if (message?.kind !== 'hook_activity'
+    || (!isFollowup && !isInlineSubagentExecution)
+    || !['queued', 'running'].includes(message.status)
+    || !message.loopJobId
+    || !message.executionId
+    || (isFollowup && !message.actionId)
+    || !message.hookId) return message;
+
+  let job;
+  try {
+    job = mcpLoops?.getJob?.(message.loopJobId);
+  } catch (error) {
+    console.warn('[SessionHistory] Failed to reconcile MCP loop activity:', error?.message || error);
+    return message;
+  }
+  if (!job || !['succeeded', 'failed', 'timed_out', 'cancelled'].includes(job.status)
+    || job.sessionId !== providerSessionId
+    || Number(job.tenantId) !== Number(tenantId)
+    || Number(job.workspaceId) !== Number(workspaceId)
+    || Number(job.userId) !== Number(userId)
+    || job.hookId !== message.hookId
+    || job.hookExecutionId !== message.executionId
+    || (isFollowup && job.actionId !== message.actionId)
+    || (isInlineSubagentExecution && message.loopToolUseId && job.toolUseId !== message.loopToolUseId)) return message;
+
+  // The scheduler resumes persisted jobs after a server restart, but its
+  // in-memory writer and Agent resume context cannot survive that restart.
+  // Read the durable job outcome for the card. The missing terminal activity
+  // does not prove that the Agent received the result or completed its turn.
+  return {
+    ...message,
+    status: job.status === 'succeeded' ? 'succeeded' : 'failed',
+    loopStatus: job.status,
+    loopResumeStatus: 'unconfirmed',
+    loopAttemptCount: job.attemptCount,
+    loopStartedAtMs: job.startedAtMs,
+    loopNextPollAtMs: job.nextPollAtMs,
+    loopTargetTool: job.toolName,
+    loopToolUseId: job.toolUseId,
+    ...(job.error ? { error: job.error } : {}),
+  };
 }
 
 function buildHistoricalHookActionResults(hook, execution, records = []) {
@@ -502,6 +557,7 @@ export function createSessionMessageHistoryService({
   multitenancy = multitenancyDb,
   providerSessions = null,
   hookConfigs = hookConfigService,
+  mcpLoops = mcpLoopService,
 } = {}) {
   return {
     async fetchHistory({
@@ -552,7 +608,12 @@ export function createSessionMessageHistoryService({
             if (identity) hiddenHookActivityIds.add(identity);
           }
           return visible;
-        });
+        }).map((message) => reconcilePersistedMcpLoopActivity(message, mcpLoops, {
+          tenantId,
+          workspaceId: ownedSession.workspace_id,
+          userId,
+          providerSessionId,
+        }));
         const syntheticMessages = mergeClaudeSyntheticMessages(
           visiblePersistedHookActivities,
           historicalHookActivities,

@@ -9,6 +9,111 @@ import {
   shouldSuppressLiveUserTextMessage,
 } from './session-message-history.js';
 
+test('Claude history reconciles a stale MCP loop card from its durable terminal job', async () => {
+  const activity = {
+    id: 'hook_activity_execution-1_wait-status',
+    kind: 'hook_activity',
+    activityKind: 'followup',
+    status: 'running',
+    provider: 'claude',
+    sessionId: 'session-1',
+    timestamp: '2026-09-24T00:00:00.000Z',
+    hookId: 'hook-1',
+    executionId: 'execution-1',
+    actionId: 'wait-status',
+    actionType: 'mcp_loop_run',
+    loopJobId: 'loop-job-1',
+    loopStatus: 'queued',
+    loopAttemptCount: 1,
+  };
+  const job = {
+    id: 'loop-job-1',
+    tenantId: 1,
+    workspaceId: 3,
+    userId: 2,
+    sessionId: 'session-1',
+    hookId: 'hook-1',
+    hookExecutionId: 'execution-1',
+    actionId: 'wait-status',
+    status: 'succeeded',
+    attemptCount: 5,
+    startedAtMs: 1000,
+    nextPollAtMs: 9000,
+    toolName: 'mcp__demo__get_task_status',
+    toolUseId: 'tool-1',
+  };
+  const createHistory = (getJob, persistedActivity = activity) => createSessionMessageHistoryService({
+    multitenancy: {
+      sessionMessages: {
+        listMessages: () => ({ messages: [persistedActivity], total: 1 }),
+      },
+    },
+    mcpLoops: { getJob },
+  }).fetchHistory({
+    tenantId: 1,
+    userId: 2,
+    provider: 'claude',
+    providerSessionId: 'session-1',
+    ownedSession: { workspace_id: 3, workspace_slug: 'repo', workspace_path: '/tmp/repo' },
+  });
+
+  const succeeded = (await createHistory(() => job)).messages[0];
+  assert.equal(succeeded.status, 'succeeded');
+  assert.equal(succeeded.loopStatus, 'succeeded');
+  assert.equal(succeeded.loopResumeStatus, 'unconfirmed');
+  assert.equal(succeeded.loopAttemptCount, 5);
+  assert.equal(succeeded.loopTargetTool, job.toolName);
+  assert.equal(succeeded.loopToolUseId, job.toolUseId);
+  assert.equal(succeeded.id, activity.id);
+  assert.equal(activity.status, 'running', 'history reconciliation must not mutate a cached DB row');
+
+  const inlineSubagentActivity = {
+    ...activity,
+    id: 'hook_activity_child-execution',
+    activityKind: 'execution',
+    actionType: undefined,
+    actionId: undefined,
+    actionTypes: ['mcp_loop_run'],
+    agentId: 'child-agent',
+    loopToolUseId: 'tool-1',
+  };
+  const inlineSucceeded = (await createHistory(() => job, inlineSubagentActivity)).messages[0];
+  assert.equal(inlineSucceeded.status, 'succeeded');
+  assert.equal(inlineSucceeded.loopStatus, 'succeeded');
+  assert.equal(inlineSucceeded.loopResumeStatus, 'unconfirmed');
+  assert.deepEqual(
+    (await createHistory(() => ({ ...job, toolUseId: 'another-tool' }), inlineSubagentActivity)).messages[0],
+    inlineSubagentActivity,
+    'an inline child loop must match the durable tool identity',
+  );
+
+  const deliveredActivity = { ...activity, status: 'succeeded', loopStatus: 'succeeded' };
+  assert.deepEqual((await createHistory(() => job, deliveredActivity)).messages[0], deliveredActivity,
+    'a persisted terminal activity must not be labeled as an unconfirmed Agent continuation');
+
+  for (const status of ['failed', 'timed_out', 'cancelled']) {
+    const failure = (await createHistory(() => ({ ...job, status, error: `${status} detail` }))).messages[0];
+    assert.equal(failure.status, 'failed');
+    assert.equal(failure.loopStatus, status);
+    assert.equal(failure.loopResumeStatus, 'unconfirmed');
+    assert.equal(failure.error, `${status} detail`);
+  }
+
+  for (const mismatch of [
+    { status: 'running' },
+    { sessionId: 'another-session' },
+    { tenantId: 4 },
+    { workspaceId: 4 },
+    { userId: 4 },
+    { hookId: 'another-hook' },
+    { hookExecutionId: 'another-execution' },
+    { actionId: 'another-action' },
+  ]) {
+    const unresolved = (await createHistory(() => ({ ...job, ...mismatch }))).messages[0];
+    assert.deepEqual(unresolved, activity, `unmatched ${Object.keys(mismatch)[0]} must not settle the card`);
+  }
+});
+
 test('Claude session history keeps legacy DB rows and appends JSONL rows after the DB cutoff', async () => {
   let historyOptions = null;
   const service = createSessionMessageHistoryService({

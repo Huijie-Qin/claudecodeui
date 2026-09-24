@@ -12,6 +12,8 @@ type PendingTerminalArgs = {
   explicitSessionId: string | null;
   activeViewSessionId: string | null;
   hasPendingViewSession: boolean;
+  pendingViewSessionId?: string | null;
+  clientSessionId?: string | null;
   selectedSessionId: string | null;
 };
 
@@ -71,13 +73,16 @@ export function isPendingViewTerminalMessage({
   explicitSessionId,
   activeViewSessionId,
   hasPendingViewSession,
+  pendingViewSessionId,
+  clientSessionId,
   selectedSessionId,
 }: PendingTerminalArgs): boolean {
   return Boolean(
     (kind === 'error' || kind === 'complete') &&
-    !explicitSessionId &&
-    !activeViewSessionId &&
     hasPendingViewSession &&
-    !selectedSessionId,
+    !selectedSessionId &&
+    ((!explicitSessionId && !activeViewSessionId && !clientSessionId) ||
+      (explicitSessionId && pendingViewSessionId && explicitSessionId === pendingViewSessionId) ||
+      (clientSessionId && pendingViewSessionId && clientSessionId === pendingViewSessionId)),
   );
 }

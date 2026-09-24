@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
 import { getCancellableHookLoopJobId } from '../utils/hookLoopControls';
-import { getHookDisplayFollowups } from '../utils/hookFollowupPresentation';
+import { getHookDisplayFollowups, getHookExecutionDisplayState, getHookFollowupDisplayStatus } from '../utils/hookFollowupPresentation';
 
 import { normalizedToChatMessages } from './useChatMessages';
 
@@ -193,6 +193,44 @@ test('normalizedToChatMessages groups a Hook follow-up into its execution card',
     timestamp: '2026-06-30T00:00:02.000Z',
     messages: undefined,
   }]);
+});
+
+test('a scheduled MCP loop keeps its parent Hook card active until the loop reaches a terminal state', () => {
+  const execution: NormalizedMessage = {
+    id: 'hook_activity_execution-loop_execution', sessionId: 'session-loop', provider: 'claude',
+    timestamp: '2026-09-24T00:00:00.000Z', kind: 'hook_activity', activityKind: 'execution',
+    executionId: 'execution-loop', status: 'succeeded', actionTypes: ['mcp_loop_run'],
+  };
+  const followup: NormalizedMessage = {
+    id: 'hook_activity_execution-loop_wait', sessionId: 'session-loop', provider: 'claude',
+    timestamp: '2026-09-24T00:00:00.100Z', kind: 'hook_activity', activityKind: 'followup',
+    executionId: 'execution-loop', status: 'running', actionType: 'mcp_loop_run',
+    loopJobId: 'loop-job', loopStatus: 'queued',
+  };
+  for (const [snapshot, expected] of [
+    [[execution, followup], { status: 'running', phase: 'loop_queued' }],
+    [[execution, { ...followup, status: 'succeeded', loopStatus: 'succeeded' }], { status: 'succeeded' }],
+    [[execution, { ...followup, status: 'succeeded', loopStatus: 'succeeded', loopResumeStatus: 'unconfirmed' }],
+      { status: 'unconfirmed', phase: 'loop_resume_unconfirmed' }],
+  ] as const) {
+    const [card] = normalizedToChatMessages([...snapshot]);
+    assert.equal(card.hookActivity?.status, 'succeeded', 'The persisted execution status is retained');
+    assert.deepEqual(getHookExecutionDisplayState(card.hookActivity!, card.hookActivity?.followups || []), expected);
+    if ('phase' in expected && expected.phase === 'loop_resume_unconfirmed') {
+      assert.equal(card.hookActivity?.followups?.[0].loopResumeStatus, 'unconfirmed');
+    }
+  }
+});
+
+test('an orphan restored loop follow-up retains its unconfirmed Agent state', () => {
+  const [card] = normalizedToChatMessages([{
+    id: 'hook_activity_execution-loop_wait', sessionId: 'session-loop', provider: 'claude',
+    timestamp: '2026-09-24T00:00:00.100Z', kind: 'hook_activity', activityKind: 'followup',
+    executionId: 'execution-loop', status: 'succeeded', actionType: 'mcp_loop_run',
+    loopJobId: 'loop-job', loopStatus: 'succeeded', loopResumeStatus: 'unconfirmed',
+  }]);
+  assert.equal(card.hookActivity?.loopResumeStatus, 'unconfirmed');
+  assert.equal(getHookFollowupDisplayStatus({ ...card.hookActivity!, timestamp: card.timestamp }), 'unconfirmed');
 });
 
 test('normalizedToChatMessages nests Hook recovery output under its follow-up', () => {

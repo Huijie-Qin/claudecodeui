@@ -4,7 +4,7 @@ import test from 'node:test';
 import type { HookActivityDetails, HookFollowupActivityDetails } from '../types/types';
 
 import { getCancellableHookLoopJobId } from './hookLoopControls';
-import { getHookDisplayFollowups, getHookFollowupDisplayStatus } from './hookFollowupPresentation';
+import { getHookDisplayFollowups, getHookExecutionDisplayState, getHookFollowupDisplayStatus } from './hookFollowupPresentation';
 
 const timestamp = '2026-09-12T00:00:00.000Z';
 const child: HookActivityDetails = {
@@ -68,6 +68,65 @@ test('queued scheduler intervals do not change a running loop into a queued agen
   const [display] = getHookDisplayFollowups(child, timestamp);
   assert.equal(getHookFollowupDisplayStatus(display), 'running');
   assert.equal(getHookFollowupDisplayStatus({ ...display, loopStatus: 'succeeded' }), 'running');
+  assert.equal(getHookFollowupDisplayStatus({ ...display, status: 'succeeded', loopStatus: 'queued' }), 'queued');
+  assert.equal(getHookFollowupDisplayStatus({ ...display, status: 'succeeded', loopStatus: 'running' }), 'running');
+});
+
+test('parent Hook badge follows its loop rather than reporting scheduling as completion', () => {
+  const execution: HookActivityDetails = { activityKind: 'execution', status: 'succeeded', actionTypes: ['mcp_loop_run'] };
+  const loop: HookFollowupActivityDetails = {
+    actionType: 'mcp_loop_run', status: 'running', loopJobId: 'parent-loop', loopStatus: 'queued', timestamp,
+  };
+  assert.deepEqual(getHookExecutionDisplayState(execution, [loop]), { status: 'running', phase: 'loop_queued' });
+  assert.deepEqual(getHookExecutionDisplayState(execution, [{ ...loop, loopStatus: 'running' }]), {
+    status: 'running', phase: 'loop_running',
+  });
+  assert.deepEqual(getHookExecutionDisplayState(execution, [{ ...loop, status: 'succeeded', loopStatus: 'succeeded' }]), {
+    status: 'succeeded',
+  });
+  assert.deepEqual(getHookExecutionDisplayState({ ...execution, status: 'running' }, [{ ...loop, status: 'succeeded', loopStatus: 'succeeded' }]), {
+    status: 'running',
+  });
+  assert.deepEqual(getHookExecutionDisplayState(execution, [{ ...loop, status: 'failed', loopStatus: 'timed_out' }]), {
+    status: 'timed_out',
+  });
+  assert.equal(execution.status, 'succeeded', 'Presentation does not rewrite the persisted Hook execution');
+});
+
+test('a finished loop is labelled as Agent continuation while recovery remains active', () => {
+  const execution: HookActivityDetails = { activityKind: 'execution', status: 'succeeded', actionTypes: ['mcp_loop_run'] };
+  const loop: HookFollowupActivityDetails = {
+    actionType: 'mcp_loop_run', status: 'running', loopStatus: 'succeeded', timestamp,
+  };
+  assert.deepEqual(getHookExecutionDisplayState(execution, [loop]), {
+    status: 'running', phase: 'agent_continuing',
+  });
+  assert.deepEqual(getHookExecutionDisplayState(execution, []), { status: 'succeeded' });
+});
+
+test('a terminal loop restored after restart does not imply Agent continuation was delivered', () => {
+  const execution: HookActivityDetails = { activityKind: 'execution', status: 'succeeded', actionTypes: ['mcp_loop_run'] };
+  for (const [loopStatus, expectedStatus] of [
+    ['succeeded', 'unconfirmed'],
+    ['failed', 'failed'],
+    ['timed_out', 'timed_out'],
+    ['cancelled', 'cancelled'],
+  ] as const) {
+    const followup: HookFollowupActivityDetails = {
+      actionType: 'mcp_loop_run', status: loopStatus === 'succeeded' ? 'succeeded' : 'failed',
+      loopJobId: 'restored-job', loopStatus, loopResumeStatus: 'unconfirmed', timestamp,
+    };
+    assert.equal(getHookFollowupDisplayStatus(followup), expectedStatus);
+    assert.deepEqual(getHookExecutionDisplayState(execution, [followup]), {
+      status: expectedStatus, phase: 'loop_resume_unconfirmed',
+    });
+    if (loopStatus === 'failed') {
+      assert.deepEqual(getHookExecutionDisplayState({ ...execution, status: 'failed', agentId: 'child-agent' }, [followup]), {
+        status: 'failed', phase: 'loop_resume_unconfirmed',
+      });
+    }
+    assert.equal(getCancellableHookLoopJobId(followup), undefined);
+  }
 });
 
 test('old terminal snapshots without a job ID render results but cannot cancel a guessed job', () => {

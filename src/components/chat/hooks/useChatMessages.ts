@@ -191,6 +191,7 @@ function toHookFollowupDetails(
     error: message.error,
     ...(message.loopJobId ? { loopJobId: message.loopJobId } : {}),
     ...(message.loopStatus ? { loopStatus: message.loopStatus } : {}),
+    ...(message.loopResumeStatus ? { loopResumeStatus: message.loopResumeStatus } : {}),
     ...(typeof message.loopAttemptCount === 'number' ? { loopAttemptCount: message.loopAttemptCount } : {}),
     ...(typeof message.loopStartedAtMs === 'number' ? { loopStartedAtMs: message.loopStartedAtMs } : {}),
     ...(typeof message.loopNextPollAtMs === 'number' ? { loopNextPollAtMs: message.loopNextPollAtMs } : {}),
@@ -1480,6 +1481,7 @@ export function normalizedToChatMessages(
             error: msg.error,
             ...(msg.loopJobId ? { loopJobId: msg.loopJobId } : {}),
             ...(msg.loopStatus ? { loopStatus: msg.loopStatus } : {}),
+            ...(msg.loopResumeStatus ? { loopResumeStatus: msg.loopResumeStatus } : {}),
             ...(typeof msg.loopAttemptCount === 'number' ? { loopAttemptCount: msg.loopAttemptCount } : {}),
             ...(inlineChildLoop && typeof inlineChildLoop.status === 'string'
               ? { loopStatus: inlineChildLoop.status }

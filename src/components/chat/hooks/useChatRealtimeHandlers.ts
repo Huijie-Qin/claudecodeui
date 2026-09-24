@@ -11,6 +11,7 @@ import {
 } from './chatRealtimeRefresh';
 import {
   getExplicitRealtimeSessionId,
+  normalizeRealtimeSessionId,
   resolvePermissionRequestRouting,
 } from './permissionRequestRouting';
 import { shouldAdoptCreatedSession } from './sessionCreatedRouting';
@@ -178,12 +179,43 @@ lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current:
           return;
         }
 
+        case 'error': {
+          // Providers may reject after already publishing their terminal error.
+          // The WebSocket outer catch sends this legacy envelope for lifecycle
+          // cleanup only, so never add a second error card here.
+          const explicitErrorSessionId = getExplicitRealtimeSessionId(msg);
+          const pendingSessionId = pendingViewSessionRef.current?.sessionId || null;
+          const matchesPendingSession = Boolean(pendingSessionId && (
+            normalizeRealtimeSessionId(msg.clientSessionId) === pendingSessionId ||
+            explicitErrorSessionId === pendingSessionId
+          ));
+          const matchesActiveSession = Boolean(explicitErrorSessionId && explicitErrorSessionId === activeViewSessionId);
+          if (!matchesPendingSession && !matchesActiveSession) return;
+
+          const lifecycleSessionId = matchesPendingSession ? pendingSessionId : explicitErrorSessionId;
+          setIsLoading(false);
+          setCanAbortSession(false);
+          setClaudeStatus(null);
+          setPendingPermissionRequests([]);
+          onSessionInactive?.(lifecycleSessionId);
+          onSessionNotProcessing?.(lifecycleSessionId);
+          if (matchesPendingSession) pendingViewSessionRef.current = null;
+          return;
+        }
+
         case 'session-status': {
           const statusSessionId = msg.sessionId;
           if (!statusSessionId) return;
 
+          const isCurrentSession =
+            statusSessionId === currentSessionId ||
+            (selectedSession && statusSessionId === selectedSession.id) ||
+            (!selectedSession && statusSessionId === pendingViewSessionRef.current?.sessionId);
+
           const status = msg.status;
           if (status) {
+            onSessionProcessing?.(statusSessionId);
+            if (!isCurrentSession) return;
             const statusInfo = {
               text: status.text || 'Working...',
               tokens: status.tokens || 0,
@@ -196,9 +228,6 @@ lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current:
           }
 
           // Legacy isProcessing format from check-session-status
-          const isCurrentSession =
-            statusSessionId === currentSessionId || (selectedSession && statusSessionId === selectedSession.id);
-
           if (msg.isProcessing) {
             onSessionProcessing?.(statusSessionId);
             if (isCurrentSession) { setIsLoading(true); setCanAbortSession(true); }
@@ -225,19 +254,25 @@ lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current:
     /* ---------------------------------------------------------------- */
 
     const explicitSessionId = getExplicitRealtimeSessionId(msg);
-    const sid = explicitSessionId || activeViewSessionId;
+    const clientSessionId = normalizeRealtimeSessionId(msg.clientSessionId);
+    const pendingViewSessionId = pendingViewSessionRef.current?.sessionId || null;
+    const canUseActiveViewFallback = !clientSessionId ||
+      clientSessionId === pendingViewSessionId || clientSessionId === activeViewSessionId;
+    const sid = explicitSessionId || (canUseActiveViewFallback ? activeViewSessionId : null);
     const isActiveViewSession = Boolean(sid && sid === activeViewSessionId);
     const pendingTerminalMessage = isPendingViewTerminalMessage({
       kind: msg.kind,
       explicitSessionId,
       activeViewSessionId,
       hasPendingViewSession: Boolean(pendingViewSessionRef.current),
+      pendingViewSessionId: pendingViewSessionRef.current?.sessionId,
+      clientSessionId,
       selectedSessionId: selectedSession?.id || null,
     });
     const pendingLifecycleSessionId = pendingTerminalMessage
       ? pendingViewSessionRef.current?.sessionId || null
       : null;
-    const lifecycleSessionId = sid || pendingLifecycleSessionId;
+    const lifecycleSessionId = pendingLifecycleSessionId || sid;
     const shouldAffectCurrentView = isActiveViewSession || pendingTerminalMessage;
 
     const streamScopeKey = (sessionId: string, parentToolUseId?: string) => (
@@ -346,18 +381,18 @@ lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current:
         const newSessionId = msg.newSessionId;
         if (!newSessionId) break;
 
-        onReplaceTemporarySession?.(newSessionId);
-
         const shouldAdoptSession = shouldAdoptCreatedSession({
           newSessionId,
           currentSessionId,
           selectedSessionId: selectedSession?.id || null,
-          hasPendingViewSession: Boolean(pendingViewSessionRef.current),
+          hasPendingViewSession: Boolean(pendingViewSessionRef.current) &&
+            (!clientSessionId || clientSessionId === pendingViewSessionRef.current?.sessionId),
           isBackgroundSession: msg.scheduledTaskId != null
             && Number.isFinite(Number(msg.scheduledTaskId)),
         });
 
         if (shouldAdoptSession) {
+          onReplaceTemporarySession?.(newSessionId);
           onSessionAdopted?.(newSessionId);
           sessionStorage.setItem('pendingSessionId', newSessionId);
           if (pendingViewSessionRef.current) {
@@ -420,6 +455,9 @@ lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current:
       }
 
       case 'error': {
+        if (msg.terminal === false) {
+          break;
+        }
         if (sid) {
           for (const [key, timerId] of streamTimersRef.current) {
             if (!key.startsWith(`${sid}\u0000`)) continue;
@@ -473,6 +511,7 @@ lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current:
           }];
         });
         if (permissionRouting.sessionId && permissionRouting.sessionId === activeViewSessionId) {
+          onSessionProcessing?.(permissionRouting.sessionId);
           setIsLoading(true);
           setCanAbortSession(true);
           setClaudeStatus({
@@ -496,6 +535,7 @@ lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current:
         if (msg.text === 'token_budget' && msg.tokenBudget) {
           setTokenBudget(msg.tokenBudget as Record<string, unknown>);
         } else if (msg.text) {
+          onSessionProcessing?.(sid);
           setClaudeStatus({
             text: msg.text,
             tokens: msg.tokens || 0,

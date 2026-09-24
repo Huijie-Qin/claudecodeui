@@ -245,6 +245,7 @@ export async function queryCodex(command, options = {}, ws) {
     model,
     permissionMode = 'default'
   } = options;
+  const clientSessionId = typeof options.clientSessionId === 'string' ? options.clientSessionId : null;
 
   const workingDirectory = cwd || projectPath || process.cwd();
   const { sandboxMode, approvalPolicy } = mapPermissionModeToCodexOptions(permissionMode);
@@ -253,6 +254,7 @@ export async function queryCodex(command, options = {}, ws) {
   let thread;
   let currentSessionId = sessionId;
   let terminalFailure = null;
+  let failureNotified = false;
   const abortController = new AbortController();
 
   try {
@@ -289,7 +291,7 @@ export async function queryCodex(command, options = {}, ws) {
     });
 
     // Send session created event
-    sendMessage(ws, createNormalizedMessage({ kind: 'session_created', newSessionId: currentSessionId, sessionId: currentSessionId, provider: 'codex' }));
+    sendMessage(ws, createNormalizedMessage({ kind: 'session_created', newSessionId: currentSessionId, sessionId: currentSessionId, clientSessionId, provider: 'codex' }));
 
     // Execute with streaming
     const streamedTurn = await thread.runStreamed(command, {
@@ -315,7 +317,7 @@ export async function queryCodex(command, options = {}, ws) {
 
       // Check if session was aborted
       const session = activeCodexSessions.get(currentSessionId);
-      if (!session || session.status === 'aborted') {
+      if (!session || session.status === 'aborting' || session.status === 'aborted') {
         break;
       }
 
@@ -323,23 +325,22 @@ export async function queryCodex(command, options = {}, ws) {
         continue;
       }
 
-      const transformed = transformCodexEvent(event);
+      // A streamed turn boundary can arrive before the iterator finishes.
+      // Only emit terminal messages after the SDK turn actually settles.
+      if (event.type !== 'turn.completed' && event.type !== 'turn.failed' && event.type !== 'error') {
+        const transformed = transformCodexEvent(event);
+        const normalizedMsgs = sessionsService.normalizeMessage('codex', transformed, currentSessionId);
+        for (const msg of normalizedMsgs) {
+          sendMessage(ws, msg.kind === 'error' ? { ...msg, terminal: false } : msg);
+        }
+      }
 
-      // Normalize the transformed event into NormalizedMessage(s) via adapter
-      const normalizedMsgs = sessionsService.normalizeMessage('codex', transformed, currentSessionId);
-      for (const msg of normalizedMsgs) {
-        sendMessage(ws, msg);
+      if (event.type === 'error' && !terminalFailure) {
+        terminalFailure = new Error(event.message || 'Codex stream failed');
       }
 
       if (event.type === 'turn.failed' && !terminalFailure) {
         terminalFailure = event.error || new Error('Turn failed');
-        notifyRunFailed({
-          userId: ws?.userId || null,
-          provider: 'codex',
-          sessionId: currentSessionId,
-          sessionName: sessionSummary,
-          error: terminalFailure
-        });
       }
 
       // Extract and send token usage if available (normalized to match Claude format)
@@ -365,28 +366,46 @@ export async function queryCodex(command, options = {}, ws) {
       }
     }
 
-    // Send completion event
-    if (!terminalFailure) {
-      recordProviderSession({ options, provider: 'codex', providerSessionId: currentSessionId, status: 'completed' });
-      sendMessage(ws, createNormalizedMessage({ kind: 'complete', actualSessionId: thread.id, sessionId: currentSessionId, provider: 'codex' }));
+    // Send a terminal event only after stream iteration has ended.
+    const aborted = activeCodexSessions.get(currentSessionId)?.status === 'aborting';
+    if (aborted || !terminalFailure) {
+      recordProviderSession({ options, provider: 'codex', providerSessionId: currentSessionId, status: aborted ? 'aborted' : 'completed' });
+      sendMessage(ws, createNormalizedMessage({ kind: 'complete', actualSessionId: thread.id, sessionId: currentSessionId, clientSessionId, provider: 'codex', aborted }));
       notifyRunStopped({
         userId: ws?.userId || null,
         provider: 'codex',
         sessionId: currentSessionId,
         sessionName: sessionSummary,
-        stopReason: 'completed'
+        stopReason: aborted ? 'aborted' : 'completed'
       });
+    } else {
+      sendMessage(ws, createNormalizedMessage({
+        kind: 'error',
+        content: terminalFailure?.message || String(terminalFailure),
+        sessionId: currentSessionId,
+        clientSessionId,
+        provider: 'codex',
+      }));
+      recordProviderSession({ options, provider: 'codex', providerSessionId: currentSessionId, status: 'failed' });
+      notifyRunFailed({
+        userId: ws?.userId || null,
+        provider: 'codex',
+        sessionId: currentSessionId,
+        sessionName: sessionSummary,
+        error: terminalFailure,
+      });
+      failureNotified = true;
     }
 
   } catch (error) {
     const session = currentSessionId ? activeCodexSessions.get(currentSessionId) : null;
     const wasAborted =
+      session?.status === 'aborting' ||
       session?.status === 'aborted' ||
       error?.name === 'AbortError' ||
       String(error?.message || '').toLowerCase().includes('aborted');
 
     if (!wasAborted) {
-      const hadTerminalFailure = Boolean(terminalFailure);
       terminalFailure = terminalFailure || error;
       console.error('[Codex] Error:', error);
 
@@ -396,13 +415,13 @@ export async function queryCodex(command, options = {}, ws) {
         ? 'Codex CLI is not configured. Please set up authentication first.'
         : error.message;
 
-      const errorMessage = createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: currentSessionId, provider: 'codex' });
+      const errorMessage = createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: currentSessionId, clientSessionId, provider: 'codex' });
       if (error?.code) {
         errorMessage.code = error.code;
       }
       sendMessage(ws, errorMessage);
       recordProviderSession({ options, provider: 'codex', providerSessionId: currentSessionId, status: 'failed' });
-      if (!hadTerminalFailure) {
+      if (!failureNotified) {
         notifyRunFailed({
           userId: ws?.userId || null,
           provider: 'codex',
@@ -410,7 +429,11 @@ export async function queryCodex(command, options = {}, ws) {
           sessionName: sessionSummary,
           error
         });
+        failureNotified = true;
       }
+    } else {
+      recordProviderSession({ options, provider: 'codex', providerSessionId: currentSessionId, status: 'aborted' });
+      sendMessage(ws, createNormalizedMessage({ kind: 'complete', aborted: true, sessionId: currentSessionId, clientSessionId, provider: 'codex' }));
     }
 
   } finally {
@@ -418,7 +441,7 @@ export async function queryCodex(command, options = {}, ws) {
     if (currentSessionId) {
       const session = activeCodexSessions.get(currentSessionId);
       if (session) {
-        session.status = session.status === 'aborted' ? 'aborted' : terminalFailure ? 'failed' : 'completed';
+        session.status = session.status === 'aborting' ? 'aborted' : terminalFailure ? 'failed' : 'completed';
       }
     }
   }
@@ -436,7 +459,9 @@ export function abortCodexSession(sessionId) {
     return false;
   }
 
-  session.status = 'aborted';
+  // The SDK may still be shutting down; retain an active status until the
+  // streamed turn settles and the request releases its concurrency slot.
+  session.status = 'aborting';
   try {
     session.abortController?.abort();
   } catch (error) {
@@ -453,7 +478,7 @@ export function abortCodexSession(sessionId) {
  */
 export function isCodexSessionActive(sessionId) {
   const session = activeCodexSessions.get(sessionId);
-  return session?.status === 'running';
+  return session?.status === 'running' || session?.status === 'aborting';
 }
 
 /**
@@ -464,7 +489,7 @@ export function getActiveCodexSessions() {
   const sessions = [];
 
   for (const [id, session] of activeCodexSessions.entries()) {
-    if (session.status === 'running') {
+    if (session.status === 'running' || session.status === 'aborting') {
       sessions.push({
         id,
         status: session.status,

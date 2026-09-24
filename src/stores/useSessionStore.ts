@@ -117,6 +117,7 @@ export interface NormalizedMessage {
   mcpLoopJobId?: string;
   loopJobId?: string;
   loopStatus?: string;
+  loopResumeStatus?: 'unconfirmed';
   loopAttemptCount?: number;
   loopStartedAtMs?: number;
   loopNextPollAtMs?: number;
