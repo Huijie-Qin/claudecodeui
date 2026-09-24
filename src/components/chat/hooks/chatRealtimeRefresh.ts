@@ -3,11 +3,22 @@ type RealtimeRefreshMessage = {
   kind?: string;
   newSessionId?: string;
   sessionId?: string | null;
+  session_id?: string | null;
   actualSessionId?: string | null;
+  provider?: string;
   exitCode?: number;
   aborted?: boolean;
   isProcessing?: boolean;
 };
+
+export function isRealtimeActivityForSession(
+  message: RealtimeRefreshMessage,
+  sessionId: string | null,
+  provider: string,
+): boolean {
+  if (!sessionId || (message.provider && message.provider !== provider)) return false;
+  return (message.sessionId || message.session_id) === sessionId;
+}
 
 export function shouldRefreshProjectsForRealtimeMessage(message: RealtimeRefreshMessage): boolean {
   if (message.kind === 'session_created') {

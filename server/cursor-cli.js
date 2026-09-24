@@ -29,6 +29,7 @@ function isWorkspaceTrustPrompt(text = '') {
 async function spawnCursor(command, options = {}, ws) {
   return new Promise(async (resolve, reject) => {
     const { sessionId, projectPath, cwd, resume, toolsSettings, skipPermissions, model, sessionSummary } = options;
+    const clientSessionId = typeof options.clientSessionId === 'string' ? options.clientSessionId : null;
     let capturedSessionId = sessionId; // Track session ID throughout the process
     let sessionCreatedSent = false; // Track if we've already sent session-created event
     let hasRetriedWithTrust = false;
@@ -87,7 +88,11 @@ async function spawnCursor(command, options = {}, ws) {
       const isTrustRetry = runReason === 'trust-retry';
       let runSawWorkspaceTrustPrompt = false;
       let stdoutLineBuffer = '';
+      let terminalResult = null;
+      let stderrBuffer = '';
       let terminalNotificationSent = false;
+      let processErrored = false;
+      let runningProcessError = null;
 
       const notifyTerminalState = ({ code = null, error = null } = {}) => {
         if (terminalNotificationSent) {
@@ -97,6 +102,16 @@ async function spawnCursor(command, options = {}, ws) {
         terminalNotificationSent = true;
 
         const finalSessionId = capturedSessionId || sessionId || processKey;
+        if (cursorProcess.wasAborted) {
+          notifyRunStopped({
+            userId: ws?.userId || null,
+            provider: 'cursor',
+            sessionId: finalSessionId,
+            sessionName: sessionSummary,
+            stopReason: 'aborted'
+          });
+          return;
+        }
         if (code === 0 && !error) {
           notifyRunStopped({
             userId: ws?.userId || null,
@@ -131,7 +146,7 @@ async function spawnCursor(command, options = {}, ws) {
         env: { ...process.env } // Inherit all environment variables
       });
 
-      activeCursorProcesses.set(processKey, cursorProcess);
+      activeCursorProcesses.set(capturedSessionId || processKey, cursorProcess);
 
       const shouldSuppressForTrustRetry = (text) => {
         if (hasRetriedWithTrust || args.includes('--trust')) {
@@ -178,7 +193,7 @@ async function spawnCursor(command, options = {}, ws) {
                   // Send session-created event only once for new sessions
                   if (!sessionId && !sessionCreatedSent) {
                     sessionCreatedSent = true;
-                    ws.send(createNormalizedMessage({ kind: 'session_created', newSessionId: capturedSessionId, model: response.model, cwd: response.cwd, sessionId: capturedSessionId, provider: 'cursor' }));
+                    ws.send(createNormalizedMessage({ kind: 'session_created', newSessionId: capturedSessionId, model: response.model, cwd: response.cwd, sessionId: capturedSessionId, clientSessionId, provider: 'cursor' }));
                   }
                 }
 
@@ -199,16 +214,10 @@ async function spawnCursor(command, options = {}, ws) {
               break;
 
             case 'result': {
-              // Session complete — send stream end + lifecycle complete with result payload
+              // The CLI can emit its result before the child process exits.
+              // Keep the UI active until the close event releases the slot.
               console.log('Cursor session result:', response);
-              const resultText = typeof response.result === 'string' ? response.result : '';
-              ws.send(createNormalizedMessage({
-                kind: 'complete',
-                exitCode: response.subtype === 'success' ? 0 : 1,
-                resultText,
-                isError: response.subtype !== 'success',
-                sessionId: capturedSessionId || sessionId, provider: 'cursor',
-              }));
+              terminalResult = response;
               break;
             }
 
@@ -252,26 +261,39 @@ async function spawnCursor(command, options = {}, ws) {
           return;
         }
 
-        ws.send(createNormalizedMessage({ kind: 'error', content: stderrText, sessionId: capturedSessionId || sessionId || null, provider: 'cursor' }));
+        stderrBuffer = `${stderrBuffer}${stderrText}`.slice(-10000);
       });
 
       // Handle process completion
       cursorProcess.on('close', async (code) => {
+        if (processErrored) return;
         console.log(`Cursor CLI process exited with code ${code}`);
-
-        const finalSessionId = capturedSessionId || sessionId || processKey;
-        activeCursorProcesses.delete(finalSessionId);
-        recordProviderSession({
-          options,
-          provider: 'cursor',
-          providerSessionId: finalSessionId,
-          status: code === 0 ? 'completed' : 'failed',
-        });
 
         // Flush any final unterminated stdout line before completion handling.
         if (stdoutLineBuffer.trim()) {
           processCursorOutputLine(stdoutLineBuffer.trim());
           stdoutLineBuffer = '';
+        }
+
+        const finalSessionId = capturedSessionId || sessionId || processKey;
+        activeCursorProcesses.delete(finalSessionId);
+        const aborted = Boolean(cursorProcess.wasAborted);
+        const resultFailed = Boolean(terminalResult && (
+          terminalResult.subtype !== 'success' || terminalResult.is_error === true
+        ));
+        const effectiveExitCode = !aborted && code === 0 && resultFailed ? 1 : code;
+        recordProviderSession({
+          options,
+          provider: 'cursor',
+          providerSessionId: finalSessionId,
+          status: aborted ? 'aborted' : effectiveExitCode === 0 && !runningProcessError ? 'completed' : 'failed',
+        });
+
+        if (runningProcessError) {
+          ws.send(createNormalizedMessage({ kind: 'error', content: runningProcessError.message, sessionId: finalSessionId, clientSessionId, provider: 'cursor' }));
+          notifyTerminalState({ error: runningProcessError });
+          settleOnce(() => reject(runningProcessError));
+          return;
         }
 
         if (
@@ -285,19 +307,40 @@ async function spawnCursor(command, options = {}, ws) {
           return;
         }
 
-        ws.send(createNormalizedMessage({ kind: 'complete', exitCode: code, isNewSession: !sessionId && !!command, sessionId: finalSessionId, provider: 'cursor' }));
+        const failureText = !aborted && effectiveExitCode !== 0
+          ? stderrBuffer || (resultFailed && typeof terminalResult.result === 'string' ? terminalResult.result : '') || `Cursor CLI exited with code ${effectiveExitCode}`
+          : null;
+        if (failureText) {
+          ws.send(createNormalizedMessage({ kind: 'error', content: failureText, sessionId: finalSessionId, clientSessionId, provider: 'cursor' }));
+        }
+        ws.send(createNormalizedMessage({
+          kind: 'complete',
+          exitCode: effectiveExitCode,
+          resultText: typeof terminalResult?.result === 'string' ? terminalResult.result : '',
+          isError: !aborted && effectiveExitCode !== 0,
+          aborted,
+          isNewSession: !sessionId && !!command,
+          sessionId: finalSessionId,
+          clientSessionId,
+          provider: 'cursor',
+        }));
 
-        if (code === 0) {
-          notifyTerminalState({ code });
+        if (effectiveExitCode === 0 || aborted) {
+          notifyTerminalState({ code: effectiveExitCode });
           settleOnce(() => resolve());
         } else {
-          notifyTerminalState({ code });
-          settleOnce(() => reject(new Error(`Cursor CLI exited with code ${code}`)));
+          notifyTerminalState({ code: effectiveExitCode });
+          settleOnce(() => reject(new Error(`Cursor CLI exited with code ${effectiveExitCode}`)));
         }
       });
 
       // Handle process errors
       cursorProcess.on('error', async (error) => {
+        if (cursorProcess.pid) {
+          runningProcessError = error;
+          return;
+        }
+        processErrored = true;
         console.error('Cursor CLI process error:', error);
 
         // Clean up process reference on error
@@ -311,9 +354,8 @@ async function spawnCursor(command, options = {}, ws) {
           ? 'Cursor CLI is not installed. Please install it from https://cursor.com'
           : error.message;
 
-        ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: capturedSessionId || sessionId || null, provider: 'cursor' }));
+        ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: finalSessionId, clientSessionId, provider: 'cursor' }));
         notifyTerminalState({ error });
-
         settleOnce(() => reject(error));
       });
 
@@ -329,8 +371,15 @@ function abortCursorSession(sessionId) {
   const process = activeCursorProcesses.get(sessionId);
   if (process) {
     console.log(`Aborting Cursor session: ${sessionId}`);
-    process.kill('SIGTERM');
-    activeCursorProcesses.delete(sessionId);
+    if (!process.kill('SIGTERM')) return false;
+    process.wasAborted = true;
+    // Keep the process visible until its close/error handler settles the
+    // command and releases the user's concurrency slot.
+    setTimeout(() => {
+      if (activeCursorProcesses.get(sessionId) === process) {
+        process.kill('SIGKILL');
+      }
+    }, 2000).unref?.();
     return true;
   }
   return false;
@@ -348,5 +397,5 @@ export {
   spawnCursor,
   abortCursorSession,
   isCursorSessionActive,
-  getActiveCursorSessions
+  getActiveCursorSessions,
 };

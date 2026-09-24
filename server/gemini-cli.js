@@ -17,10 +17,12 @@ let activeGeminiProcesses = new Map(); // Track active processes by session ID
 
 async function spawnGemini(command, options = {}, ws) {
     const { sessionId, projectPath, cwd, toolsSettings, permissionMode, images, sessionSummary } = options;
+    const clientSessionId = typeof options.clientSessionId === 'string' ? options.clientSessionId : null;
     let capturedSessionId = sessionId; // Track session ID throughout the process
     recordProviderSession({ options, provider: 'gemini', providerSessionId: capturedSessionId, status: 'active' });
     let sessionCreatedSent = false; // Track if we've already sent session-created event
     let assistantBlocks = []; // Accumulate the full response blocks including tools
+    let stderrBuffer = '';
 
     // Use tools settings passed from frontend, or defaults
     const settings = toolsSettings || {
@@ -178,6 +180,9 @@ async function spawnGemini(command, options = {}, ws) {
         });
         let terminalNotificationSent = false;
         let terminalFailureReason = null;
+        let streamError = null;
+        let processErrored = false;
+        let runningProcessError = null;
 
         const notifyTerminalState = ({ code = null, error = null } = {}) => {
             if (terminalNotificationSent) {
@@ -187,7 +192,17 @@ async function spawnGemini(command, options = {}, ws) {
             terminalNotificationSent = true;
 
             const finalSessionId = capturedSessionId || sessionId || processKey;
-            if (code === 0 && !error) {
+            if (geminiProcess.wasAborted) {
+                notifyRunStopped({
+                    userId: ws?.userId || null,
+                    provider: 'gemini',
+                    sessionId: finalSessionId,
+                    sessionName: sessionSummary,
+                    stopReason: 'aborted'
+                });
+                return;
+            }
+            if (code === 0 && !error && !terminalFailureReason && !streamError) {
                 notifyRunStopped({
                     userId: ws?.userId || null,
                     provider: 'gemini',
@@ -228,12 +243,15 @@ async function spawnGemini(command, options = {}, ws) {
         const startTimeout = () => {
             if (timeout) clearTimeout(timeout);
             timeout = setTimeout(() => {
-                const socketSessionId = typeof ws.getSessionId === 'function' ? ws.getSessionId() : (capturedSessionId || sessionId || processKey);
                 terminalFailureReason = `Gemini CLI timeout - no response received for ${timeoutMs / 1000} seconds`;
-                ws.send(createNormalizedMessage({ kind: 'error', content: terminalFailureReason, sessionId: socketSessionId, provider: 'gemini' }));
                 try {
                     geminiProcess.kill('SIGTERM');
                 } catch (e) { }
+                setTimeout(() => {
+                    if ([...activeGeminiProcesses.values()].includes(geminiProcess)) {
+                        try { geminiProcess.kill('SIGKILL'); } catch (e) { }
+                    }
+                }, 2000).unref?.();
             }, timeoutMs);
         };
 
@@ -247,7 +265,20 @@ async function spawnGemini(command, options = {}, ws) {
         // Create response handler for NDJSON buffering
         let responseHandler;
         if (ws) {
-            responseHandler = new GeminiResponseHandler(ws, {
+            // The upstream response handler forwards stream errors immediately.
+            // Hold them until the child closes so a recoverable CLI event cannot
+            // clear Processing while this run still owns its concurrency slot.
+            const responseWriter = {
+                getSessionId: () => capturedSessionId || sessionId || null,
+                send: (message) => {
+                    if (message.kind === 'error') {
+                        streamError = String(message.content || message.error || 'Unknown Gemini streaming error');
+                        return;
+                    }
+                    ws.send(message);
+                },
+            };
+            responseHandler = new GeminiResponseHandler(responseWriter, {
                 onContentFragment: (content) => {
                     if (assistantBlocks.length > 0 && assistantBlocks[assistantBlocks.length - 1].type === 'text') {
                         assistantBlocks[assistantBlocks.length - 1].text += content;
@@ -316,7 +347,7 @@ async function spawnGemini(command, options = {}, ws) {
 
                 ws.setSessionId && typeof ws.setSessionId === 'function' && ws.setSessionId(capturedSessionId);
 
-                ws.send(createNormalizedMessage({ kind: 'session_created', newSessionId: capturedSessionId, sessionId: capturedSessionId, provider: 'gemini' }));
+                ws.send(createNormalizedMessage({ kind: 'session_created', newSessionId: capturedSessionId, sessionId: capturedSessionId, clientSessionId, provider: 'gemini' }));
             }
 
             if (responseHandler) {
@@ -345,8 +376,9 @@ async function spawnGemini(command, options = {}, ws) {
                 return;
             }
 
-            const socketSessionId = typeof ws.getSessionId === 'function' ? ws.getSessionId() : (capturedSessionId || sessionId);
-            ws.send(createNormalizedMessage({ kind: 'error', content: errorMsg, sessionId: socketSessionId, provider: 'gemini' }));
+            // stderr is not a terminal event. Keep the UI processing until the
+            // child exits and the request can release its concurrency slot.
+            stderrBuffer = `${stderrBuffer}${errorMsg}`.slice(-10000);
         });
 
         // Handle process completion
@@ -362,19 +394,19 @@ async function spawnGemini(command, options = {}, ws) {
             // Clean up process reference
             const finalSessionId = capturedSessionId || sessionId || processKey;
             activeGeminiProcesses.delete(finalSessionId);
+            const aborted = Boolean(geminiProcess.wasAborted);
+            const failed = !aborted && (code !== 0 || Boolean(terminalFailureReason || streamError || runningProcessError));
             recordProviderSession({
                 options,
                 provider: 'gemini',
                 providerSessionId: finalSessionId,
-                status: code === 0 ? 'completed' : 'failed',
+                status: aborted ? 'aborted' : failed ? 'failed' : 'completed',
             });
 
             // Save assistant response to session if we have one
             if (finalSessionId && assistantBlocks.length > 0) {
                 sessionManager.addMessage(finalSessionId, 'assistant', assistantBlocks);
             }
-
-            ws.send(createNormalizedMessage({ kind: 'complete', exitCode: code, isNewSession: !sessionId && !!command, sessionId: finalSessionId, provider: 'gemini' }));
 
             // Clean up temporary image files if any
             if (geminiProcess.tempImagePaths && geminiProcess.tempImagePaths.length > 0) {
@@ -386,7 +418,15 @@ async function spawnGemini(command, options = {}, ws) {
                 }
             }
 
-            if (code === 0) {
+            if (processErrored) return;
+
+            const errorContent = aborted ? null : terminalFailureReason || streamError || runningProcessError?.message || (code !== 0 ? stderrBuffer : null);
+            if (errorContent) {
+                ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: finalSessionId, clientSessionId, provider: 'gemini' }));
+            }
+            ws.send(createNormalizedMessage({ kind: 'complete', exitCode: code, isError: failed, aborted, isNewSession: !sessionId && !!command, sessionId: finalSessionId, clientSessionId, provider: 'gemini' }));
+
+            if (!failed) {
                 notifyTerminalState({ code });
                 resolve();
             } else {
@@ -394,21 +434,22 @@ async function spawnGemini(command, options = {}, ws) {
                 if (code === 127) {
                     const installed = await providerAuthService.isProviderInstalled('gemini');
                     if (!installed) {
-                        const socketSessionId = typeof ws.getSessionId === 'function' ? ws.getSessionId() : finalSessionId;
-                        ws.send(createNormalizedMessage({ kind: 'error', content: 'Gemini CLI is not installed. Please install it first: https://github.com/google-gemini/gemini-cli', sessionId: socketSessionId, provider: 'gemini' }));
+                        ws.send(createNormalizedMessage({ kind: 'error', content: 'Gemini CLI is not installed. Please install it first: https://github.com/google-gemini/gemini-cli', sessionId: finalSessionId, clientSessionId, provider: 'gemini' }));
                     }
                 }
 
-                notifyTerminalState({
-                    code,
-                    error: code === null ? 'Gemini CLI process was terminated or timed out' : null
-                });
-                reject(new Error(code === null ? 'Gemini CLI process was terminated or timed out' : `Gemini CLI exited with code ${code}`));
+                notifyTerminalState({ code, error: terminalFailureReason || streamError || runningProcessError || (code === null ? 'Gemini CLI process was terminated or timed out' : null) });
+                reject(new Error(terminalFailureReason || streamError || runningProcessError?.message || (code === null ? 'Gemini CLI process was terminated or timed out' : `Gemini CLI exited with code ${code}`)));
             }
         });
 
         // Handle process errors
         geminiProcess.on('error', async (error) => {
+            if (geminiProcess.pid) {
+                runningProcessError = error;
+                return;
+            }
+            processErrored = true;
             // Clean up process reference on error
             const finalSessionId = capturedSessionId || sessionId || processKey;
             activeGeminiProcesses.delete(finalSessionId);
@@ -420,10 +461,8 @@ async function spawnGemini(command, options = {}, ws) {
                 ? 'Gemini CLI is not installed. Please install it first: https://github.com/google-gemini/gemini-cli'
                 : error.message;
 
-            const errorSessionId = typeof ws.getSessionId === 'function' ? ws.getSessionId() : finalSessionId;
-            ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: errorSessionId, provider: 'gemini' }));
+            ws.send(createNormalizedMessage({ kind: 'error', content: errorContent, sessionId: finalSessionId, clientSessionId, provider: 'gemini' }));
             notifyTerminalState({ error });
-
             reject(error);
         });
 
@@ -446,14 +485,15 @@ function abortGeminiSession(sessionId) {
 
     if (geminiProc) {
         try {
-            geminiProc.kill('SIGTERM');
+            if (!geminiProc.kill('SIGTERM')) return false;
+            geminiProc.wasAborted = true;
             setTimeout(() => {
-                if (activeGeminiProcesses.has(processKey)) {
+                if (activeGeminiProcesses.get(processKey) === geminiProc) {
                     try {
                         geminiProc.kill('SIGKILL');
                     } catch (e) { }
                 }
-            }, 2000); // Wait 2 seconds before force kill
+            }, 2000).unref?.(); // Wait 2 seconds before force kill
 
             return true;
         } catch (error) {
@@ -475,5 +515,5 @@ export {
     spawnGemini,
     abortGeminiSession,
     isGeminiSessionActive,
-    getActiveGeminiSessions
+    getActiveGeminiSessions,
 };

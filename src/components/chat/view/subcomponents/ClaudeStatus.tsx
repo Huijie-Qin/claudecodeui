@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+
 import { cn } from '../../../../lib/utils';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 
@@ -69,7 +70,7 @@ export default function ClaudeStatus({
     };
   }, [isLoading, loadingStartedAt]);
 
-  if (!isLoading && !status) return null;
+  if (!isLoading) return null;
 
   const actionWords = ACTION_KEYS.map((key, i) => t(key, { defaultValue: DEFAULT_ACTION_WORDS[i] }));
   const statusText = (status?.text || actionWords[Math.floor(elapsedTime / 3) % actionWords.length]).replace(/[.]+$/, '');

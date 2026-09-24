@@ -2512,7 +2512,9 @@ function authorizeCommandWorkspace(data, request, writer) {
         writer.send(createNormalizedMessage({
             kind: 'error',
             content: 'tenantId and workspaceId are required',
-            provider
+            provider,
+            sessionId: data.options?.sessionId || null,
+            clientSessionId: data.options?.clientSessionId || null,
         }));
         return false;
     }
@@ -2537,7 +2539,9 @@ function authorizeCommandWorkspace(data, request, writer) {
         writer.send(createNormalizedMessage({
             kind: 'error',
             content: error.message,
-            provider
+            provider,
+            sessionId: data.options?.sessionId || null,
+            clientSessionId: data.options?.clientSessionId || null,
         }));
         return false;
     }
@@ -2643,6 +2647,7 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
             code: error.code,
             provider,
             sessionId: data.options?.sessionId || null,
+            clientSessionId: data.options?.clientSessionId || null,
             currentConcurrentRequests: error.activeCount,
             sessionLimit: error.limit,
         }));
@@ -2741,8 +2746,9 @@ function handleChatConnection(ws, request) {
     });
 
     ws.on('message', async (message) => {
+        let data;
         try {
-            const data = JSON.parse(message);
+            data = JSON.parse(message);
 
             if (data.type === 'claude-command') {
                 if (!authorizeCommandWorkspace(data, request, writer)) return;
@@ -2764,6 +2770,7 @@ function handleChatConnection(ws, request) {
                         content: error?.message || String(error),
                         provider: 'claude',
                         sessionId: data.options?.sessionId || null,
+                        clientSessionId: data.options?.clientSessionId || null,
                     }));
                 });
             } else if (data.type === 'claude-supplement') {
@@ -2946,7 +2953,9 @@ function handleChatConnection(ws, request) {
             console.error('[ERROR] Chat WebSocket error:', error.message);
             writer.send({
                 type: 'error',
-                error: error.message
+                error: error.message,
+                sessionId: data?.options?.sessionId || data?.sessionId || null,
+                clientSessionId: data?.options?.clientSessionId || null,
             });
         }
     });

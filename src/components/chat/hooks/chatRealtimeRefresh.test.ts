@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  isRealtimeActivityForSession,
   shouldRefreshProjectsForRealtimeMessage,
   shouldRefreshSessionHistoryForRealtimeMessage,
 } from './chatRealtimeRefresh';
@@ -89,4 +90,12 @@ test('shouldAdoptCreatedSession accepts a new-session event while still viewing 
     selectedSessionId: null,
     hasPendingViewSession: true,
   }), true);
+});
+
+test('background WebSocket traffic does not postpone the current session status probe', () => {
+  assert.equal(isRealtimeActivityForSession({ type: 'active-sessions' }, 'session-1', 'claude'), false);
+  assert.equal(isRealtimeActivityForSession({ type: 'projects_updated' }, 'session-1', 'claude'), false);
+  assert.equal(isRealtimeActivityForSession({ kind: 'text', sessionId: 'session-2', provider: 'claude' }, 'session-1', 'claude'), false);
+  assert.equal(isRealtimeActivityForSession({ kind: 'text', sessionId: 'session-1', provider: 'cursor' }, 'session-1', 'claude'), false);
+  assert.equal(isRealtimeActivityForSession({ kind: 'stream_delta', sessionId: 'session-1', provider: 'claude' }, 'session-1', 'claude'), true);
 });

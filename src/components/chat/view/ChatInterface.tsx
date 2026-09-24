@@ -12,7 +12,9 @@ import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
-import { shouldRefreshSessionHistoryForRealtimeMessage } from '../hooks/chatRealtimeRefresh';
+import { isRealtimeActivityForSession, shouldRefreshSessionHistoryForRealtimeMessage } from '../hooks/chatRealtimeRefresh';
+import { getHookDisplayFollowups } from '../utils/hookFollowupPresentation';
+import { getCancellableHookLoopJobId } from '../utils/hookLoopControls';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { createSessionStreamAccumulator } from '../hooks/sessionStreamAccumulator';
 import { buildSubagentTraces } from '../subagent/buildSubagentTraces';
@@ -163,6 +165,43 @@ function ChatInterface({
     sessionStore,
     initialUserMessage,
   });
+
+  const activeLoopJobVisible = useMemo(() => chatMessages.some((message) => (
+    message.isHookActivity && message.hookActivity?.activityKind === 'execution' &&
+    getHookDisplayFollowups(message.hookActivity, message.timestamp).some((followup) => (
+      followup.actionType === 'mcp_loop_run' && Boolean(getCancellableHookLoopJobId(followup))
+    ))
+  )), [chatMessages]);
+  const loopSessionId = selectedSession?.id || currentSessionId;
+  const loopProjectName = selectedProject?.name;
+  const loopProjectPath = selectedProject?.fullPath || selectedProject?.path || '';
+  const loopWorkspaceId = selectedProject?.workspaceId;
+  const refreshLoopHistory = sessionStore.refreshFromServer;
+  useEffect(() => {
+    if (!activeLoopJobVisible || !isConcreteSessionId(loopSessionId) || !loopProjectName) return;
+    let disposed = false;
+    let inFlight = false;
+    const refresh = async () => {
+      if (disposed || inFlight) return;
+      inFlight = true;
+      try {
+        await refreshLoopHistory(loopSessionId, {
+          provider,
+          projectName: loopProjectName,
+          projectPath: loopProjectPath,
+          workspaceId: loopWorkspaceId,
+        });
+      } finally {
+        inFlight = false;
+      }
+    };
+    void refresh();
+    const intervalId = window.setInterval(() => { void refresh(); }, 15_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activeLoopJobVisible, loopProjectName, loopProjectPath, loopSessionId, loopWorkspaceId, provider, refreshLoopHistory]);
 
   const subagentTraces = useMemo(
     () => buildSubagentTraces(chatMessages),
@@ -377,8 +416,9 @@ function ChatInterface({
     if (!sessionId) {
       setIsLoading(false);
       setCanAbortSession(false);
+      setClaudeStatus(null);
     }
-  }, [getCurrentConcreteSessionId, probeCurrentSessionStatus, selectedProject, selectedSession, sessionStore, setIsLoading, setCanAbortSession]);
+  }, [getCurrentConcreteSessionId, probeCurrentSessionStatus, selectedProject, selectedSession, sessionStore, setIsLoading, setCanAbortSession, setClaudeStatus]);
 
   useChatRealtimeHandlers({
     latestMessage,
@@ -418,10 +458,21 @@ function ChatInterface({
     return subscribeMessage((message) => {
       if (!message) return;
       if (message.type === 'websocket-reconnected') return;
-
+      const { provider: activeProvider, sessionId } = getCurrentConcreteSessionId();
+      if (!isRealtimeActivityForSession(message, sessionId, activeProvider)) return;
       lastRealtimeActivityAtRef.current = Date.now();
     });
-  }, [subscribeMessage]);
+  }, [getCurrentConcreteSessionId, subscribeMessage]);
+
+  // A server snapshot can retire a missed terminal event. Confirm that state
+  // with the provider so the composer does not keep its independent loading flag.
+  useEffect(() => {
+    if (!isLoading || !processingSessions || !ws || ws.readyState !== WebSocket.OPEN) return;
+    const { sessionId } = getCurrentConcreteSessionId();
+    if (!sessionId || processingSessions.has(sessionId)) return;
+    if (Date.now() - lastSessionStatusProbeAtRef.current < STREAM_STATUS_PROBE_MIN_INTERVAL_MS) return;
+    probeCurrentSessionStatus();
+  }, [getCurrentConcreteSessionId, isLoading, probeCurrentSessionStatus, processingSessions, ws]);
 
   useEffect(() => {
     return subscribeMessage((message) => {

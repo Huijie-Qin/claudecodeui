@@ -43,3 +43,45 @@ test('isPendingViewTerminalMessage ignores existing selected sessions', () => {
     false,
   );
 });
+
+test('isPendingViewTerminalMessage matches a pre-init failure by client session id', () => {
+  assert.equal(isPendingViewTerminalMessage({
+    kind: 'error',
+    explicitSessionId: 'provider-process-key',
+    activeViewSessionId: null,
+    hasPendingViewSession: true,
+    pendingViewSessionId: 'new-session-1',
+    clientSessionId: 'new-session-1',
+    selectedSessionId: null,
+  }), true);
+  assert.equal(isPendingViewTerminalMessage({
+    kind: 'error',
+    explicitSessionId: 'provider-process-key',
+    activeViewSessionId: null,
+    hasPendingViewSession: true,
+    pendingViewSessionId: 'new-session-1',
+    clientSessionId: 'other-session',
+    selectedSessionId: null,
+  }), false);
+  assert.equal(isPendingViewTerminalMessage({
+    kind: 'error',
+    explicitSessionId: null,
+    activeViewSessionId: null,
+    hasPendingViewSession: true,
+    pendingViewSessionId: 'new-session-1',
+    clientSessionId: 'other-session',
+    selectedSessionId: null,
+  }), false);
+});
+
+test('isPendingViewTerminalMessage accepts completion immediately after session creation', () => {
+  assert.equal(isPendingViewTerminalMessage({
+    kind: 'complete',
+    explicitSessionId: 'real-session-1',
+    activeViewSessionId: null,
+    hasPendingViewSession: true,
+    pendingViewSessionId: 'real-session-1',
+    clientSessionId: 'new-session-1',
+    selectedSessionId: null,
+  }), true);
+});

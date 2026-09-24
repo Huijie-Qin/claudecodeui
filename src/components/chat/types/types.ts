@@ -82,6 +82,7 @@ export interface HookFollowupActivityDetails {
   error?: string;
   loopJobId?: string;
   loopStatus?: string;
+  loopResumeStatus?: 'unconfirmed';
   loopAttemptCount?: number;
   loopStartedAtMs?: number;
   loopNextPollAtMs?: number;
@@ -118,6 +119,7 @@ export interface HookActivityDetails {
   actionTypes?: Array<'call_mcp_tool' | 'mcp_loop_run' | 'write_record' | 'invoke_skill' | 'send_agent_message' | 'request_confirmation'>;
   loopJobId?: string;
   loopStatus?: string;
+  loopResumeStatus?: 'unconfirmed';
   loopAttemptCount?: number;
   loopStartedAtMs?: number;
   loopNextPollAtMs?: number;
