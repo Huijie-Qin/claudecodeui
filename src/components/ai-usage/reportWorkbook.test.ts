@@ -151,6 +151,26 @@ test('long names wrap with fitted heights and missing values remain blank', asyn
   assert.ok(sheet['!cols']![0].wch! <= 48);
 });
 
+test('worksheet print settings precede ignored errors as required by Excel OOXML', async () => {
+  // Tolerant readers (including SheetJS) accept out-of-order worksheet children,
+  // but Excel can reject or repair those files. Check the serialized ordering.
+  const bytes = await workbookBytes([
+    { title: '概览', rows: [['指标', '值'], ['会话次数', 30]], headerRows: [0] },
+    { title: '空明细', rows: [['用户', '次数']], headerRows: [0], detailHeaderRow: 0, detailRowCount: 0 },
+    { title: '明细', rows: [['用户', '次数'], ...Array.from({ length: 30 }, (_, i) => [`用户 ${i}`, i])],
+      headerRows: [0], detailHeaderRow: 0, detailRowCount: 30 },
+  ]);
+  const zip = await JSZip.loadAsync(bytes);
+  for (let i = 1; i <= 3; i++) {
+    const xml = await zip.file(`xl/worksheets/sheet${i}.xml`)!.async('string');
+    const elements = ['sheetPr', 'dimension', 'sheetViews', 'cols', 'sheetData', 'autoFilter', 'pageMargins', 'pageSetup', 'ignoredErrors'];
+    const positions = elements.map(name => xml.search(new RegExp(`<${name}\\b`))).filter(pos => pos !== -1);
+    assert.deepEqual(positions, [...positions].sort((a, b) => a - b), `sheet${i}: worksheet element order`);
+    assert.match(xml, /<pageMargins\b[^>]*\/><pageSetup\b[^>]*\/><ignoredErrors>/);
+    assert.equal((xml.match(/<pageSetup\b/g) || []).length, 1);
+  }
+});
+
 test('each sheet retains its own filters and exact API totals above a separate detail section', async () => {
   const views = new SavedReportViews();
   views.set('filters:usage', { queryKey: '', value: { filters: { from: '2026-09-01', to: base.through, userName: '小王' } } });

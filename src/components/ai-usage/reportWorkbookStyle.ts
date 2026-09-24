@@ -141,7 +141,12 @@ export async function styledWorkbookBytes(sheets: WorkbookSheet[]): Promise<Arra
     xml = xml.replace(/<sheetViews>[\s\S]*?<\/sheetViews>/, view);
     const properties = `<sheetPr><tabColor rgb="FF${index === 0 ? '19345B' : '6B8CBF'}"/><pageSetUpPr fitToPage="1"/></sheetPr>`;
     xml = xml.replace(/(<worksheet\b[^>]*>)/, `$1${properties}`);
-    xml = xml.replace('</worksheet>', '<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>');
+    // CT_Worksheet is an ordered sequence: pageSetup follows pageMargins and
+    // must precede ignoredErrors. Appending it at the end makes Excel repair
+    // the workbook even though tolerant readers can still load the values.
+    const pageMargins = /<pageMargins\b[^>]*\/>/.exec(xml)?.[0];
+    if (!pageMargins) throw new Error('exportFailed');
+    xml = xml.replace(pageMargins, `${pageMargins}<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>`);
     zip.file(path, xml);
   }
   return zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
