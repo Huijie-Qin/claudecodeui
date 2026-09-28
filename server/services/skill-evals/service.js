@@ -290,7 +290,11 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
       if (ACTIVE.has(job.status)) { job.cancelRequested = true; if (job.status === 'queued') { job.status = 'cancelled'; job.stopReason = 'EVAL_CANCELLED'; } save(job); }
       return publicJob(job);
     },
-    startWorker() { if (interval) return; stopped = false; interval = setInterval(() => void tick().catch((e) => console.error('[skill-evals]', e.code || 'WORKER_ERROR')), 1000); interval.unref(); },
+    startWorker() {
+      if (interval) return;
+      void runtime.warmup?.().catch((error) => console.warn('[skill-evals]', error.message));
+      stopped = false; interval = setInterval(() => void tick().catch((e) => console.error('[skill-evals]', e.code || 'WORKER_ERROR')), 1000); interval.unref();
+    },
     async stopWorker() { stopped = true; clearInterval(interval); interval = null; activeController?.abort(fail('Server stopping', 'EVAL_SERVER_STOP')); if (!working) repository.releaseLeader(owner); },
     async runPendingForTest() { stopped = false; await tick(); stopped = true; repository.releaseLeader(owner); recovered = false; },
     cleanReplaced,

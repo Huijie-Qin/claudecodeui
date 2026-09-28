@@ -30,9 +30,13 @@ export function validateEvals(value, name) {
     throw fail(`Expected { skill_name: "${name}", evals: [...] } (maximum ${MAX_CASES} cases)`);
   }
   const ids = new Set();
-  for (const item of value.evals) {
-    if (!item || Object.keys(item).some((k) => !['id', 'prompt', 'expected_output', 'files', 'expectations'].includes(k))
-      || !Number.isSafeInteger(item.id) || item.id <= 0 || ids.has(item.id)) throw fail('Case IDs must be unique positive integers; unknown fields are not supported');
+  for (const [index, item] of value.evals.entries()) {
+    const label = `evals/evals.json 中第 ${index + 1} 条测试用例`;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw fail(`${label}必须是 JSON 对象。`);
+    if (!Number.isSafeInteger(item.id) || item.id <= 0) throw fail(`${label}的 id 必须是正整数（例如 1、2、3），不能留空或使用字符串。`);
+    if (ids.has(item.id)) throw fail(`${label}的 id=${item.id} 与前面的用例重复，每条用例必须使用不同的编号。`);
+    const unsupported = Object.keys(item).filter((k) => !['id', 'prompt', 'expected_output', 'files', 'expectations'].includes(k));
+    if (unsupported.length) throw fail(`${label}包含暂不支持的字段：${unsupported.map(k => JSON.stringify(k)).join('、')}。支持的字段为 id、prompt、expected_output、files、expectations；请先核对字段含义，不要直接删除测试要求。`);
     ids.add(item.id);
     for (const field of ['prompt', 'expected_output']) {
       if (typeof item[field] !== 'string' || !item[field].trim() || item[field].length > 50000) throw fail(`${field} must contain 1–50000 characters`);

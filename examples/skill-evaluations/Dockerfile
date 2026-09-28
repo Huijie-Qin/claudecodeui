@@ -1,4 +1,4 @@
-# Build once; the evaluation worker never pulls images or installs dependencies.
+# Built once, optionally during backend startup. Evaluation containers stay offline.
 FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends python3 \
     && rm -rf /var/lib/apt/lists/*

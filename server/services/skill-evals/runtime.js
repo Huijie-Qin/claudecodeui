@@ -9,6 +9,7 @@ import { CLAUDE_MODELS } from '../../../shared/modelConstants.js';
 
 import { fail, redact } from './contracts.js';
 import { writeTree } from './files.js';
+import { createSandboxImageManager, DEFAULT_SANDBOX_IMAGE } from './sandbox-image.js';
 
 const COLLECT_ARTIFACTS = `
 import os, stat, json, base64
@@ -39,7 +40,9 @@ export function buildSandboxArgs({ id, image, projection, jobId }) {
     '--tmpfs=/output:rw,nosuid,nodev,size=50m,mode=1777', '-w', '/work', image, 'sleep', 'infinity'];
 }
 
-export function createEvaluationRuntime({ resolveEnvironment, runQuery, docker = process.env.DOCKER_CLI_PATH || 'docker', image = process.env.SKILL_EVAL_IMAGE, command = exec } = {}) {
+export function createEvaluationRuntime({ resolveEnvironment, runQuery, docker = process.env.DOCKER_CLI_PATH || 'docker', image = process.env.SKILL_EVAL_IMAGE || DEFAULT_SANDBOX_IMAGE,
+  autoBuild = process.env.SKILL_EVAL_AUTO_BUILD === 'true', command = exec } = {}) {
+  const sandboxImage = createSandboxImageManager({ docker, image, autoBuild, command });
   async function profile(scope) {
     const resolved = await resolveEnvironment(scope);
     const auth = Object.fromEntries(AUTH_KEYS.filter((k) => typeof resolved[k] === 'string').map((k) => [k, resolved[k]]));
@@ -47,13 +50,10 @@ export function createEvaluationRuntime({ resolveEnvironment, runQuery, docker =
     return { auth, model: auth.ANTHROPIC_MODEL || CLAUDE_MODELS.DEFAULT };
   }
   async function preflight(scope) {
-    if (!image) throw fail('Set SKILL_EVAL_IMAGE to a locally installed sandbox image with sh, sleep and /usr/bin/python3', 'EVAL_RUNTIME_UNAVAILABLE', 503);
-    await profile(scope);
-    try {
-      await command(docker, ['info', '--format', '{{.ServerVersion}}'], { timeout: 10000, maxBuffer: 4096 });
-      const { stdout } = await command(docker, ['image', 'inspect', '--format', '{{.Id}}', image], { timeout: 10000, maxBuffer: 4096 });
-      return { image: stdout.trim(), model: (await profile(scope)).model, kind: 'sdk-broker-docker-network-none-v1' };
-    } catch { throw fail('The evaluation Docker daemon/image is unavailable', 'EVAL_RUNTIME_UNAVAILABLE', 503); }
+    if (!image) throw fail('请在 .env 中配置 SKILL_EVAL_IMAGE。', 'EVAL_RUNTIME_UNAVAILABLE', 503);
+    const { model } = await profile(scope);
+    if (sandboxImage.preparing) throw fail('测评环境正在准备中，首次构建可能需要几分钟，请稍后重试。', 'EVAL_RUNTIME_PREPARING', 503);
+    return { image: await sandboxImage.ensure(), model, kind: 'sdk-broker-docker-network-none-v1' };
   }
   async function modelCall({ scope, prompt, systemPrompt, signal, tools = [], onText = () => {}, budget, model, outputSchema }) {
     if (signal?.aborted) throw signal.reason || fail('Cancelled');
@@ -207,5 +207,7 @@ export function createEvaluationRuntime({ resolveEnvironment, runQuery, docker =
       if ([`ccui-eval-model-${jobId}-`, `ccui-eval-case-${jobId}-`].some((prefix) => name.startsWith(prefix))) await fs.rm(path.join(os.tmpdir(), name), { recursive: true, force: true });
     }
   }
-  return { preflight, modelCall, runCase, cleanupJob };
+  return { preflight, modelCall, runCase, cleanupJob,
+    warmup: () => autoBuild ? sandboxImage.ensure() : Promise.resolve(),
+  };
 }

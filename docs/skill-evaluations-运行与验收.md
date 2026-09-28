@@ -28,7 +28,18 @@
 
 需要与应用服务在同一主机上的 Docker daemon 和 CLI。此版不支持远程 Docker daemon 的路径映射，也不支持多个应用进程共同修改同一工作区；数据库 worker 租约防止重复领取，但文件协调锁是进程内锁。普通会话/外部编辑器不遵守该锁，写回使用两次摘要检查和恢复日志，不能对任意外部并发写入承诺绝对互斥。
 
-构建隔离镜像（只在部署时联网安装依赖）：
+PM2 部署可以只通过项目代码与 `.env` 管理测评镜像。在后端实际读取的 `.env` 中配置：
+
+```dotenv
+SKILL_EVAL_IMAGE=cloudcli-skill-eval:local
+SKILL_EVAL_AUTO_BUILD=true
+```
+
+重启 PM2 后端后，服务会在后台检查镜像，缺失时使用仓库的 `examples/skill-evaluations/Dockerfile` 自动构建；已有镜像直接复用。首次构建需要访问镜像仓库和软件源，最多等待 10 分钟。构建期间的测评请求提示“环境正在准备中”，不阻塞普通聊天。构建失败会在 PM2 日志中给出原因提示，后续测评请求可以重试准备。无需手工启动测评容器。
+
+Docker CLI 与 daemon 仍需由服务器预先安装、启动，PM2 运行用户需有访问权限。`SKILL_EVAL_AUTO_BUILD` 默认关闭；镜像名省略时默认 `cloudcli-skill-eval:local`。如修改 Dockerfile 中的依赖，请同时修改 `.env` 的镜像标签，重启后即可自动构建新镜像，避免覆盖旧镜像。通过 npm 分发时也包含此 Dockerfile。
+
+不启用自动构建时，仍可手动构建隔离镜像（只在部署时联网安装依赖）：
 
 ```sh
 docker build -t cloudcli-skill-eval:local -f examples/skill-evaluations/Dockerfile examples/skill-evaluations
