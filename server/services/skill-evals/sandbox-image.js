@@ -1,12 +1,21 @@
 import path from 'node:path';
 
 import { findAppRoot, getModuleDir } from '../../utils/runtime-paths.js';
+import { resolveClaudeDockerImage, resolveDockerCliExecutable } from '../docker-runtime-config.js';
 
 import { fail } from './contracts.js';
 
-export const DEFAULT_SANDBOX_IMAGE = 'cloudcli-skill-eval:local';
+export function resolveEvaluationSandboxConfig(env = process.env) {
+  const customImage = String(env.SKILL_EVAL_IMAGE || '').trim();
+  return {
+    image: customImage || resolveClaudeDockerImage(env),
+    docker: String(env.DOCKER_CLI_PATH || '').trim() || resolveDockerCliExecutable(env),
+    autoBuild: Boolean(customImage) && env.SKILL_EVAL_AUTO_BUILD === 'true',
+    autoPull: !customImage,
+  };
+}
 
-export function createSandboxImageManager({ docker, image, autoBuild, command }) {
+export function createSandboxImageManager({ docker, image, autoBuild, autoPull = false, command }) {
   let pending = null;
   const unavailable = (message) => fail(message, 'EVAL_RUNTIME_UNAVAILABLE', 503);
   async function inspect() {
@@ -23,7 +32,14 @@ export function createSandboxImageManager({ docker, image, autoBuild, command })
       if (!/No such (?:image|object)/i.test(String(error.stderr || error.message))) {
         throw unavailable('无法检查测评镜像，请确认 Docker 访问权限和 SKILL_EVAL_IMAGE 配置。');
       }
-      if (!autoBuild) throw unavailable('测评镜像尚未安装。请在 .env 设置 SKILL_EVAL_AUTO_BUILD=true 并重启后端，自动构建测评环境。');
+      if (!autoBuild && !autoPull) throw unavailable('测评镜像尚未安装。移除 .env 中的 SKILL_EVAL_IMAGE 可复用会话镜像；如需独立构建，请设置 SKILL_EVAL_AUTO_BUILD=true 并重启后端。');
+    }
+    if (autoPull) {
+      console.info('[skill-evals] 正在准备会话镜像，首次拉取可能需要几分钟。');
+      try {
+        await command(docker, ['pull', image], { timeout: 10 * 60 * 1000, maxBuffer: 4 * 1024 * 1024 });
+        return await inspect();
+      } catch { throw unavailable('会话镜像拉取失败。请检查 CLOUDCLI_CLAUDE_DOCKER_IMAGE、Docker 镜像仓库连接及登录权限。测评复用会话镜像，无需构建独立 Dockerfile。'); }
     }
     const context = path.join(findAppRoot(getModuleDir(import.meta.url)), 'examples/skill-evaluations');
     console.info('[skill-evals] 正在自动构建测评镜像，首次构建可能需要几分钟。');

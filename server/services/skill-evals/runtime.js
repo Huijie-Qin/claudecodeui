@@ -9,7 +9,7 @@ import { CLAUDE_MODELS } from '../../../shared/modelConstants.js';
 
 import { fail, redact } from './contracts.js';
 import { writeTree } from './files.js';
-import { createSandboxImageManager, DEFAULT_SANDBOX_IMAGE } from './sandbox-image.js';
+import { createSandboxImageManager, resolveEvaluationSandboxConfig } from './sandbox-image.js';
 
 const COLLECT_ARTIFACTS = `
 import os, stat, json, base64
@@ -37,12 +37,15 @@ export function buildSandboxArgs({ id, image, projection, jobId }) {
     '--pids-limit=128', '--memory=512m', '--cpus=1', '--user=1000:1000',
     '--tmpfs=/tmp:rw,nosuid,nodev,size=128m', '--tmpfs=/work:rw,nosuid,nodev,size=128m,mode=1777',
     '--mount', `type=bind,src=${projection},dst=/skill,readonly`,
-    '--tmpfs=/output:rw,nosuid,nodev,size=50m,mode=1777', '-w', '/work', image, 'sleep', 'infinity'];
+    '--tmpfs=/output:rw,nosuid,nodev,size=50m,mode=1777', '-w', '/work', '--entrypoint', 'sleep', image, 'infinity'];
 }
 
-export function createEvaluationRuntime({ resolveEnvironment, runQuery, docker = process.env.DOCKER_CLI_PATH || 'docker', image = process.env.SKILL_EVAL_IMAGE || DEFAULT_SANDBOX_IMAGE,
-  autoBuild = process.env.SKILL_EVAL_AUTO_BUILD === 'true', command = exec } = {}) {
-  const sandboxImage = createSandboxImageManager({ docker, image, autoBuild, command });
+export function createEvaluationRuntime({ resolveEnvironment, runQuery, env = process.env,
+  docker = resolveEvaluationSandboxConfig(env).docker, image = resolveEvaluationSandboxConfig(env).image,
+  autoBuild = resolveEvaluationSandboxConfig(env).autoBuild,
+  autoPull = resolveEvaluationSandboxConfig(env).autoPull && image === resolveEvaluationSandboxConfig(env).image,
+  command = exec } = {}) {
+  const sandboxImage = createSandboxImageManager({ docker, image, autoBuild, autoPull, command });
   async function profile(scope) {
     const resolved = await resolveEnvironment(scope);
     const auth = Object.fromEntries(AUTH_KEYS.filter((k) => typeof resolved[k] === 'string').map((k) => [k, resolved[k]]));
@@ -52,7 +55,7 @@ export function createEvaluationRuntime({ resolveEnvironment, runQuery, docker =
   async function preflight(scope) {
     if (!image) throw fail('请在 .env 中配置 SKILL_EVAL_IMAGE。', 'EVAL_RUNTIME_UNAVAILABLE', 503);
     const { model } = await profile(scope);
-    if (sandboxImage.preparing) throw fail('测评环境正在准备中，首次构建可能需要几分钟，请稍后重试。', 'EVAL_RUNTIME_PREPARING', 503);
+    if (sandboxImage.preparing) throw fail('测评环境正在准备中，首次拉取或构建镜像可能需要几分钟，请稍后重试。', 'EVAL_RUNTIME_PREPARING', 503);
     return { image: await sandboxImage.ensure(), model, kind: 'sdk-broker-docker-network-none-v1' };
   }
   async function modelCall({ scope, prompt, systemPrompt, signal, tools = [], onText = () => {}, budget, model, outputSchema }) {

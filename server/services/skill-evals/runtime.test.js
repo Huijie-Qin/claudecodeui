@@ -49,6 +49,10 @@ test('sandbox collects artifacts from bounded tmpfs and always removes the conta
   assert.equal(result.artifacts['result.txt'], 'b2s=');
   const args = commands.find((call) => call.args[0] === 'run').args;
   assert.ok(args.includes('--tmpfs=/output:rw,nosuid,nodev,size=50m,mode=1777'));
+  assert.equal(args[args.indexOf('--entrypoint') + 1], 'sleep');
+  assert.ok(args.includes('--network=none'));
+  assert.ok(args.includes('--read-only'));
+  assert.ok(args.find(value => value.startsWith('type=bind')).endsWith(',dst=/skill,readonly'));
   assert.equal(args.filter((value) => value.startsWith('type=bind')).length, 1);
   assert.ok(commands.some((call) => call.args[0] === 'rm'));
 });

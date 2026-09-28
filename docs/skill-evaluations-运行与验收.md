@@ -28,32 +28,28 @@
 
 需要与应用服务在同一主机上的 Docker daemon 和 CLI。此版不支持远程 Docker daemon 的路径映射，也不支持多个应用进程共同修改同一工作区；数据库 worker 租约防止重复领取，但文件协调锁是进程内锁。普通会话/外部编辑器不遵守该锁，写回使用两次摘要检查和恢复日志，不能对任意外部并发写入承诺绝对互斥。
 
-PM2 部署可以只通过项目代码与 `.env` 管理测评镜像。在后端实际读取的 `.env` 中配置：
+测评默认复用普通 workspace 会话的镜像和 Docker CLI 配置：
+
+```dotenv
+CLOUDCLI_CLAUDE_DOCKER_IMAGE=docker.io/cloudcliai/sandbox:claude-code
+# 可选：Docker CLI 不在 PATH 中时指定
+# CLOUDCLI_DOCKER_CLI_PATH=/usr/bin/docker
+```
+
+如果服务器已配置普通会话的镜像，直接沿用现有值，无需新增配置。**从旧版本迁移时，移除 `.env` 中的 `SKILL_EVAL_IMAGE` 和 `SKILL_EVAL_AUTO_BUILD`，然后重启 PM2 后端**；否则显式设置的测评镜像仍然优先。`DOCKER_CLI_PATH` 作为旧版测评专用覆盖项仍有效，若要共用会话的 CLI，也应移除它。
+
+准备时先检查本地镜像，存在则直接复用，缺失则自动拉取配置的会话镜像（最多 10 分钟），不执行 Dockerfile 构建。并发请求提示环境正在准备，失败后可以重试。Docker CLI、daemon 和仓库登录权限与普通会话一致。这里只复用镜像与 CLI 配置：每条用例仍新建临时容器，结束即删除；不复用正在运行的会话容器，也不挂载原 workspace、会话凭据或共享 Python 可写目录。测评所需 Python 包应预装在镜像中，普通会话运行后安装到共享目录的包不会自动带入测评。
+
+如确实需要独立测评镜像，可选择旧方式：
 
 ```dotenv
 SKILL_EVAL_IMAGE=cloudcli-skill-eval:local
 SKILL_EVAL_AUTO_BUILD=true
 ```
 
-重启 PM2 后端后，服务会在后台检查镜像，缺失时使用仓库的 `examples/skill-evaluations/Dockerfile` 自动构建；已有镜像直接复用。首次构建需要访问镜像仓库和软件源，最多等待 10 分钟。构建期间的测评请求提示“环境正在准备中”，不阻塞普通聊天。构建失败会在 PM2 日志中给出原因提示，后续测评请求可以重试准备。无需手工启动测评容器。
+此时才会在后台使用仓库的 `examples/skill-evaluations/Dockerfile` 构建缺失镜像；已有镜像直接复用。首次构建需要访问镜像仓库和软件源，最多 10 分钟。这个路径是镜像构建文件路径，不是容器数据目录。也可以关闭自动构建并自行准备该镜像。无需手工启动测评容器。
 
-Docker CLI 与 daemon 仍需由服务器预先安装、启动，PM2 运行用户需有访问权限。`SKILL_EVAL_AUTO_BUILD` 默认关闭；镜像名省略时默认 `cloudcli-skill-eval:local`。如修改 Dockerfile 中的依赖，请同时修改 `.env` 的镜像标签，重启后即可自动构建新镜像，避免覆盖旧镜像。通过 npm 分发时也包含此 Dockerfile。
-
-不启用自动构建时，仍可手动构建隔离镜像（只在部署时联网安装依赖）：
-
-```sh
-docker build -t cloudcli-skill-eval:local -f examples/skill-evaluations/Dockerfile examples/skill-evaluations
-```
-
-启动应用前配置：
-
-```sh
-export SKILL_EVAL_IMAGE=cloudcli-skill-eval:local
-export SKILL_EVAL_STORAGE_ROOT=/absolute/path/outside-workspaces/skill-evaluations
-export SKILL_EVAL_MAX_COST_USD=10
-```
-
-`SKILL_EVAL_STORAGE_ROOT` 默认 `~/.cloudcli/skill-evaluations`，必须在工作区之外；需要应用用户的读写权限。可选 `DOCKER_CLI_PATH` 指定 Docker 路径。模型凭据复用租户/用户的 Claude 环境配置，需要 API key 或 auth token；支持 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_MODEL`。仅登录桌面 Claude、但没有这些凭据时会提示配置错误。
+`SKILL_EVAL_STORAGE_ROOT` 默认 `~/.cloudcli/skill-evaluations`，必须在工作区之外；需要应用用户的读写权限。默认沿用 `CLOUDCLI_DOCKER_CLI_PATH`，旧版 `DOCKER_CLI_PATH` 可覆盖测评使用的 Docker 路径。模型凭据复用租户/用户的 Claude 环境配置，需要 API key 或 auth token；支持 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_MODEL`。仅登录桌面 Claude、但没有这些凭据时会提示配置错误。
 
 macOS 可使用独立 Colima profile。应用的 `TMPDIR` 必须以相同路径挂载进虚拟机，否则 Docker 无法读取技能快照。示例：
 

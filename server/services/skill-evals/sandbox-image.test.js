@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createSandboxImageManager } from './sandbox-image.js';
+import { DEFAULT_CLAUDE_DOCKER_IMAGE } from '../docker-runtime-config.js';
+
+import { createSandboxImageManager, resolveEvaluationSandboxConfig } from './sandbox-image.js';
 import { createEvaluationRuntime } from './runtime.js';
 
 const missing = () => Object.assign(new Error('inspect failed'), { stderr: 'Error response from daemon: No such image: test:local' });
@@ -10,13 +12,51 @@ const auth = () => ({ ANTHROPIC_API_KEY: 'test-key' });
 
 test('existing images are reused without a build and preflight pins the inspected image ID', async () => {
   const calls = [];
-  const runtime = createEvaluationRuntime({ resolveEnvironment: auth, autoBuild: true, command: async (_docker, args) => {
+  const runtime = createEvaluationRuntime({ env: { CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'workspace:local' }, resolveEnvironment: auth, autoBuild: true, command: async (_docker, args) => {
     calls.push(args); return { stdout: args[0] === 'info' ? 'Docker' : identity };
   } });
   await runtime.warmup();
   assert.equal((await runtime.preflight({})).image, identity);
+  assert.ok(calls.every(args => !['build', 'pull'].includes(args[0])));
+  assert.equal(calls.find(args => args[0] === 'image').at(-1), 'workspace:local');
+});
+
+test('evaluations inherit session image and Docker CLI configuration, preserving explicit overrides', () => {
+  assert.deepEqual(resolveEvaluationSandboxConfig({}), { image: DEFAULT_CLAUDE_DOCKER_IMAGE, docker: 'docker', autoBuild: false, autoPull: true });
+  const env = { CLOUDCLI_CLAUDE_DOCKER_IMAGE: ' registry/workspace:prod ', CLOUDCLI_DOCKER_CLI_PATH: '/opt/bin/docker', SKILL_EVAL_AUTO_BUILD: 'true' };
+  assert.deepEqual(resolveEvaluationSandboxConfig(env), { image: 'registry/workspace:prod', docker: '/opt/bin/docker', autoBuild: false, autoPull: true });
+  assert.deepEqual(resolveEvaluationSandboxConfig({ ...env, SKILL_EVAL_IMAGE: 'eval:local', DOCKER_CLI_PATH: '/eval/docker' }),
+    { image: 'eval:local', docker: '/eval/docker', autoBuild: true, autoPull: false });
+});
+
+test('missing session image is pulled once and never built, even with the old auto-build flag', async () => {
+  let exists = false;
+  const calls = [];
+  const runtime = createEvaluationRuntime({ env: { CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'workspace:local', CLOUDCLI_DOCKER_CLI_PATH: '/session/docker', SKILL_EVAL_AUTO_BUILD: 'true' },
+    resolveEnvironment: auth, command: async (docker, args) => {
+      assert.equal(docker, '/session/docker'); calls.push(args);
+      if (args[0] === 'image' && !exists) throw missing();
+      if (args[0] === 'pull') { assert.equal(args[1], 'workspace:local'); exists = true; }
+      return { stdout: identity };
+    },
+  });
+  assert.equal((await runtime.preflight({})).image, identity);
+  await runtime.preflight({});
+  assert.equal(calls.filter(args => args[0] === 'pull').length, 1);
   assert.ok(calls.every(args => args[0] !== 'build'));
-  assert.equal(calls.find(args => args[0] === 'image').at(-1), process.env.SKILL_EVAL_IMAGE || 'cloudcli-skill-eval:local');
+});
+
+test('failed session image pulls can be retried without falling back to a Dockerfile build', async () => {
+  let pulls = 0, exists = false;
+  const manager = createSandboxImageManager({ docker: 'docker', image: 'workspace:local', autoPull: true, command: async (_docker, args) => {
+    assert.notEqual(args[0], 'build');
+    if (args[0] === 'image' && !exists) throw missing();
+    if (args[0] === 'pull') { if (++pulls === 1) throw new Error('Registry unavailable'); exists = true; }
+    return { stdout: identity };
+  } });
+  await assert.rejects(manager.ensure(), /会话镜像拉取失败/);
+  assert.equal(manager.preparing, false);
+  assert.equal(await manager.ensure(), identity);
 });
 
 test('missing images are built once from the bundled Dockerfile for concurrent preparation', async () => {
