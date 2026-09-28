@@ -360,7 +360,6 @@ test('large transcripts are read from bounded head and tail without losing recen
 test('review rejects malformed or ambiguous verdicts rather than guessing', async (t) => {
   const { root } = await fixture(t);
   const invalid = [
-    '```json\n{"complete":true,"reason":"yes","nextStep":""}\n```',
     '{"complete":"true","reason":"yes","nextStep":""}',
     '{"complete":false,"reason":"missing","nextStep":""}',
     '{"complete":true,"reason":"","nextStep":""}',
@@ -375,6 +374,26 @@ test('review rejects malformed or ambiguous verdicts rather than guessing', asyn
       },
     }), /invalid JSON|invalid verdict/);
   }
+});
+
+test('review accepts one fenced JSON verdict and prefers the SDK final result', async (t) => {
+  const { root } = await fixture(t);
+  assert.deepEqual(await reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () {
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: '正在核查。' }] } };
+      yield { type: 'result', subtype: 'success', result: JSON.stringify(complete) };
+    },
+  }), complete);
+  assert.deepEqual(await reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () {
+      yield { type: 'result', subtype: 'success', result: `\`\`\`json\n${JSON.stringify(incomplete)}\n\`\`\`` };
+    },
+  }), incomplete);
+  await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () {
+      yield { type: 'result', subtype: 'success', result: `说明：\n${JSON.stringify(complete)}` };
+    },
+  }), /invalid JSON/);
 });
 
 test('structured output is accepted and model errors are propagated', async (t) => {

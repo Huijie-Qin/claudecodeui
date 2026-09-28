@@ -126,7 +126,9 @@ function parseVerdict(raw) {
     if (value.length > MAX_REVIEW_RESPONSE_CHARS) {
       throw reviewError('Completion reviewer response is too long', { stage: 'response_parse', code: 'response_too_long' });
     }
-    try { value = JSON.parse(value.trim()); } catch {
+    const text = value.trim();
+    const fenced = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/i.exec(text);
+    try { value = JSON.parse(fenced ? fenced[1].trim() : text); } catch {
       throw reviewError('Completion reviewer returned invalid JSON', { stage: 'response_parse', code: 'invalid_json' });
     }
   }
@@ -518,6 +520,7 @@ export async function reviewHookCompletion({
     try {
       if (controller.signal.aborted) throw controller.signal.reason;
       let finalText = '';
+      let resultText = '';
       let structured;
       let completed = false;
       for await (const message of iterator) {
@@ -534,17 +537,17 @@ export async function reviewHookCompletion({
           }
           completed = true;
           if (message.structured_output !== undefined) structured = message.structured_output;
-          else if (!finalText && typeof message.result === 'string') finalText = message.result;
+          if (typeof message.result === 'string' && message.result.trim()) resultText = message.result;
         }
       }
       if (!completed) throw reviewError('Completion reviewer ended without a result',
         { stage: 'no_result', code: 'no_result', modelSource: source });
-      if (structured === undefined && !finalText.trim()) {
+      if (structured === undefined && !resultText.trim() && !finalText.trim()) {
         throw reviewError('Completion reviewer returned no output',
           { stage: 'response_parse', code: 'empty_output', modelSource: source });
       }
       try {
-        return parseVerdict(structured === undefined ? finalText : structured);
+        return parseVerdict(structured === undefined ? resultText || finalText : structured);
       } catch (error) {
         if (error?.reviewDiagnostic) error.reviewDiagnostic.modelSource = source;
         throw error;
