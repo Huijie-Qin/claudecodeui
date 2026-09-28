@@ -553,6 +553,7 @@ async function executePostActions({
             reason: failure.reason,
             nextStep: failure.nextStep,
             diagnostic: failure.diagnostic,
+            rawReviewOutput: failure.rawReviewOutput,
             failed: true,
           };
         }
@@ -577,6 +578,7 @@ async function executePostActions({
         maxReviews,
         failed: verdict.failed === true,
         ...(verdict.diagnostic ? { diagnostic: verdict.diagnostic } : {}),
+        ...(verdict.rawReviewOutput ? { rawReviewOutput: verdict.rawReviewOutput } : {}),
         ...(action.config?.validationResultPath ? {
           validationResult: validationResult || null,
           ...(validationError ? { validationError } : {}),

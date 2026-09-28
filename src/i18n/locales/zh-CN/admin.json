@@ -463,6 +463,9 @@
       "input": "事件输入",
       "scriptOutput": "脚本输出",
       "actions": "后置动作",
+      "rawReviewOutput": "验收模型原始输出（已脱敏）",
+      "rawReviewOutputMeta": "来源：{{source}} · 原始长度：{{length}} 字符",
+      "rawReviewOutputTruncated": "已截断",
       "response": "返回 Claude",
       "logs": "运行日志",
       "loopAttempts": {

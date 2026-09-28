@@ -388,6 +388,33 @@ test('JSON reviewer verdict blocks and then approves the same main loop', async 
   } finally { database.close(); }
 });
 
+test('Hook execution output shows invalid reviewer text without feeding it to the main loop', async () => {
+  const database = databaseFixture();
+  try {
+    const hook = reviewHook(2);
+    const runtime = createHookRuntimeSession({ hooks: [hook], database, userId: 1,
+      reviewCompletion: (request) => reviewHookCompletion({ ...request,
+        userPrompt: '请完成报告。', sdkOptions: { cwd: process.cwd() },
+        queryFn: async function* () {
+          yield { type: 'result', subtype: 'success',
+            result: '结果如下：不是 JSON。 token=private-sentinel' };
+        },
+      }),
+    });
+    const response = await runtime.executeHook(hook,
+      { hook_event_name: 'Stop', session_id: 'main' });
+    assert.equal(response.decision, 'block');
+    assert.match(response.reason, /不是有效 JSON/);
+    assert.doesNotMatch(response.reason, /结果如下|private-sentinel/);
+    const audit = database.prepare('SELECT actions_json, response_json FROM hook_executions').get();
+    const rawOutput = JSON.parse(audit.actions_json).review.output.rawReviewOutput;
+    assert.equal(rawOutput.source, 'sdk_result');
+    assert.match(rawOutput.text, /结果如下：不是 JSON。 token=\[redacted\]/);
+    assert.doesNotMatch(audit.actions_json + audit.response_json, /private-sentinel/);
+    assert.doesNotMatch(audit.response_json, /结果如下/);
+  } finally { database.close(); }
+});
+
 test('audit storage failures cannot silently bypass completion review', async () => {
   const hook = reviewHook(2);
   const runtime = createHookRuntimeSession({ hooks: [hook], userId: 1,

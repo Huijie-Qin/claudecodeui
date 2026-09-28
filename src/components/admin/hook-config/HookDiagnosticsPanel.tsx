@@ -83,6 +83,26 @@ function JsonSection({ title, value }: { title: string; value: unknown }) {
   );
 }
 
+function findRawReviewOutput(actions: Record<string, unknown> | null) {
+  if (!actions) return null;
+  for (const action of Object.values(actions)) {
+    if (!action || typeof action !== 'object' || Array.isArray(action)) continue;
+    const output = (action as { output?: unknown }).output;
+    if (!output || typeof output !== 'object' || Array.isArray(output)) continue;
+    const raw = (output as { rawReviewOutput?: unknown }).rawReviewOutput;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const value = raw as { text?: unknown; source?: unknown; totalChars?: unknown; truncated?: unknown };
+    if (typeof value.text !== 'string') continue;
+    return {
+      text: value.text,
+      source: typeof value.source === 'string' ? value.source : 'unknown',
+      totalChars: typeof value.totalChars === 'number' ? value.totalChars : value.text.length,
+      truncated: value.truncated === true,
+    };
+  }
+  return null;
+}
+
 function loopAttemptVariant(attempt: McpLoopAttempt) {
   if (attempt.scriptStatus === 'failed' || attempt.terminationOutcome === 'failed') return 'destructive' as const;
   if (attempt.terminationOutcome === 'succeeded') return 'outline' as const;
@@ -161,6 +181,7 @@ function HookExecutionDetail({
   onRefresh: () => void;
 }) {
   const { t, i18n } = useTranslation('admin');
+  const rawReviewOutput = execution ? findRawReviewOutput(execution.actions) : null;
   return (
     <Dialog open={Boolean(execution)} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="max-h-[90vh] max-w-4xl overflow-hidden p-0">
@@ -233,6 +254,29 @@ function HookExecutionDetail({
                 </section>
               ) : null}
               <McpLoopAttemptsSection attempts={execution.mcpLoopAttempts || []} />
+              {rawReviewOutput ? (
+                <section className="overflow-hidden rounded-xl border border-border">
+                  <div className="flex items-center gap-2 border-b border-border bg-muted/20 px-3 py-2">
+                    <h4 className="min-w-0 flex-1 text-xs font-semibold text-foreground">
+                      {t('hooks.diagnostics.rawReviewOutput')}
+                    </h4>
+                    <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[11px]"
+                      onClick={() => void navigator.clipboard?.writeText(rawReviewOutput.text)}>
+                      <Copy className="h-3.5 w-3.5" />
+                      {t('hooks.diagnostics.copy')}
+                    </Button>
+                  </div>
+                  <p className="px-3 pt-2 text-[11px] text-muted-foreground">
+                    {t('hooks.diagnostics.rawReviewOutputMeta', {
+                      source: rawReviewOutput.source, length: rawReviewOutput.totalChars,
+                    })}
+                    {rawReviewOutput.truncated ? ` · ${t('hooks.diagnostics.rawReviewOutputTruncated')}` : ''}
+                  </p>
+                  <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words p-3 text-[11px] leading-5 text-foreground">
+                    {rawReviewOutput.text}
+                  </pre>
+                </section>
+              ) : null}
               <JsonSection title={t('hooks.diagnostics.input')} value={execution.input} />
               <JsonSection title={t('hooks.diagnostics.scriptOutput')} value={execution.scriptOutput} />
               <JsonSection title={t('hooks.diagnostics.actions')} value={execution.actions} />

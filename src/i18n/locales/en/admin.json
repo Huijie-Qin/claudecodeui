@@ -509,6 +509,9 @@
       "input": "Event input",
       "scriptOutput": "Script output",
       "actions": "Post-actions",
+      "rawReviewOutput": "Reviewer raw output (redacted)",
+      "rawReviewOutputMeta": "Source: {{source}} · Original length: {{length}} characters",
+      "rawReviewOutputTruncated": "truncated",
       "response": "Response to Claude",
       "logs": "Runtime logs",
       "loopAttempts": {

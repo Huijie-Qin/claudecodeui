@@ -410,6 +410,54 @@ test('review requires a JSON verdict with exactly the accepted fields', async (t
   }
 });
 
+test('invalid reviewer JSON exposes a bounded, redacted copy of the actual SDK result', async (t) => {
+  const { root } = await fixture(t);
+  const raw = '结果如下：\n{"complete":false,"reason":"缺少结论","nextStep":"补充结论"}\ntoken=private-sentinel';
+  await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () {
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: '处理中' }] } };
+      yield { type: 'result', subtype: 'success', result: raw };
+    },
+  }), (error) => {
+    const failure = completionReviewFailure(error);
+    assert.equal(failure.diagnostic.code, 'invalid_json');
+    assert.equal(failure.rawReviewOutput.source, 'sdk_result');
+    assert.equal(failure.rawReviewOutput.totalChars, raw.length);
+    assert.equal(failure.rawReviewOutput.truncated, false);
+    assert.match(failure.rawReviewOutput.text, /结果如下/);
+    assert.match(failure.rawReviewOutput.text, /"complete":false/);
+    assert.match(failure.rawReviewOutput.text, /token=\[redacted\]/);
+    assert.doesNotMatch(JSON.stringify(failure), /private-sentinel|处理中/);
+    assert.doesNotMatch(failure.reason, /结果如下/);
+    return true;
+  });
+  const longRaw = '开头' + 'x'.repeat(20_000) + '结尾';
+  await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () { yield { type: 'result', subtype: 'success', result: longRaw }; },
+  }), (error) => {
+    const output = completionReviewFailure(error).rawReviewOutput;
+    assert.equal(output.truncated, true);
+    assert.equal(output.totalChars, longRaw.length);
+    assert.match(output.text, /开头/);
+    assert.match(output.text, /结尾/);
+    assert.ok(output.text.length < longRaw.length);
+    return true;
+  });
+  await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () {
+      yield { type: 'result', subtype: 'success', result: JSON.stringify({
+        ...incomplete, api_key: 'private-sentinel',
+      }) };
+    },
+  }), (error) => {
+    const failure = completionReviewFailure(error);
+    assert.equal(failure.diagnostic.code, 'invalid_verdict');
+    assert.equal(JSON.parse(failure.rawReviewOutput.text).api_key, '[redacted]');
+    assert.doesNotMatch(JSON.stringify(failure), /private-sentinel/);
+    return true;
+  });
+});
+
 test('structured output is accepted and model errors are propagated', async (t) => {
   const { root } = await fixture(t);
   assert.deepEqual(await reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',

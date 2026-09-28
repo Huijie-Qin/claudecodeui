@@ -5,6 +5,7 @@ const TRANSCRIPT_HEAD_BYTES = 64 * 1024;
 const TRANSCRIPT_TAIL_BYTES = 192 * 1024;
 const MAX_EVIDENCE_CHARS = 24_000;
 const MAX_REVIEW_RESPONSE_CHARS = 16_000;
+const MAX_REVIEW_AUDIT_CHARS = 16_000;
 const MAX_REVIEW_TIMEOUT_MS = 90_000;
 const DEFAULT_REVIEW_TIMEOUT_MS = 80_000;
 const MAX_CRITERIA_CHARS = 8_000;
@@ -13,6 +14,7 @@ const MAX_ARTIFACT_PATH_CHARS = 500;
 const REVIEW_TOOLS = Object.freeze(['Read', 'Glob', 'Grep']);
 const GLOB_TOKEN = /[*?\[\]{}]/;
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+const RAW_REVIEW_OUTPUT = Symbol('rawReviewOutput');
 const REVIEW_RESULT_SUBTYPES = new Set(['success', 'error_during_execution',
   'error_max_turns', 'error_max_budget_usd', 'error_max_structured_output_retries']);
 const REVIEW_MODEL_SOURCES = new Set(['hook_config', 'user_env', 'main_model', 'sdk_default']);
@@ -154,6 +156,27 @@ function reviewError(message, diagnostic) {
   return error;
 }
 
+function reviewOutputForAudit(raw) {
+  let text;
+  try { text = typeof raw === 'string' ? raw : JSON.stringify(raw); } catch { text = '[unserializable output]'; }
+  if (typeof text !== 'string') text = String(raw);
+  const totalChars = text.length;
+  // Keep the response shape visible while avoiding common credential values in audit records.
+  text = text.replace(/Bearer\s+[^\s"',}]+/gi, 'Bearer [redacted]')
+    .replace(/("[^"]*(?:authorization|cookie|credential|password|secret|token|api[_-]?key)[^"]*"\s*:\s*")([^"]*)(")/gi,
+      '$1[redacted]$3')
+    .replace(/\b((?:[\w-]*(?:authorization|cookie|credential|password|secret|token|api[_-]?key)[\w-]*)\s*[:=]\s*)[^\s,;]+/gi,
+      '$1[redacted]')
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, '[redacted]');
+  const truncated = text.length > MAX_REVIEW_AUDIT_CHARS;
+  if (truncated) {
+    const marker = '\n...[output truncated]...\n';
+    const half = Math.floor((MAX_REVIEW_AUDIT_CHARS - marker.length) / 2);
+    text = `${text.slice(0, half)}${marker}${text.slice(-half)}`;
+  }
+  return { text, totalChars, truncated };
+}
+
 function modelSource(model, sdkOptions) {
   if (typeof model === 'string' && model.trim()) return 'hook_config';
   if (typeof sdkOptions?.env?.ANTHROPIC_MODEL === 'string'
@@ -235,7 +258,9 @@ export function completionReviewFailure(error) {
     main_model: '主会话模型', sdk_default: 'SDK 默认模型' }[diagnostic.modelSource];
   const status = diagnostic.httpStatus ? ` HTTP ${diagnostic.httpStatus}` : '';
   const source = sourceLabel ? `；模型来源：${sourceLabel}` : '';
+  const raw = error?.[RAW_REVIEW_OUTPUT];
   return { diagnostic, reason: `模型验收未能执行：${details[diagnostic.code]}${status}${source}。`,
+    ...(raw ? { rawReviewOutput: { source: raw.source, ...reviewOutputForAudit(raw.value) } } : {}),
     nextStep: diagnostic.code === 'subscription_unavailable' ? '检查模型接口订阅状态后重试。'
       : diagnostic.code === 'authentication_failed' ? '检查模型接口凭据后重试。'
         : diagnostic.code === 'rate_limited' ? '稍后重试或检查模型接口限流配置。'
@@ -551,7 +576,16 @@ export async function reviewHookCompletion({
       try {
         return parseVerdict(structured === undefined ? resultText || finalText : structured);
       } catch (error) {
-        if (error?.reviewDiagnostic) error.reviewDiagnostic.modelSource = source;
+        if (error?.reviewDiagnostic) {
+          error.reviewDiagnostic.modelSource = source;
+          if (error.reviewDiagnostic.stage === 'response_parse') {
+            error[RAW_REVIEW_OUTPUT] = {
+              source: structured !== undefined ? 'structured_output'
+                : resultText ? 'sdk_result' : 'assistant_text',
+              value: structured === undefined ? resultText || finalText : structured,
+            };
+          }
+        }
         throw error;
       }
     } catch (error) {
