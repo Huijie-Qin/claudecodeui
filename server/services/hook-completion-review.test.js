@@ -364,7 +364,7 @@ test('review rejects malformed or ambiguous verdicts rather than guessing', asyn
     '{"complete":false,"reason":"missing","nextStep":""}',
     '{"complete":true,"reason":"","nextStep":""}',
     '{"complete":true,"reason":"yes","nextStep":"","extra":1}',
-    '{"complete":true,"reason":"yes","nextStep":""} additional text',
+    `${JSON.stringify(complete)}\n${JSON.stringify(incomplete)}`,
   ];
   for (const text of invalid) {
     await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
@@ -376,7 +376,7 @@ test('review rejects malformed or ambiguous verdicts rather than guessing', asyn
   }
 });
 
-test('review accepts one fenced JSON verdict and prefers the SDK final result', async (t) => {
+test('review extracts a unique JSON verdict from reasoning text and prefers the SDK final result', async (t) => {
   const { root } = await fixture(t);
   assert.deepEqual(await reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
     queryFn: async function* () {
@@ -389,11 +389,32 @@ test('review accepts one fenced JSON verdict and prefers the SDK final result', 
       yield { type: 'result', subtype: 'success', result: `\`\`\`json\n${JSON.stringify(incomplete)}\n\`\`\`` };
     },
   }), incomplete);
-  await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+  assert.deepEqual(await reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
     queryFn: async function* () {
       yield { type: 'result', subtype: 'success', result: `说明：\n${JSON.stringify(complete)}` };
     },
-  }), /invalid JSON/);
+  }), complete);
+  const nested = { complete: false, reason: '字段 "{name}" 缺失', nextStep: '补充 "{name}"。' };
+  assert.deepEqual(await reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () {
+      yield { type: 'result', subtype: 'success', result: `<think>核查样例：${JSON.stringify(complete)}</think>\n以下是结果：\n\`\`\`json\n${JSON.stringify(nested)}\n\`\`\`` };
+    },
+  }), nested);
+  assert.deepEqual(await reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () {
+      yield { type: 'result', subtype: 'success', result: `<thinking>${'思考中。'.repeat(5_000)}</thinking>\n${JSON.stringify(incomplete)}` };
+    },
+  }), incomplete);
+  await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () {
+      yield { type: 'result', subtype: 'success', result: `<think>${JSON.stringify(complete)}\n${JSON.stringify(incomplete)}` };
+    },
+  }), (error) => completionReviewFailure(error).diagnostic.code === 'invalid_json');
+  await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () {
+      yield { type: 'result', subtype: 'success', result: `说明：\n${JSON.stringify({ ...complete, extra: 1 })}` };
+    },
+  }), (error) => completionReviewFailure(error).diagnostic.code === 'invalid_verdict');
 });
 
 test('review requires a JSON verdict with exactly the accepted fields', async (t) => {
@@ -412,7 +433,7 @@ test('review requires a JSON verdict with exactly the accepted fields', async (t
 
 test('invalid reviewer JSON exposes a bounded, redacted copy of the actual SDK result', async (t) => {
   const { root } = await fixture(t);
-  const raw = '结果如下：\n{"complete":false,"reason":"缺少结论","nextStep":"补充结论"}\ntoken=private-sentinel';
+  const raw = '结果如下：\n{"complete":false,"reason":"缺少结论","nextStep":}\ntoken=private-sentinel';
   await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
     queryFn: async function* () {
       yield { type: 'assistant', message: { content: [{ type: 'text', text: '处理中' }] } };

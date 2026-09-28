@@ -5,6 +5,7 @@ const TRANSCRIPT_HEAD_BYTES = 64 * 1024;
 const TRANSCRIPT_TAIL_BYTES = 192 * 1024;
 const MAX_EVIDENCE_CHARS = 24_000;
 const MAX_REVIEW_RESPONSE_CHARS = 16_000;
+const MAX_REVIEW_TEXT_CHARS = 64_000;
 const MAX_REVIEW_AUDIT_CHARS = 16_000;
 const MAX_REVIEW_TIMEOUT_MS = 90_000;
 const DEFAULT_REVIEW_TIMEOUT_MS = 80_000;
@@ -124,30 +125,92 @@ function selectEvidence(entries) {
   return bounded.reverse().join('\n\n');
 }
 
-function parseVerdict(raw) {
-  let value = raw;
-  if (typeof value === 'string') {
-    if (value.length > MAX_REVIEW_RESPONSE_CHARS) {
-      throw reviewError('Completion reviewer response is too long', { stage: 'response_parse', code: 'response_too_long' });
-    }
-    const text = value.trim();
-    const fenced = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/i.exec(text);
-    try { value = JSON.parse(fenced ? fenced[1].trim() : text); } catch {
-      throw reviewError('Completion reviewer returned invalid JSON', { stage: 'response_parse', code: 'invalid_json' });
-    }
-  }
+function normalizeVerdict(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
       || Object.keys(value).sort().join(',') !== 'complete,nextStep,reason'
       || typeof value.complete !== 'boolean'
       || typeof value.reason !== 'string' || typeof value.nextStep !== 'string') {
-    throw reviewError('Completion reviewer returned an invalid verdict', { stage: 'response_parse', code: 'invalid_verdict' });
+    return null;
   }
   const reason = value.reason.trim();
   const nextStep = value.nextStep.trim();
   if (!reason || reason.length > 4_000 || nextStep.length > 4_000 || (!value.complete && !nextStep)) {
-    throw reviewError('Completion reviewer returned an invalid verdict', { stage: 'response_parse', code: 'invalid_verdict' });
+    return null;
   }
   return { complete: value.complete, reason, nextStep };
+}
+
+function extractVerdictJson(text) {
+  // Reasoning models may prepend a <think> block containing example JSON.
+  const content = text.replace(/<(think|thinking|analysis|reasoning)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
+  if (/<\/?(?:think|thinking|analysis|reasoning)\b/i.test(content)) return null;
+  const verdicts = [];
+  let foundJson = false;
+  let oversized = false;
+  let start = -1;
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index];
+    if (depth === 0) {
+      if (char === '{') { start = index; depth = 1; }
+      continue;
+    }
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') quoted = true;
+    else if (char === '{') depth += 1;
+    else if (char === '}' && --depth === 0) {
+      const candidate = content.slice(start, index + 1);
+      if (candidate.length > MAX_REVIEW_RESPONSE_CHARS) { oversized = true; continue; }
+      try {
+        const parsed = JSON.parse(candidate);
+        foundJson = true;
+        const verdict = normalizeVerdict(parsed);
+        if (verdict) verdicts.push(verdict);
+      } catch { /* Keep scanning for the final verdict. */ }
+    }
+  }
+  if (verdicts.length === 1) return verdicts[0];
+  if (verdicts.length > 1 || foundJson) {
+    throw reviewError('Completion reviewer returned an ambiguous or invalid verdict',
+      { stage: 'response_parse', code: 'invalid_verdict' });
+  }
+  if (oversized) {
+    throw reviewError('Completion reviewer response is too long',
+      { stage: 'response_parse', code: 'response_too_long' });
+  }
+  return null;
+}
+
+function parseVerdict(raw) {
+  let value = raw;
+  if (typeof value === 'string') {
+    if (value.length > MAX_REVIEW_TEXT_CHARS) {
+      throw reviewError('Completion reviewer response is too long', { stage: 'response_parse', code: 'response_too_long' });
+    }
+    const text = value.trim();
+    const fenced = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/i.exec(text);
+    let parsed = false;
+    try { value = JSON.parse(fenced ? fenced[1].trim() : text); parsed = true; } catch { /* Try extracting a JSON object. */ }
+    if (parsed && text.length > MAX_REVIEW_RESPONSE_CHARS) {
+      throw reviewError('Completion reviewer response is too long', { stage: 'response_parse', code: 'response_too_long' });
+    }
+    if (!parsed) value = extractVerdictJson(text);
+    if (!parsed && value === null) {
+      throw reviewError('Completion reviewer returned invalid JSON', { stage: 'response_parse', code: 'invalid_json' });
+    }
+  }
+  const verdict = normalizeVerdict(value);
+  if (!verdict) {
+    throw reviewError('Completion reviewer returned an invalid verdict', { stage: 'response_parse', code: 'invalid_verdict' });
+  }
+  return verdict;
 }
 
 function reviewError(message, diagnostic) {

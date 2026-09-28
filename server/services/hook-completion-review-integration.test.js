@@ -371,9 +371,10 @@ test('JSON reviewer verdict blocks and then approves the same main loop', async 
         userPrompt: '请完成报告。', sdkOptions: { cwd: process.cwd() },
         queryFn: async function* () {
           calls += 1;
-          yield { type: 'result', subtype: 'success', result: JSON.stringify(calls === 1
+          const verdict = calls === 1
             ? { complete: false, reason: '报告缺少结论。', nextStep: '补充结论章节。' }
-            : { complete: true, reason: '结论已补充。', nextStep: '' }) };
+            : { complete: true, reason: '结论已补充。', nextStep: '' };
+          yield { type: 'result', subtype: 'success', result: `<think>正在核查。</think>\n${JSON.stringify(verdict)}` };
         },
       }),
     });
