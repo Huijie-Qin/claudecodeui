@@ -32,7 +32,7 @@ print(json.dumps(files))
 const exec = promisify(execFile);
 const AUTH_KEYS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL'];
 
-export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvironment, runQuery, env = process.env,
+export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvironment, runQuery, env = process.env, enforceCostBudget = false,
   docker = resolveEvaluationSandboxConfig(env).docker, image = resolveEvaluationSandboxConfig(env).image,
   autoBuild = resolveEvaluationSandboxConfig(env).autoBuild,
   autoPull = resolveEvaluationSandboxConfig(env).autoPull && image === resolveEvaluationSandboxConfig(env).image,
@@ -53,10 +53,12 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
   }
   async function modelCall({ scope, prompt, systemPrompt, signal, tools = [], onText = () => {}, budget, model, outputSchema, execution, onToolEvent = () => {} }) {
     if (signal?.aborted) throw signal.reason || fail('Cancelled');
-    if (budget.remainingUsd <= 0 || budget.calls >= 1500) throw fail('Model budget exhausted', 'EVAL_LIMIT_EXCEEDED');
+    if (budget.calls >= 1500) throw fail('模型调用次数已达到上限', 'EVAL_LIMIT_EXCEEDED');
+    if (enforceCostBudget && budget.remainingUsd <= 0) throw fail('Model budget exhausted', 'EVAL_LIMIT_EXCEEDED');
     budget.calls++;
-    const reserved = Math.min(2, budget.remainingUsd);
-    budget.remainingUsd -= reserved;
+    // Skill creation still opts into its existing budget; evaluations only track usage.
+    const reserved = enforceCostBudget ? Math.min(2, budget.remainingUsd) : null;
+    if (enforceCostBudget) budget.remainingUsd -= reserved;
     const { auth, model: defaultModel } = await profile(scope);
     const home = await fs.mkdtemp(path.join(os.tmpdir(), `ccui-eval-model-${scope.id || 'standalone'}-`));
     const controller = new AbortController();
@@ -82,7 +84,8 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
           || (Object.keys(execution.mcpServers).some(server => name.startsWith(`mcp__${server}__`)) && execution.access.isAllowed(name))))
           ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'Tool unavailable in evaluations' },
         mcpServers: { ...execution?.mcpServers, ...(tools.length ? { [brokerName]: sdk.createSdkMcpServer({ name: brokerName, version: '1.0.0', tools }) } : {}) },
-        model: model || defaultModel, systemPrompt, maxTurns: 24, maxBudgetUsd: reserved,
+        model: model || defaultModel, systemPrompt, maxTurns: 24,
+        ...(enforceCostBudget ? { maxBudgetUsd: reserved } : {}),
         abortController: controller, includePartialMessages: false,
         ...(outputSchema ? { outputFormat: { type: 'json_schema', schema: outputSchema } } : {}),
         ...(execution ? { pathToClaudeCodeExecutable: 'claude' } : {}),
@@ -104,11 +107,16 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
         }
         if (event.type === 'result') result = event;
       }
+      const cost = result?.total_cost_usd;
+      if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0) {
+        budget.costUsd += cost;
+        if (enforceCostBudget) budget.remainingUsd += reserved - cost;
+      } else {
+        budget.costIncomplete = true;
+        if (enforceCostBudget && result?.subtype === 'success') throw fail('Model usage is unavailable; stopping to enforce the job budget', 'EVAL_USAGE_UNAVAILABLE');
+      }
       if (!result || result.is_error || result.subtype !== 'success') throw fail('Model execution did not complete successfully', 'EVAL_MODEL_ERROR');
-      const cost = result.total_cost_usd;
-      if (typeof cost === 'number' && Number.isFinite(cost)) { budget.remainingUsd += reserved - cost; budget.costUsd += cost; }
-      else throw fail('Model usage is unavailable; stopping to enforce the job budget', 'EVAL_USAGE_UNAVAILABLE');
-      if (budget.remainingUsd < 0) throw fail('Model budget exhausted', 'EVAL_LIMIT_EXCEEDED');
+      if (enforceCostBudget && budget.remainingUsd < 0) throw fail('Model budget exhausted', 'EVAL_LIMIT_EXCEEDED');
       return { text: result.result || text, structured: result.structured_output, model: model || defaultModel };
     } finally {
       clearTimeout(timer); signal?.removeEventListener('abort', abort);

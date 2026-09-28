@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { createEvaluationRuntime } from './runtime.js';
 
-const budget = () => ({ remainingUsd: 5, costUsd: 0, calls: 0 });
+const budget = () => ({ costUsd: 0, calls: 0 });
 test('SDK native executables launch directly with the isolated environment', async () => {
   const runtime = createEvaluationRuntime({ resolveEnvironment: () => ({ ANTHROPIC_API_KEY: 'test-key' }), runQuery: ({ options }) => (async function* () {
     const child = options.spawnClaudeCodeProcess({ command: '/bin/sh', args: ['-c', 'printf native-sdk-launch'], signal: options.abortController.signal });
@@ -19,7 +19,7 @@ test('SDK native executables launch directly with the isolated environment', asy
   })() });
   assert.equal((await runtime.modelCall({ scope: {}, prompt: 'Test', budget: budget() })).text, 'native-sdk-launch');
 });
-test('model calls expose no native tools/settings and require reported usage', async () => {
+test('review model calls expose no native tools/settings and track reported usage', async () => {
   let observed;
   const runtime = createEvaluationRuntime({ resolveEnvironment: async () => ({ ANTHROPIC_API_KEY: 'test-key', PRIVATE_SETTING: 'never-inherit' }), runQuery: ({ options }) => {
     observed = options;
@@ -59,4 +59,43 @@ test('sandbox collects artifacts from bounded tmpfs and always removes the conta
 test('missing runtime configuration fails before any execution', async () => {
   const runtime = createEvaluationRuntime({ image: '', resolveEnvironment: () => ({}) });
   await assert.rejects(runtime.preflight({}), (e) => e.code === 'EVAL_RUNTIME_UNAVAILABLE');
+});
+
+test('evaluations omit the SDK cost limit and ignore exhausted legacy budgets', async () => {
+  const runtime = createEvaluationRuntime({ resolveEnvironment: () => ({ ANTHROPIC_API_KEY: 'test-key' }), runQuery: ({ options }) => {
+    assert.equal(Object.hasOwn(options, 'maxBudgetUsd'), false);
+    assert.equal(options.maxTurns, 24);
+    return (async function* () { yield { type: 'result', subtype: 'success', result: 'OK', total_cost_usd: 12 }; })();
+  } });
+  const usage = { remainingUsd: 0, costUsd: 0, calls: 0 };
+  for (let i = 0; i < 2; i++) {
+    assert.equal((await runtime.modelCall({ scope: {}, prompt: 'Test', budget: usage })).text, 'OK');
+  }
+  assert.equal(usage.costUsd, 24);
+  assert.equal(usage.calls, 2);
+});
+
+test('unavailable cost statistics do not interrupt successful evaluations', async () => {
+  for (const cost of [undefined, null, 'unknown', NaN, Infinity, -1]) {
+    const usage = { costUsd: 0, calls: 0 };
+    const runtime = createEvaluationRuntime({ resolveEnvironment: () => ({ ANTHROPIC_API_KEY: 'test-key' }), runQuery: () =>
+      (async function* () { yield { type: 'result', subtype: 'success', result: 'OK', total_cost_usd: cost }; })(),
+    });
+    assert.equal((await runtime.modelCall({ scope: {}, prompt: 'Test', budget: usage })).text, 'OK');
+    assert.equal(usage.costUsd, 0);
+    assert.equal(usage.costIncomplete, true);
+  }
+});
+
+test('model-call count and explicit non-evaluation budgets remain enforced', async () => {
+  const runtime = createEvaluationRuntime({ runQuery: () => assert.fail('No model should run') });
+  await assert.rejects(runtime.modelCall({ scope: {}, prompt: 'Test', budget: { costUsd: 0, calls: 1500 } }), { code: 'EVAL_LIMIT_EXCEEDED' });
+  const limited = createEvaluationRuntime({ enforceCostBudget: true, resolveEnvironment: () => ({ ANTHROPIC_API_KEY: 'test-key' }), runQuery: ({ options }) => {
+    assert.equal(options.maxBudgetUsd, 2);
+    return (async function* () { yield { type: 'result', subtype: 'success', result: 'OK', total_cost_usd: 0.5 }; })();
+  } });
+  const usage = { remainingUsd: 10, calls: 0, costUsd: 0 };
+  await limited.modelCall({ scope: {}, prompt: 'Test', budget: usage });
+  assert.equal(usage.remainingUsd, 9.5);
+  await assert.rejects(limited.modelCall({ scope: {}, prompt: 'Test', budget: { remainingUsd: 0, costUsd: 0, calls: 0 } }), { code: 'EVAL_LIMIT_EXCEEDED' });
 });

@@ -4,7 +4,7 @@ export type EvaluationJob = {
   id: string; generation: number; version?: number; name: string; mode: 'run-all' | 'optimize'; status: string; phase: string;
   outcome: string; iteration: number; maxIterations: number; stopReason?: string; error?: string;
   current?: boolean; writebackStatus: string; createdAt: string;
-  budget: { costUsd: number; remainingUsd: number; calls: number };
+  budget: { costUsd: number; calls: number; costIncomplete?: boolean };
   rounds: Array<{ round: number; cases: CaseRun[]; outcome?: string }>;
 };
 export type CaseData = { generationJob?: EvaluationJob | null; document: { skill_name: string; evals: EvalCase[] }; revision: string; contentHash: string; protectedIds: number[]; canManage?: boolean };

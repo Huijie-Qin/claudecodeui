@@ -8,7 +8,7 @@ const runtime = createEvaluationRuntime({ resolveEnvironment: () => process.env 
 const scope = { id: `smoke-${Date.now()}` };
 const runtimeProfile = await runtime.preflight(scope);
 const controller = new AbortController();
-const budget = { remainingUsd: 2, costUsd: 0, calls: 0 };
+const budget = { costUsd: 0, calls: 0 };
 const files = { 'SKILL.md': Buffer.from('---\nname: smoke\ndescription: Test the evaluation sandbox\n---\nUse the shell tool to write the requested file.').toString('base64') };
 const testCase = {
   prompt: "Use the shell tool to run: printf 'sandbox-ok' > /output/check.txt . Then reply done.",

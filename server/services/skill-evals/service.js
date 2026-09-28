@@ -52,7 +52,7 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
     const job = { id, ...scope, name: snapshot.context.name, ...request, requestHash, runtimeProfile,
       createdAt: new Date(now()).toISOString(), status: 'queued', phase: 'snapshot', outcome: 'not_evaluated',
       iteration: 0, rounds: [], writebackStatus: 'unchanged', expectedHash: snapshot.contentHash, expectedManagedHash: snapshot.managedHash,
-      budget: { remainingUsd: Number(process.env.SKILL_EVAL_MAX_COST_USD) || 10, costUsd: 0, calls: 0 },
+      budget: { costUsd: 0, calls: 0 },
     };
     await atomicJson(path.join(dir, 'snapshot.json'), { files: snapshot.files, document: snapshot.document });
     try {
@@ -266,7 +266,7 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
     if (root === workspaceRoot || root.startsWith(`${workspaceRoot}${path.sep}`)) throw fail('Evaluation storage must be outside the workspace', 'EVAL_STORAGE_CONFIGURATION', 503);
     const job = { id: randomUUID(), ...scope, requestId, requestHash, expectedRevision, mode: 'generate-cases',
       status: 'queued', phase: 'snapshot', outcome: 'not_evaluated', iteration: 0, maxIterations: 0, rounds: [],
-      createdAt: new Date(now()).toISOString(), budget: { remainingUsd: 2, costUsd: 0, calls: 0 } };
+      createdAt: new Date(now()).toISOString(), budget: { costUsd: 0, calls: 0 } };
     await atomicJson(path.join(jobDir(job.id), 'snapshot.json'), { files: snapshot.files, document: snapshot.document });
     try { const accepted = repository.startAux(job); if (accepted.id !== job.id) await fs.rm(jobDir(job.id), { recursive: true, force: true }); return publicJob(accepted); }
     catch (e) { await fs.rm(jobDir(job.id), { recursive: true, force: true }); throw e; }

@@ -94,7 +94,7 @@ test('case MCP calls honor user restrictions, record evidence and clean up witho
   });
   const result = await runtime.runCase({ scope: { id: 'job', workspacePath: f.workspace },
     files: { 'SKILL.md': Buffer.from('Use reports MCP').toString('base64') }, testCase: { prompt: 'Query reports', files: [] },
-    budget: { remainingUsd: 5, calls: 0, costUsd: 0 }, runtimeProfile: { model: 'test', image: 'session-image' } });
+    budget: { calls: 0, costUsd: 0 }, runtimeProfile: { model: 'test', image: 'session-image' } });
   assert.equal(result.events.find(event => event.kind === 'tool_use').tool, 'mcp__reports__query');
   assert.equal(typeof result.events.find(event => event.kind === 'tool_use').input, 'string');
   assert.equal(result.events.find(event => event.kind === 'tool_result').parent, result.events.find(event => event.kind === 'tool_use').id);
@@ -111,7 +111,7 @@ test('MCP permission checks reject disabled tools even when the server is config
     assert.equal((await options.canUseTool('mcp__reports__read', {})).behavior, 'allow');
     yield { type: 'result', subtype: 'success', result: 'ok', total_cost_usd: 0 };
   })() });
-  await runtime.modelCall({ scope: {}, prompt: 'test', budget: { remainingUsd: 2, calls: 0, costUsd: 0 }, execution: {
+  await runtime.modelCall({ scope: {}, prompt: 'test', budget: { calls: 0, costUsd: 0 }, execution: {
     workspace: '/tmp', env: {}, spawn: () => {}, mcpServers: { reports: { type: 'http', url: 'http://test.invalid' } },
     access: { disallowedTools: ['mcp__reports__write'], isAllowed: name => name !== 'mcp__reports__write' },
   } });
@@ -135,7 +135,7 @@ test('model failure and cancellation still remove the temporary case container',
       runQuery: () => (async function* () { if (cancel) controller.abort(new Error('cancelled')); throw new Error('model failed'); })(),
     });
     await assert.rejects(runtime.runCase({ scope: { id: 'cleanup' }, files: { 'SKILL.md': 'eA==' }, testCase: { prompt: 'test' }, signal: controller.signal,
-      budget: { remainingUsd: 2, calls: 0, costUsd: 0 }, runtimeProfile: { image: 'session-image' } }));
+      budget: { calls: 0, costUsd: 0 }, runtimeProfile: { image: 'session-image' } }));
     assert.ok(calls.some(args => args[0] === 'rm'));
     const workspaceMount = calls.find(args => args[0] === 'run').find(value => value.endsWith('dst=/workspace'));
     await assert.rejects(fs.access(workspaceMount.split('src=')[1].split(',dst=')[0]), { code: 'ENOENT' });
