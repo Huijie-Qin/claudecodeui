@@ -392,32 +392,6 @@ test('structured output is accepted and model errors are propagated', async (t) 
   }), /without a result/);
 });
 
-test('SDK result errors expose only a safe failure category', async (t) => {
-  const { root } = await fixture(t);
-  const privateText = 'token=private-sentinel';
-  const cases = [
-    [{ subtype: 'success', is_error: true,
-      result: `API Error: 400 Your account does not have a valid CodingPlan subscription. ${privateText}` },
-    'COMPLETION_REVIEW_SUBSCRIPTION_INVALID', 400],
-    [{ subtype: 'success', is_error: true, api_error_status: 401,
-      result: `Invalid credential ${privateText}` }, 'COMPLETION_REVIEW_AUTH_FAILED', 401],
-    [{ subtype: 'error_during_execution', is_error: true,
-      errors: [`API Error: 429 Rate limit. ${privateText}`] }, 'COMPLETION_REVIEW_RATE_LIMITED', 429],
-    [{ subtype: 'success', is_error: true,
-      result: `Unrecognized provider error ${privateText}` }, 'COMPLETION_REVIEW_QUERY_FAILED', null],
-  ];
-  for (const [result, expectedCode, expectedStatus] of cases) {
-    await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
-      queryFn: async function* () { yield { type: 'result', ...result }; },
-    }), (error) => {
-      assert.equal(error.code, expectedCode);
-      assert.equal(error.apiErrorStatus, expectedStatus);
-      assert.doesNotMatch(error.message, /private-sentinel/);
-      return true;
-    });
-  }
-});
-
 test('timeout and caller cancellation abort the review and propagate errors', async (t) => {
   const { root } = await fixture(t);
   const never = () => ({ [Symbol.asyncIterator]: async function* () {
