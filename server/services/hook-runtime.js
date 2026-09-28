@@ -5,6 +5,7 @@ import { db as defaultDatabase } from '../database/db.js';
 
 import { isRequiredHook } from './claude-hook-policy.js';
 import { isBuiltinHookSkillId, loadBuiltinHookSkill } from './hook-builtin-skills.js';
+import { completionReviewFailure } from './hook-completion-review.js';
 import { allowedClaudeOutputs, hookConfigService } from './hook-configs.js';
 import { callHookMcpTool } from './hook-mcp-client.js';
 import { executeHookScript } from './hook-script-executor.js';
@@ -546,15 +547,12 @@ async function executePostActions({
             throw new Error('Completion reviewer returned an invalid verdict');
           }
         } catch (error) {
-          const failure = error?.code === 'COMPLETION_REVIEW_TIMEOUT'
-            ? '审查模型超时'
-            : error?.name === 'AbortError'
-              ? '审查已中止'
-              : '审查模型调用失败或返回无效结果';
+          const failure = completionReviewFailure(error);
           verdict = {
             complete: false,
-            reason: `模型验收未能执行：${failure}。`,
-            nextStep: '检查审查模型和 Hook 配置后继续任务。',
+            reason: failure.reason,
+            nextStep: failure.nextStep,
+            diagnostic: failure.diagnostic,
             failed: true,
           };
         }
@@ -578,6 +576,7 @@ async function executePostActions({
         reviewNumber,
         maxReviews,
         failed: verdict.failed === true,
+        ...(verdict.diagnostic ? { diagnostic: verdict.diagnostic } : {}),
         ...(action.config?.validationResultPath ? {
           validationResult: validationResult || null,
           ...(validationError ? { validationError } : {}),

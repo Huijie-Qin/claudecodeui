@@ -13,6 +13,14 @@ const MAX_ARTIFACT_PATH_CHARS = 500;
 const REVIEW_TOOLS = Object.freeze(['Read', 'Glob', 'Grep']);
 const GLOB_TOKEN = /[*?\[\]{}]/;
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+const REVIEW_RESULT_SUBTYPES = new Set(['success', 'error_during_execution',
+  'error_max_turns', 'error_max_budget_usd', 'error_max_structured_output_retries']);
+const REVIEW_MODEL_SOURCES = new Set(['hook_config', 'user_env', 'main_model', 'sdk_default']);
+const REVIEW_FAILURE_CODES = new Set(['subscription_unavailable', 'authentication_failed',
+  'rate_limited', 'model_unavailable', 'provider_http_error', 'provider_error',
+  'max_turns', 'max_budget', 'structured_output_retries', 'sdk_exception',
+  'executable_missing', 'connection_failed', 'timeout', 'cancelled',
+  'invalid_json', 'invalid_verdict', 'response_too_long', 'empty_output', 'no_result']);
 
 const REVIEW_SYSTEM_PROMPT = `你是独立的任务完成验收代理。请判断主代理是否已经完成当前用户的任务。
 当前用户任务与额外验收标准必须全部满足。交付物路径只是核查线索，不代表文件已存在或要求已满足。请独立使用只读工具核实必要证据。
@@ -115,21 +123,121 @@ function selectEvidence(entries) {
 function parseVerdict(raw) {
   let value = raw;
   if (typeof value === 'string') {
-    if (value.length > MAX_REVIEW_RESPONSE_CHARS) throw new Error('Completion reviewer response is too long');
-    try { value = JSON.parse(value.trim()); } catch { throw new Error('Completion reviewer returned invalid JSON'); }
+    if (value.length > MAX_REVIEW_RESPONSE_CHARS) {
+      throw reviewError('Completion reviewer response is too long', { stage: 'response_parse', code: 'response_too_long' });
+    }
+    try { value = JSON.parse(value.trim()); } catch {
+      throw reviewError('Completion reviewer returned invalid JSON', { stage: 'response_parse', code: 'invalid_json' });
+    }
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)
       || Object.keys(value).sort().join(',') !== 'complete,nextStep,reason'
       || typeof value.complete !== 'boolean'
       || typeof value.reason !== 'string' || typeof value.nextStep !== 'string') {
-    throw new Error('Completion reviewer returned an invalid verdict');
+    throw reviewError('Completion reviewer returned an invalid verdict', { stage: 'response_parse', code: 'invalid_verdict' });
   }
   const reason = value.reason.trim();
   const nextStep = value.nextStep.trim();
   if (!reason || reason.length > 4_000 || nextStep.length > 4_000 || (!value.complete && !nextStep)) {
-    throw new Error('Completion reviewer returned an invalid verdict');
+    throw reviewError('Completion reviewer returned an invalid verdict', { stage: 'response_parse', code: 'invalid_verdict' });
   }
   return { complete: value.complete, reason, nextStep };
+}
+
+function reviewError(message, diagnostic) {
+  const error = new Error(message);
+  error.reviewDiagnostic = diagnostic;
+  return error;
+}
+
+function modelSource(model, sdkOptions) {
+  if (typeof model === 'string' && model.trim()) return 'hook_config';
+  if (typeof sdkOptions?.env?.ANTHROPIC_MODEL === 'string'
+      && sdkOptions.env.ANTHROPIC_MODEL.trim()) return 'user_env';
+  return typeof sdkOptions?.model === 'string' && sdkOptions.model.trim() ? 'main_model' : 'sdk_default';
+}
+
+function sdkFailureDiagnostic(value, stage, source) {
+  const raw = [value?.result, ...(Array.isArray(value?.errors) ? value.errors : []), value?.message]
+    .filter((part) => typeof part === 'string').join('\n').slice(0, 8_000);
+  const suppliedStatus = value?.api_error_status;
+  const statusMatch = raw.match(/\b(?:API Error|HTTP(?: status)?|status(?: code)?)\s*[:=]?\s*([45]\d\d)\b/i);
+  const parsedStatus = Number(statusMatch?.[1]);
+  const httpStatus = Number.isInteger(suppliedStatus) && suppliedStatus >= 400 && suppliedStatus <= 599
+    ? suppliedStatus : parsedStatus >= 400 && parsedStatus <= 599 ? parsedStatus : undefined;
+  const subtype = REVIEW_RESULT_SUBTYPES.has(value?.subtype) ? value.subtype : undefined;
+  let code = 'provider_error';
+  if (/CodingPlan|subscription|订阅/i.test(raw)
+      && /invalid|no valid|expir|not found|unavailable|无效|没有有效|过期|不存在|未开通/i.test(raw)) {
+    code = 'subscription_unavailable';
+  } else if (httpStatus === 401 || httpStatus === 403 || /invalid api key|unauthorized|authentication failed/i.test(raw)) {
+    code = 'authentication_failed';
+  } else if (httpStatus === 429 || /rate.?limit/i.test(raw)) {
+    code = 'rate_limited';
+  } else if (subtype === 'error_max_turns') {
+    code = 'max_turns';
+  } else if (subtype === 'error_max_budget_usd') {
+    code = 'max_budget';
+  } else if (subtype === 'error_max_structured_output_retries') {
+    code = 'structured_output_retries';
+  } else if (httpStatus === 404 || /model.{0,80}(?:not found|unavailable)/i.test(raw)) {
+    code = 'model_unavailable';
+  } else if (httpStatus) {
+    code = 'provider_http_error';
+  } else if (stage === 'sdk_call') {
+    code = value?.code === 'ENOENT' ? 'executable_missing'
+      : ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET'].includes(value?.code)
+        ? 'connection_failed' : 'sdk_exception';
+  }
+  return { stage, code, ...(httpStatus ? { httpStatus } : {}),
+    ...(subtype ? { subtype } : {}), modelSource: source };
+}
+
+/** Return only fixed, non-sensitive fields suitable for Hook feedback and audit records. */
+export function completionReviewFailure(error) {
+  const candidate = error?.reviewDiagnostic || (error?.code === 'COMPLETION_REVIEW_TIMEOUT'
+    ? { stage: 'timeout', code: 'timeout' }
+    : error?.name === 'AbortError' ? { stage: 'cancelled', code: 'cancelled' } : null);
+  const stages = new Set(['sdk_result', 'sdk_call', 'response_parse', 'no_result', 'timeout', 'cancelled']);
+  const diagnostic = candidate && stages.has(candidate.stage) && REVIEW_FAILURE_CODES.has(candidate.code)
+    ? { stage: candidate.stage, code: candidate.code,
+      ...(Number.isInteger(candidate.httpStatus) && candidate.httpStatus >= 400 && candidate.httpStatus <= 599
+        ? { httpStatus: candidate.httpStatus } : {}),
+      ...(REVIEW_RESULT_SUBTYPES.has(candidate.subtype) ? { subtype: candidate.subtype } : {}),
+      ...(REVIEW_MODEL_SOURCES.has(candidate.modelSource) ? { modelSource: candidate.modelSource } : {}) }
+    : { stage: 'sdk_call', code: 'sdk_exception' };
+  const details = {
+    subscription_unavailable: '模型接口的订阅不可用或已过期',
+    authentication_failed: '模型接口鉴权失败',
+    rate_limited: '模型接口触发限流',
+    model_unavailable: '模型不可用或不存在',
+    provider_http_error: '模型接口返回错误',
+    provider_error: '审查模型执行失败',
+    max_turns: '审查模型达到最大轮次',
+    max_budget: '审查模型达到预算上限',
+    structured_output_retries: '审查模型结构化输出重试耗尽',
+    sdk_exception: '审查模型调用失败或返回无效结果',
+    executable_missing: '审查模型执行程序不存在',
+    connection_failed: '审查模型连接失败',
+    timeout: '审查模型超时',
+    cancelled: '审查已中止',
+    invalid_json: '审查模型返回的不是有效 JSON',
+    invalid_verdict: '审查模型返回的验收结果字段无效',
+    response_too_long: '审查模型返回内容过长',
+    empty_output: '审查模型未返回验收内容',
+    no_result: '审查模型会话结束但未返回结果',
+  };
+  const sourceLabel = { hook_config: 'Hook 配置', user_env: '用户 ANTHROPIC_MODEL',
+    main_model: '主会话模型', sdk_default: 'SDK 默认模型' }[diagnostic.modelSource];
+  const status = diagnostic.httpStatus ? ` HTTP ${diagnostic.httpStatus}` : '';
+  const source = sourceLabel ? `；模型来源：${sourceLabel}` : '';
+  return { diagnostic, reason: `模型验收未能执行：${details[diagnostic.code]}${status}${source}。`,
+    nextStep: diagnostic.code === 'subscription_unavailable' ? '检查模型接口订阅状态后重试。'
+      : diagnostic.code === 'authentication_failed' ? '检查模型接口凭据后重试。'
+        : diagnostic.code === 'rate_limited' ? '稍后重试或检查模型接口限流配置。'
+          : diagnostic.code === 'invalid_json' || diagnostic.code === 'invalid_verdict'
+            || diagnostic.code === 'empty_output' ? '检查验收模型是否能按要求返回完整 JSON。'
+              : '检查审查模型和 Hook 配置后继续任务。' };
 }
 
 function abortError(signal) {
@@ -362,6 +470,7 @@ export async function reviewHookCompletion({
   const controller = new AbortController();
   const options = reviewerOptions({ model, sdkOptions, workspaceRoot,
     executionWorkspaceRoot: guestWorkspaceRoot, abortController: controller });
+  const source = modelSource(model, sdkOptions);
   const runQuery = queryFn || (await import('@anthropic-ai/claude-agent-sdk')).query;
   const effectiveTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0
     ? Math.min(Math.floor(timeoutMs), MAX_REVIEW_TIMEOUT_MS) : DEFAULT_REVIEW_TIMEOUT_MS;
@@ -384,16 +493,28 @@ export async function reviewHookCompletion({
     close();
     rejectAbort(error);
   };
-  const onAbort = () => interrupt(abortError(signal));
+  const onAbort = () => {
+    const error = abortError(signal);
+    error.reviewDiagnostic = { stage: 'cancelled', code: 'cancelled', modelSource: source };
+    interrupt(error);
+  };
   signal?.addEventListener('abort', onAbort, { once: true });
   if (signal?.aborted) onAbort();
   const timeout = setTimeout(() => {
     const error = new Error('Completion reviewer timed out');
     error.code = 'COMPLETION_REVIEW_TIMEOUT';
+    error.reviewDiagnostic = { stage: 'timeout', code: 'timeout', modelSource: source };
     interrupt(error);
   }, effectiveTimeout);
   const consume = async () => {
-    iterator = await runQuery({ prompt, options });
+    try {
+      iterator = await runQuery({ prompt, options });
+    } catch (error) {
+      if (error instanceof Error) {
+        error.reviewDiagnostic = sdkFailureDiagnostic(error, 'sdk_call', source);
+      }
+      throw error;
+    }
     try {
       if (controller.signal.aborted) throw controller.signal.reason;
       let finalText = '';
@@ -408,15 +529,32 @@ export async function reviewHookCompletion({
         }
         if (message?.type === 'result') {
           if (message.is_error || (message.subtype && message.subtype !== 'success')) {
-            throw new Error('Completion reviewer model query failed');
+            throw reviewError('Completion reviewer model query failed',
+              sdkFailureDiagnostic(message, 'sdk_result', source));
           }
           completed = true;
           if (message.structured_output !== undefined) structured = message.structured_output;
           else if (!finalText && typeof message.result === 'string') finalText = message.result;
         }
       }
-      if (!completed) throw new Error('Completion reviewer ended without a result');
-      return parseVerdict(structured === undefined ? finalText : structured);
+      if (!completed) throw reviewError('Completion reviewer ended without a result',
+        { stage: 'no_result', code: 'no_result', modelSource: source });
+      if (structured === undefined && !finalText.trim()) {
+        throw reviewError('Completion reviewer returned no output',
+          { stage: 'response_parse', code: 'empty_output', modelSource: source });
+      }
+      try {
+        return parseVerdict(structured === undefined ? finalText : structured);
+      } catch (error) {
+        if (error?.reviewDiagnostic) error.reviewDiagnostic.modelSource = source;
+        throw error;
+      }
+    } catch (error) {
+      if (error instanceof Error && !error.reviewDiagnostic
+          && error.code !== 'COMPLETION_REVIEW_TIMEOUT' && error.name !== 'AbortError') {
+        error.reviewDiagnostic = sdkFailureDiagnostic(error, 'sdk_call', source);
+      }
+      throw error;
     } finally {
       close();
     }

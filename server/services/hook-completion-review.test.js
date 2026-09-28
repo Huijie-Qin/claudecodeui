@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { reviewHookCompletion } from './hook-completion-review.js';
+import { completionReviewFailure, reviewHookCompletion } from './hook-completion-review.js';
 import { createSessionConcurrencyLimiter } from './session-concurrency-limit.js';
 
 const complete = { complete: true, reason: '交付物已存在且满足要求。', nextStep: '' };
@@ -390,6 +390,60 @@ test('structured output is accepted and model errors are propagated', async (t) 
   await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
     queryFn: async function* () { yield { type: 'assistant', message: { content: [{ type: 'text', text: JSON.stringify(complete) }] } }; },
   }), /without a result/);
+});
+
+test('review failures expose safe SDK status, category and selected model source', async (t) => {
+  const { root } = await fixture(t);
+  const privateText = 'token=private-sentinel account=123456';
+  let failure;
+  try {
+    await reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务', model: '',
+      sdkOptions: { cwd: root, model: 'main-model', env: { ANTHROPIC_MODEL: 'user-model' } },
+      queryFn: async function* () {
+        yield { type: 'result', subtype: 'success', is_error: true, api_error_status: 400,
+          result: `API Error: 400. no valid CodingPlan subscription. ${privateText}` };
+      },
+    });
+  } catch (error) { failure = completionReviewFailure(error); }
+  assert.deepEqual(failure.diagnostic, { stage: 'sdk_result', code: 'subscription_unavailable',
+    httpStatus: 400, subtype: 'success', modelSource: 'user_env' });
+  assert.match(failure.reason, /HTTP 400/);
+  assert.match(failure.reason, /ANTHROPIC_MODEL/);
+  assert.doesNotMatch(JSON.stringify(failure), /private-sentinel|123456|user-model/);
+
+  const cases = [
+    [{ subtype: 'error_during_execution', is_error: true, api_error_status: 401 }, 'authentication_failed'],
+    [{ subtype: 'error_during_execution', is_error: true, errors: ['API Error: 429'] }, 'rate_limited'],
+    [{ subtype: 'error_max_turns', is_error: true }, 'max_turns'],
+  ];
+  for (const [result, expectedCode] of cases) {
+    await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+      queryFn: async function* () { yield { type: 'result', ...result }; },
+    }), (error) => completionReviewFailure(error).diagnostic.code === expectedCode);
+  }
+});
+
+test('review failures distinguish empty, malformed and absent results', async (t) => {
+  const { root } = await fixture(t);
+  const cases = [
+    [async function* () { yield { type: 'result', subtype: 'success' }; }, 'empty_output'],
+    [async function* () {
+      yield { type: 'result', subtype: 'success', result: 'not json' };
+    }, 'invalid_json'],
+    [async function* () { yield { type: 'assistant', message: { content: [] } }; }, 'no_result'],
+  ];
+  for (const [queryFn, expectedCode] of cases) {
+    await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务', queryFn }),
+      (error) => completionReviewFailure(error).diagnostic.code === expectedCode);
+  }
+  await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: () => { const error = new Error('secret=private-sentinel'); error.code = 'ENOENT'; throw error; },
+  }), (error) => {
+    const failure = completionReviewFailure(error);
+    assert.equal(failure.diagnostic.code, 'executable_missing');
+    assert.doesNotMatch(JSON.stringify(failure), /private-sentinel/);
+    return true;
+  });
 });
 
 test('timeout and caller cancellation abort the review and propagate errors', async (t) => {

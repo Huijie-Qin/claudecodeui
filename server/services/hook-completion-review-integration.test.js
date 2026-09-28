@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 
 import { HOOK_CONFIG_SCHEMA_SQL } from '../database/hook-config-schema.js';
 
+import { reviewHookCompletion } from './hook-completion-review.js';
 import { normalizeHookInput } from './hook-configs.js';
 import { createHookRuntimeSession } from './hook-runtime.js';
 import { subagentHookTimeoutSeconds } from './hook-subagent-mcp-loop.js';
@@ -306,6 +307,57 @@ test('review errors block, then fail explicitly at the bounded review limit', as
     assert.match(second.stopReason, /2 次/);
     assert.deepEqual(database.prepare('SELECT status FROM hook_executions ORDER BY rowid').all()
       .map((row) => row.status), ['failed', 'failed']);
+  } finally { database.close(); }
+});
+
+test('Hook audit records safe reviewer diagnostics without upstream error text', async () => {
+  const database = databaseFixture();
+  try {
+    const runtime = createHookRuntimeSession({ hooks: [reviewHook(2)], database, userId: 1,
+      reviewCompletion: async () => {
+        const error = new Error('token=private-sentinel account=123456');
+        error.reviewDiagnostic = { stage: 'sdk_result', code: 'authentication_failed',
+          httpStatus: 401, subtype: 'error_during_execution', modelSource: 'user_env',
+          upstreamText: 'private-sentinel' };
+        throw error;
+      },
+    });
+    const result = await runtime.executeHook(reviewHook(2),
+      { hook_event_name: 'Stop', session_id: 'main' });
+    assert.equal(result.decision, 'block');
+    assert.match(result.reason, /鉴权失败.*HTTP 401.*ANTHROPIC_MODEL/);
+    const row = database.prepare('SELECT actions_json FROM hook_executions').get();
+    const output = JSON.parse(row.actions_json).review.output;
+    assert.deepEqual(output.diagnostic, { stage: 'sdk_result', code: 'authentication_failed',
+      httpStatus: 401, subtype: 'error_during_execution', modelSource: 'user_env' });
+    assert.doesNotMatch(row.actions_json, /private-sentinel|123456|upstreamText/);
+  } finally { database.close(); }
+});
+
+test('SDK result failure reaches the visible Hook output with a blank configured model', async () => {
+  const database = databaseFixture();
+  try {
+    const hook = reviewHook(2);
+    const runtime = createHookRuntimeSession({ hooks: [hook], database, userId: 1,
+      reviewCompletion: (request) => reviewHookCompletion({ ...request,
+        userPrompt: '请完成报告。', sdkOptions: { cwd: process.cwd(),
+          env: { ANTHROPIC_MODEL: 'private-model-id' } },
+        queryFn: async function* () {
+          yield { type: 'result', subtype: 'success', is_error: true, api_error_status: 400,
+            result: 'API Error: 400. no valid CodingPlan subscription. token=private-sentinel' };
+        },
+      }),
+    });
+    const response = await runtime.executeHook(hook,
+      { hook_event_name: 'Stop', session_id: 'main' });
+    assert.equal(response.decision, 'block');
+    assert.match(response.reason, /订阅不可用或已过期 HTTP 400；模型来源：用户 ANTHROPIC_MODEL/);
+    const audit = database.prepare('SELECT actions_json FROM hook_executions').get().actions_json;
+    assert.deepEqual(JSON.parse(audit).review.output.diagnostic, {
+      stage: 'sdk_result', code: 'subscription_unavailable', httpStatus: 400,
+      subtype: 'success', modelSource: 'user_env',
+    });
+    assert.doesNotMatch(response.reason + audit, /private-sentinel|private-model-id/);
   } finally { database.close(); }
 });
 
