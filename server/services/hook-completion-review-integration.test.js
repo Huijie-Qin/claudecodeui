@@ -361,7 +361,7 @@ test('SDK result failure reaches the visible Hook output with a blank configured
   } finally { database.close(); }
 });
 
-test('plain-text reviewer verdict blocks and then approves the same main loop', async () => {
+test('JSON reviewer verdict blocks and then approves the same main loop', async () => {
   const database = databaseFixture();
   try {
     const hook = reviewHook(3);
@@ -371,9 +371,9 @@ test('plain-text reviewer verdict blocks and then approves the same main loop', 
         userPrompt: '请完成报告。', sdkOptions: { cwd: process.cwd() },
         queryFn: async function* () {
           calls += 1;
-          yield { type: 'result', subtype: 'success', result: calls === 1
-            ? 'STATUS: FAIL\nREASON: 报告缺少结论。\nNEXT_STEP: 补充结论章节。'
-            : 'STATUS: PASS\nREASON: 结论已补充。\nNEXT_STEP:' };
+          yield { type: 'result', subtype: 'success', result: JSON.stringify(calls === 1
+            ? { complete: false, reason: '报告缺少结论。', nextStep: '补充结论章节。' }
+            : { complete: true, reason: '结论已补充。', nextStep: '' }) };
         },
       }),
     });
