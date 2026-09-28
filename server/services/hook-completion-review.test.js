@@ -394,6 +394,18 @@ test('review extracts a unique JSON verdict from reasoning text and prefers the 
       yield { type: 'result', subtype: 'success', result: `说明：\n${JSON.stringify(complete)}` };
     },
   }), complete);
+  assert.deepEqual(await reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () {
+      yield { type: 'result', subtype: 'success',
+        result: `思考草稿中有未闭合的 {"note": 和引号 "。\n${JSON.stringify(incomplete)}\n核查结束。` };
+    },
+  }), incomplete);
+  assert.deepEqual(await reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () {
+      yield { type: 'result', subtype: 'success',
+        result: `草稿 {"note": ${'思考中。'.repeat(5_000)}\n${JSON.stringify(complete)}` };
+    },
+  }), complete);
   const nested = { complete: false, reason: '字段 "{name}" 缺失', nextStep: '补充 "{name}"。' };
   assert.deepEqual(await reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
     queryFn: async function* () {
@@ -415,6 +427,11 @@ test('review extracts a unique JSON verdict from reasoning text and prefers the 
       yield { type: 'result', subtype: 'success', result: `说明：\n${JSON.stringify({ ...complete, extra: 1 })}` };
     },
   }), (error) => completionReviewFailure(error).diagnostic.code === 'invalid_verdict');
+  await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () {
+      yield { type: 'result', subtype: 'success', result: `${'{"note":1}\n'.repeat(129)}${JSON.stringify(complete)}` };
+    },
+  }), (error) => completionReviewFailure(error).diagnostic.code === 'response_too_long');
 });
 
 test('review requires a JSON verdict with exactly the accepted fields', async (t) => {

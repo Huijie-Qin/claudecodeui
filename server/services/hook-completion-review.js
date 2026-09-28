@@ -7,6 +7,8 @@ const MAX_EVIDENCE_CHARS = 24_000;
 const MAX_REVIEW_RESPONSE_CHARS = 16_000;
 const MAX_REVIEW_TEXT_CHARS = 64_000;
 const MAX_REVIEW_AUDIT_CHARS = 16_000;
+const MAX_REVIEW_JSON_CANDIDATES = 128;
+const MAX_REVIEW_SCAN_CHARS = 1_000_000;
 const MAX_REVIEW_TIMEOUT_MS = 90_000;
 const DEFAULT_REVIEW_TIMEOUT_MS = 80_000;
 const MAX_CRITERIA_CHARS = 8_000;
@@ -147,43 +149,53 @@ function extractVerdictJson(text) {
   const verdicts = [];
   let foundJson = false;
   let oversized = false;
-  let start = -1;
-  let depth = 0;
-  let quoted = false;
-  let escaped = false;
-  for (let index = 0; index < content.length; index += 1) {
-    const char = content[index];
-    if (depth === 0) {
-      if (char === '{') { start = index; depth = 1; }
-      continue;
+  let scanned = 0;
+  let candidates = 0;
+  // Scan each possible object independently so unmatched braces or quotes in prose cannot hide the final JSON.
+  for (const match of content.matchAll(/\{\s*"/g)) {
+    candidates += 1;
+    if (candidates > MAX_REVIEW_JSON_CANDIDATES) {
+      throw reviewError('Completion reviewer response has too many JSON candidates',
+        { stage: 'response_parse', code: 'response_too_long' });
     }
-    if (quoted) {
-      if (escaped) escaped = false;
-      else if (char === '\\') escaped = true;
-      else if (char === '"') quoted = false;
-      continue;
+    const start = match.index;
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    let close = -1;
+    for (let index = start; index < content.length; index += 1) {
+      scanned += 1;
+      if (scanned > MAX_REVIEW_SCAN_CHARS) {
+        throw reviewError('Completion reviewer response exceeded the JSON scan limit',
+          { stage: 'response_parse', code: 'response_too_long' });
+      }
+      const char = content[index];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') quoted = false;
+      } else if (char === '"') quoted = true;
+      else if (char === '{') depth += 1;
+      else if (char === '}' && --depth === 0) { close = index; break; }
     }
-    if (char === '"') quoted = true;
-    else if (char === '{') depth += 1;
-    else if (char === '}' && --depth === 0) {
-      const candidate = content.slice(start, index + 1);
-      if (candidate.length > MAX_REVIEW_RESPONSE_CHARS) { oversized = true; continue; }
-      try {
-        const parsed = JSON.parse(candidate);
-        foundJson = true;
-        const verdict = normalizeVerdict(parsed);
-        if (verdict) verdicts.push(verdict);
-      } catch { /* Keep scanning for the final verdict. */ }
-    }
+    if (close < 0) continue;
+    if (close - start + 1 > MAX_REVIEW_RESPONSE_CHARS) { oversized = true; continue; }
+    const candidate = content.slice(start, close + 1);
+    try {
+      const parsed = JSON.parse(candidate);
+      foundJson = true;
+      const verdict = normalizeVerdict(parsed);
+      if (verdict) verdicts.push(verdict);
+    } catch { /* Keep scanning for the final verdict. */ }
+  }
+  if (oversized) {
+    throw reviewError('Completion reviewer response is too long',
+      { stage: 'response_parse', code: 'response_too_long' });
   }
   if (verdicts.length === 1) return verdicts[0];
   if (verdicts.length > 1 || foundJson) {
     throw reviewError('Completion reviewer returned an ambiguous or invalid verdict',
       { stage: 'response_parse', code: 'invalid_verdict' });
-  }
-  if (oversized) {
-    throw reviewError('Completion reviewer response is too long',
-      { stage: 'response_parse', code: 'response_too_long' });
   }
   return null;
 }
