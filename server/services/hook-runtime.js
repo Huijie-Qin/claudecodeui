@@ -507,7 +507,7 @@ async function executePostActions({
       if (hook.eventName !== 'Stop' || event?.agent_id) {
         throw new Error('Completion review only supports the main agent Stop event');
       }
-      const reviewNumber = references.ccui.env.hookInvocationCount;
+      const reviewNumber = context.completionReviewNumber;
       const maxReviews = Math.min(action.config?.maxReviews ?? 3, MAX_COMPLETION_REVIEWS);
       let validationResult;
       let validationError = '';
@@ -789,9 +789,12 @@ export function createHookRuntimeSession({
   mcpCaller = callHookMcpTool,
 } = {}) {
   const recoveryKeys = new Set();
-  // Each SDK query owns this runtime. Keep counts out of the persistent audit
-  // history so resuming the same conversation starts a fresh checking cycle.
+  // General Hook invocation counts remain scoped to the SDK query. A query can
+  // consume multiple user turns, so completion review needs its own turn count.
   const invocationCounts = new Map();
+  const completionReviewCounts = new Map();
+  let completionReviewEpoch = 0;
+  const beginUserTurn = () => { completionReviewEpoch += 1; };
   const context = {
     userId,
     username,
@@ -828,13 +831,19 @@ export function createHookRuntimeSession({
     }
   };
 
-  const executeHookWithAudit = async (configuredHook, event, toolUseId, callbackOptions = {}) => {
+  const executeHookWithAudit = async (configuredHook, event, toolUseId, callbackOptions = {}, reviewEpoch) => {
     const hook = resolveEffectiveHook(configuredHook, event);
     if (!hook) return {};
     const environment = buildEnvironment(context, event);
     const invocationScope = JSON.stringify([
       hook.id, hook.eventName, environment.sessionId, event.agent_id || null,
     ]);
+    const completionReviewScope = hook.eventName === 'Stop'
+      && hook.postActions?.some((action) => action.type === 'review_completion')
+      ? JSON.stringify([reviewEpoch, hook.id]) : null;
+    const completionReviewNumber = completionReviewScope
+      ? (completionReviewCounts.get(completionReviewScope) || 0) + 1 : null;
+    if (completionReviewScope) completionReviewCounts.set(completionReviewScope, completionReviewNumber);
     let invocations = invocationCounts.get(invocationScope);
     if (!invocations) {
       invocations = { count: 0, toolUses: new Map() };
@@ -933,7 +942,7 @@ export function createHookRuntimeSession({
         hook,
         executionId,
         references,
-        context: { ...context, redact },
+        context: { ...context, redact, completionReviewNumber },
         event,
         signal: callbackOptions.signal,
         recoveryKeys,
@@ -999,6 +1008,10 @@ export function createHookRuntimeSession({
         response: redact(response),
         logs,
       });
+      if (reviewOutput?.complete && completionReviewScope
+          && completionReviewCounts.get(completionReviewScope) === completionReviewNumber) {
+        completionReviewCounts.delete(completionReviewScope);
+      }
       reportExecutionActivity({
         hook,
         event: redact(event),
@@ -1011,7 +1024,7 @@ export function createHookRuntimeSession({
       });
       return response;
     } catch (error) {
-      const response = completionReviewFailureResponse(hook, environment.hookInvocationCount)
+      const response = completionReviewFailureResponse(hook, completionReviewNumber || 1)
         || requiredHookFailureResponse(hook);
       completeExecution(database, executionId, {
         status: 'failed',
@@ -1040,19 +1053,19 @@ export function createHookRuntimeSession({
 
   const executeHook = async (hook, event, toolUseId, callbackOptions = {}) => {
     const effectiveHook = resolveEffectiveHook(hook, event);
+    const reviewEpoch = completionReviewEpoch;
+    const completionReviewScope = effectiveHook?.eventName === 'Stop'
+      && effectiveHook.postActions?.some((action) => action.type === 'review_completion')
+      ? JSON.stringify([reviewEpoch, effectiveHook.id]) : null;
     const waitId = effectiveHook && event.agent_id
       && effectiveHook.postActions?.some((action) => action.type === 'mcp_loop_run')
       ? `subagent-hook-${crypto.randomUUID()}` : null;
     if (waitId) onSubagentLoopWait({ id: waitId, waiting: true });
     try {
-      return await executeHookWithAudit(hook, event, toolUseId, callbackOptions);
+      return await executeHookWithAudit(hook, event, toolUseId, callbackOptions, reviewEpoch);
     } catch (error) {
       if (effectiveHook?.eventName === 'Stop') {
-        const environment = buildEnvironment(context, event);
-        const invocationScope = JSON.stringify([
-          effectiveHook.id, effectiveHook.eventName, environment.sessionId, event?.agent_id || null,
-        ]);
-        const reviewNumber = invocationCounts.get(invocationScope)?.count || 1;
+        const reviewNumber = completionReviewCounts.get(completionReviewScope) || 1;
         const response = completionReviewFailureResponse(effectiveHook, reviewNumber, true);
         if (response) return response;
       }
@@ -1084,7 +1097,7 @@ export function createHookRuntimeSession({
     }
   }
 
-  return { hooks: sdkHooks, executeHook, hasRequiredHook: hooks.some(isRequiredHook) };
+  return { hooks: sdkHooks, executeHook, beginUserTurn, hasRequiredHook: hooks.some(isRequiredHook) };
 }
 
 export function mergeSdkHooks(...hookMaps) {

@@ -1048,6 +1048,49 @@ test('ClaudeInputQueue notifies when the SDK consumes queued and waiting input',
   assert.deepEqual(consumed, ['queued', 'waiting']);
 });
 
+test('ClaudeInputQueue starts a query turn only when the SDK consumes query input', async () => {
+  const { ClaudeInputQueue, buildClaudeUserMessage } = await import('./claude-sdk.js');
+  const consumedQueries = [];
+  const queue = new ClaudeInputQueue({
+    onQueryConsumed: (message) => consumedQueries.push(message.message.content),
+  });
+  queue.push(buildClaudeUserMessage('first request', []));
+  queue.push(buildClaudeUserMessage('context only', [], { shouldQuery: false }));
+  queue.push(buildClaudeUserMessage('next request', []));
+  assert.deepEqual(consumedQueries, [], 'queuing a future user turn must not reset review state');
+
+  await queue.next();
+  assert.deepEqual(consumedQueries, ['first request']);
+  await queue.next();
+  assert.deepEqual(consumedQueries, ['first request'], 'context-only input must not start a query turn');
+  await queue.next();
+  assert.deepEqual(consumedQueries, ['first request', 'next request']);
+  queue.close();
+});
+
+test('completion review waits for the result boundary before counting an early next-turn input', async () => {
+  const { ClaudeInputQueue, buildClaudeUserMessage, createClaudeHookReviewTurnTracker } =
+    await import('./claude-sdk.js');
+  let reviewTurn = 0;
+  const tracker = createClaudeHookReviewTurnTracker(() => { reviewTurn += 1; });
+  const queue = new ClaudeInputQueue({ onQueryConsumed: tracker.onQueryConsumed });
+  queue.push(buildClaudeUserMessage('first request', [], { priority: 'next' }));
+  await queue.next();
+  assert.equal(reviewTurn, 1);
+
+  queue.push(buildClaudeUserMessage('next request', [], { priority: 'next' }));
+  await queue.next();
+  assert.equal(reviewTurn, 1, 'an early next-turn message must leave the current Stop in turn one');
+  tracker.onQueryResult();
+  assert.equal(reviewTurn, 2, 'the next Stop belongs to the second user turn');
+
+  queue.push(buildClaudeUserMessage('inline request', [], { priority: 'now' }));
+  await queue.next();
+  assert.equal(reviewTurn, 3, 'an immediate supplement starts a new turn when consumed');
+  tracker.onQueryResult();
+  queue.close();
+});
+
 test('live supplements reach a waiting SDK reader before any result boundary', { timeout: 1000 }, async () => {
   const { ClaudeInputQueue, buildClaudeUserMessage } = await import('./claude-sdk.js');
   const queue = new ClaudeInputQueue();

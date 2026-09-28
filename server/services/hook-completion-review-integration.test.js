@@ -140,10 +140,82 @@ test('an incomplete verdict blocks the same main loop and a later pass approves 
     });
     assert.equal(calls.length, 2);
     assert.equal(calls[0].event, event);
-    assert.deepEqual(JSON.parse(database.prepare('SELECT actions_json FROM hook_executions ORDER BY rowid LIMIT 1').get().actions_json)
-      .review.output.reviewNumber, 1);
+    const reviews = database.prepare('SELECT actions_json FROM hook_executions ORDER BY rowid').all()
+      .map((row) => JSON.parse(row.actions_json).review.output);
+    assert.deepEqual(reviews.map((review) => review.reviewNumber), [1, 2]);
+    assert.deepEqual(reviews.map((review) => review.complete), [false, true]);
     assert.deepEqual(await runtime.executeHook(hook, { ...event, agent_id: 'child' }), {});
     assert.equal(calls.length, 2);
+  } finally { database.close(); }
+});
+
+test('a passing review stops immediately and the next user turn starts at review one', async () => {
+  const database = databaseFixture();
+  const hook = reviewHook(3);
+  hook.extensionLogic = {
+    language: 'javascript', code: 'export async function run() { return { output: {} }; }',
+    outputs: [],
+  };
+  const hookInvocationCounts = [];
+  let reviewerCalls = 0;
+  try {
+    const runtime = createHookRuntimeSession({ hooks: [hook], database, userId: 1,
+      scriptExecutor: async ({ env }) => {
+        hookInvocationCounts.push(env.hookInvocationCount);
+        return { output: {} };
+      },
+      reviewCompletion: async () => {
+        reviewerCalls += 1;
+        return { complete: true, reason: '验收通过', nextStep: '' };
+      },
+    });
+    const firstStop = { hook_event_name: 'Stop', session_id: 'same-session', stop_hook_active: false };
+    assert.deepEqual(await runtime.executeHook(hook, firstStop), {
+      decision: 'approve', reason: '验收通过',
+    });
+    assert.equal(reviewerCalls, 1);
+
+    runtime.beginUserTurn();
+    assert.deepEqual(await runtime.executeHook(hook, firstStop), {
+      decision: 'approve', reason: '验收通过',
+    });
+    assert.equal(reviewerCalls, 2);
+    const reviews = database.prepare('SELECT actions_json FROM hook_executions ORDER BY rowid').all()
+      .map((row) => JSON.parse(row.actions_json).review.output);
+    assert.deepEqual(reviews.map((review) => review.reviewNumber), [1, 1]);
+    assert.deepEqual(hookInvocationCounts, [1, 2]);
+  } finally { database.close(); }
+});
+
+test('a new user turn resets an unfinished review, while later Stops advance only after blocking', async () => {
+  const database = databaseFixture();
+  const hook = reviewHook(3);
+  let reviewerCalls = 0;
+  try {
+    const runtime = createHookRuntimeSession({ hooks: [hook], database, userId: 1,
+      reviewCompletion: async () => {
+        reviewerCalls += 1;
+        return reviewerCalls === 4
+          ? { complete: true, reason: '任务已完成', nextStep: '' }
+          : { complete: false, reason: '还缺结论', nextStep: '补充结论。' };
+      },
+    });
+    const event = { hook_event_name: 'Stop', session_id: 'same-session' };
+    assert.deepEqual(await runtime.executeHook(hook, event), {
+      decision: 'block', reason: '还缺结论\n补充结论。',
+    });
+    runtime.beginUserTurn();
+    for (let review = 1; review <= 2; review += 1) {
+      assert.deepEqual(await runtime.executeHook(hook, { ...event, stop_hook_active: review > 1 }), {
+        decision: 'block', reason: '还缺结论\n补充结论。',
+      });
+    }
+    assert.deepEqual(await runtime.executeHook(hook, { ...event, stop_hook_active: true }), {
+      decision: 'approve', reason: '任务已完成',
+    });
+    const reviewNumbers = database.prepare('SELECT actions_json FROM hook_executions ORDER BY rowid').all()
+      .map((row) => JSON.parse(row.actions_json).review.output.reviewNumber);
+    assert.deepEqual(reviewNumbers, [1, 1, 2, 3]);
   } finally { database.close(); }
 });
 

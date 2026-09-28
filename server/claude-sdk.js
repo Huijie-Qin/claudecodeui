@@ -1002,12 +1002,13 @@ function logChatSessionTokenUsage({ requestId, provider, sessionId, model, token
 }
 
 class ClaudeInputQueue {
-  constructor({ onQueryPushed = null } = {}) {
+  constructor({ onQueryPushed = null, onQueryConsumed = null } = {}) {
     this.items = [];
     this.waiters = [];
     this.closed = false;
     this.pendingQueryTurns = 0;
     this.onQueryPushed = typeof onQueryPushed === 'function' ? onQueryPushed : null;
+    this.onQueryConsumed = typeof onQueryConsumed === 'function' ? onQueryConsumed : null;
     this.onConsumedByMessage = new WeakMap();
   }
 
@@ -1067,6 +1068,13 @@ class ClaudeInputQueue {
 
   notifyConsumed(message) {
     if (!message || typeof message !== 'object') return;
+    if (message.shouldQuery !== false) {
+      try {
+        this.onQueryConsumed?.(message);
+      } catch (error) {
+        console.warn('[ClaudeInputQueue] Failed to notify consumed query:', error?.message || error);
+      }
+    }
     const onConsumed = this.onConsumedByMessage.get(message);
     if (!onConsumed) return;
     this.onConsumedByMessage.delete(message);
@@ -1081,6 +1089,32 @@ class ClaudeInputQueue {
     this.pendingQueryTurns = Math.max(0, this.pendingQueryTurns - 1);
     return this.pendingQueryTurns;
   }
+}
+
+function createClaudeHookReviewTurnTracker(onBeginTurn) {
+  let active = false;
+  let pendingNext = 0;
+  return {
+    onQueryConsumed(message) {
+      // The SDK can read a "next" supplement before the current result. Keep
+      // the current Stop in its original review turn until that result arrives.
+      if (message.priority === 'next' && active) {
+        pendingNext += 1;
+        return;
+      }
+      onBeginTurn();
+      active = true;
+    },
+    onQueryResult() {
+      if (pendingNext > 0) {
+        pendingNext -= 1;
+        onBeginTurn();
+        active = true;
+      } else {
+        active = false;
+      }
+    },
+  };
 }
 
 function createClaudeTurnLifecycleTracker() {
@@ -1435,6 +1469,10 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
   let turnCompletionScheduler = null;
   let mcpLoopToolBatchTracker = createMcpLoopToolBatchTracker();
   let usageQueryCount = 0;
+  let hookRuntimeSession = null;
+  const reviewTurnTracker = createClaudeHookReviewTurnTracker(
+    () => hookRuntimeSession?.beginUserTurn(),
+  );
   const inputQueue = new ClaudeInputQueue({
     onQueryPushed: () => {
       // Inline inputs may be merged/reordered by the SDK. Until it supplies a
@@ -1446,6 +1484,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
       pendingTurnCompletion = null;
       turnLifecycle.beginTurn();
     },
+    onQueryConsumed: (message) => reviewTurnTracker.onQueryConsumed(message),
   });
 
   const updateHookActivity = (status, error = null) => {
@@ -2001,7 +2040,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
               modelContent,
             ].join('\n');
           };
-          const hookRuntime = createHookRuntimeSession({
+          hookRuntimeSession = createHookRuntimeSession({
             hooks: activeHooks,
             userId: hookUserId,
             username: hookUser?.username || null,
@@ -2322,8 +2361,8 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
               error,
             }),
           });
-          configuredSdkHooks = hookRuntime.hooks;
-          hasRequiredHook = hookRuntime.hasRequiredHook;
+          configuredSdkHooks = hookRuntimeSession.hooks;
+          hasRequiredHook = hookRuntimeSession.hasRequiredHook;
           console.info(`[HookRuntime] Registered ${activeHooks.length} Hook configuration(s) for user ${hookUserId}`);
         }
       } catch (error) {
@@ -2641,6 +2680,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
           }
         }
         const remainingQueryTurns = inputQueue.finishQueryTurn();
+        reviewTurnTracker.onQueryResult();
         const models = Object.keys(message.modelUsage || {});
         if (models.length > 0) {
           // Model info available in result message
@@ -3604,6 +3644,7 @@ export {
   buildToolInteractionContext,
   requiresToolInteraction,
   createClaudeTurnLifecycleTracker,
+  createClaudeHookReviewTurnTracker,
   createPendingInteractionTracker,
   shouldEmitClaudeTurnCompletion,
   createClaudeTurnCompletionScheduler,
