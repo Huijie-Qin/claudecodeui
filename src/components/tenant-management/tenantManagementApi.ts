@@ -8,11 +8,18 @@ export function createTenantManagementApi(tenantId: number, onForbidden?: () => 
     return response;
   };
   const id = (value: string | number) => encodeURIComponent(value);
+  const query = (filters: Record<string, unknown>) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) if (value != null && value !== '') params.set(key, String(value));
+    return params.size ? `?${params}` : '';
+  };
   // No fallback to platform Admin endpoints, including currently hidden actions.
   const denied = async (..._args: unknown[]) => new Response(JSON.stringify({ error: '此操作仅限系统管理员' }), { status: 403 });
   return {
     capabilities: () => request('/capabilities'),
     hooks: () => request('/hooks'),
+    hookExecutions: (hookId: string, filters: Record<string, unknown> = {}) => request(`/hooks/${id(hookId)}/executions${query(filters)}`),
+    hookExecution: (hookId: string, executionId: string) => request(`/hooks/${id(hookId)}/executions/${id(executionId)}`),
     hookResources: () => request('/hooks/resources'),
     createHook: (body: unknown) => request('/hooks', 'POST', body),
     updateHook: (hookId: string, body: unknown) => request(`/hooks/${id(hookId)}`, 'PUT', body),

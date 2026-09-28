@@ -247,15 +247,23 @@ function HookExecutionDetail({
   );
 }
 
+export type HookDiagnosticsApi = {
+  list: (filters: Record<string, unknown>) => Promise<Response>;
+  get: (executionId: string) => Promise<Response>;
+};
+
 export default function HookDiagnosticsPanel({
   hook,
   hooks = [],
+  executionApi,
 }: {
   hook?: HookConfig | null;
   hooks?: HookConfig[];
+  executionApi?: HookDiagnosticsApi;
 }) {
   const { t, i18n } = useTranslation('admin');
   const requestSequence = useRef(0);
+  const detailSequence = useRef(0);
   const [executions, setExecutions] = useState<HookExecution[]>([]);
   const [totalGroups, setTotalGroups] = useState(0);
   const [executionTotal, setExecutionTotal] = useState(0);
@@ -288,7 +296,7 @@ export default function HookDiagnosticsPanel({
         limit: pageSize,
         offset: page * pageSize,
       };
-      const response = hook
+      const response = executionApi ? await executionApi.list(filters) : hook
         ? await api.admin.hookExecutions(hook.id, filters)
         : await api.admin.allHookExecutions(filters);
       if (!response.ok) throw new Error(t('hooks.diagnostics.loadError'));
@@ -299,15 +307,30 @@ export default function HookDiagnosticsPanel({
       setExecutionTotal(Number(payload.executionTotal || 0));
     } catch (caughtError) {
       if (requestId !== requestSequence.current) return;
+      setExecutions([]);
+      setTotalGroups(0);
+      setExecutionTotal(0);
+      detailSequence.current++;
+      setDetailLoading(false);
+      setSelected(null);
       setError(caughtError instanceof Error ? caughtError.message : t('hooks.diagnostics.loadError'));
     } finally {
       if (requestId === requestSequence.current) setLoading(false);
     }
-  }, [eventName, hook, hookId, hookKind, outcome, page, pageSize, searchQuery, status, t]);
+  }, [eventName, hook, hookId, hookKind, outcome, page, pageSize, searchQuery, status, t, executionApi]);
 
   useEffect(() => {
     void load();
+    const sequence = requestSequence;
+    return () => { sequence.current++; };
   }, [load]);
+
+  useEffect(() => {
+    const sequence = detailSequence;
+    setSelected(null);
+    setDetailLoading(false);
+    return () => { sequence.current++; };
+  }, [hook, executionApi]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -330,17 +353,21 @@ export default function HookDiagnosticsPanel({
     if (page >= totalPages) setPage(totalPages - 1);
   }, [page, totalPages]);
   const openExecution = async (execution: HookExecution) => {
+    const requestId = ++detailSequence.current;
     setSelected(execution);
     setDetailLoading(true);
     try {
-      const response = await api.admin.hookExecution(execution.id);
+      const response = executionApi ? await executionApi.get(execution.id) : await api.admin.hookExecution(execution.id);
       if (!response.ok) throw new Error(t('hooks.diagnostics.loadDetailError'));
       const payload = await response.json() as { execution?: HookExecution };
+      if (requestId !== detailSequence.current) return;
       if (payload.execution) setSelected(payload.execution);
     } catch (caughtError) {
+      if (requestId !== detailSequence.current) return;
+      setSelected(null);
       setError(caughtError instanceof Error ? caughtError.message : t('hooks.diagnostics.loadDetailError'));
     } finally {
-      setDetailLoading(false);
+      if (requestId === detailSequence.current) setDetailLoading(false);
     }
   };
 
@@ -631,6 +658,7 @@ export default function HookDiagnosticsPanel({
           if (selected) void openExecution(selected);
         }}
         onClose={() => {
+          detailSequence.current++;
           setSelected(null);
           setDetailLoading(false);
         }}

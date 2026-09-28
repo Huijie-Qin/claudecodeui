@@ -22,6 +22,30 @@ async function httpFixture(t) {
   return { ...f, request };
 }
 
+test('HTTP Hook scope is derived from live roles, not forged query filters, including direct detail URLs', async t => {
+  const { db, row, batch, request } = await httpFixture(t);
+  batch();
+  db.exec("INSERT INTO hooks VALUES('owned',10),('platform',NULL),('foreign',20)");
+  for (const hook of ['owned', 'platform', 'foreign']) row({ id: hook, dataset: 'hook_records', subjectId: hook,
+    value: { hookId: hook, hookName: hook, fields: [{ key: 'count', label: '数量', type: 'number', value: 5 }] } });
+  const scope = '?tenantId=10&scope=tenant&hookOwnerTenantId=20&canViewDefinitions=true';
+  const list = await request(`/analysis${scope}&dataset=hooks`);
+  assert.equal(list.status, 200);
+  assert.deepEqual(list.body.items.map(item => item.groupKey), ['owned']);
+  assert.equal(list.body.summary.recordCount, 1);
+  for (const id of ['platform', 'foreign']) {
+    for (const resource of ['records', 'statistics', 'field-statistics']) {
+      const detail = await request(`/hooks/${id}/${resource}${scope}`);
+      assert.equal(detail.status, 200);
+      assert.deepEqual(detail.body.items, []);
+    }
+  }
+  assert.equal((await request(`/hooks${scope}`, { userId: 1 })).body.total, 3);
+  assert.equal((await request(`/hooks${scope}`, { userId: 3 })).status, 403);
+  db.exec("UPDATE tenant_users SET role='member' WHERE tenant_id=10 AND user_id=2");
+  assert.equal((await request(`/hooks${scope}`)).status, 403);
+});
+
 test('HTTP code reports and exports page through the new table within live tenant scope', async t => {
   const { request, batch, row, db } = await httpFixture(t);
   batch('batch-1', 10, 'published', { hooks: 'complete', codeSubmissions: 'complete' });

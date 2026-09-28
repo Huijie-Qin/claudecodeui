@@ -16,6 +16,24 @@ test('exports are unavailable until a code-owned format is configured', (t) => {
   assert.equal(service.list(f.access).items.length, 0);
 });
 
+test('Hook exports include only tenant-owned Hooks and cannot reuse old broader-visibility files', async t => {
+  const f = fixture(t); f.batch();
+  f.db.exec("INSERT INTO hooks VALUES('owned',10),('platform',NULL)");
+  for (const hook of ['owned', 'platform']) f.row({ id: hook, dataset: 'hook_records', subjectId: hook, value: { hookId: hook, hookName: hook } });
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-usage-hook-export-test-'));
+  t.after(async () => { for (const file of await fs.readdir(directory)) await fs.unlink(path.join(directory, file)); await fs.rmdir(directory); });
+  const service = createAiUsageExportService({ ...f, directory, serializers: { hooks: {
+    extension: 'json', mimeType: 'application/json', serialize: async ({ query, access, filters }) => JSON.stringify(query.hooks(access, filters).items),
+  } } });
+  const job = service.enqueue(f.access, { dataset: 'hooks', batchId: 'batch-1', hookOwnerTenantId: null });
+  assert.equal(await service.tick(), true);
+  const file = await service.download(f.access, job.id);
+  assert.deepEqual(JSON.parse(await fs.readFile(file.path, 'utf8')).map(row => row.hookId), ['owned']);
+  // Pre-ownership exports lack this server-written boundary and must be regenerated.
+  f.db.prepare("UPDATE ai_usage_export_jobs SET filters_json=json_remove(filters_json,'$.hookOwnerTenantId') WHERE id=?").run(job.id);
+  await assert.rejects(service.download(f.access, job.id), { code: 'exportScopeChanged' });
+});
+
 test('export is persistent, batch bound, asynchronous and rechecks scope at download', async (t) => {
   const f = fixture(t);
   f.batch();

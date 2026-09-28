@@ -15,6 +15,7 @@ export function fixture(t) {
     CREATE TABLE tenants(id INTEGER PRIMARY KEY, status TEXT);
     CREATE TABLE tenant_users(tenant_id INTEGER, user_id INTEGER, role TEXT, status TEXT);
     CREATE TABLE workspaces(id INTEGER PRIMARY KEY, tenant_id INTEGER, display_name TEXT, status TEXT);
+    CREATE TABLE hooks(id TEXT PRIMARY KEY, owner_tenant_id INTEGER);
     INSERT INTO users VALUES(1,'platform',1,1),(2,'tenant-admin',1,0),(3,'member',1,0),(4,'another-member',1,0);
     INSERT INTO tenants VALUES(10,'active'),(20,'active');
     INSERT INTO tenant_users VALUES(10,2,'tenant_admin','active'),(10,3,'member','active'),(10,4,'member','active'),(20,3,'member','active');`);
@@ -33,6 +34,9 @@ export function fixture(t) {
     }
   }
   function row({ id, dataset, date = '2026-09-11', userId = 3, workspaceId = 7, subjectId = null, sessionKey = 'session-a', value = {}, batchId = 'batch-1', tenantId = 10 }) {
+    // Report fixtures default to tenant-owned Hooks; ownership-isolation tests
+    // explicitly create platform/foreign/orphan definitions before querying.
+    if (dataset.startsWith('hook_') && subjectId != null) db.prepare('INSERT OR IGNORE INTO hooks VALUES(?,?)').run(subjectId, tenantId);
     const values = [tenantId, dataset, id, date, userId, workspaceId, subjectId, sessionKey, `${date}T10:00:00.000Z`, JSON.stringify(value)];
     const active = db.prepare('SELECT active_batch_id FROM ai_usage_tenant_state WHERE tenant_id=?').get(tenantId)?.active_batch_id;
     if (active === batchId) {

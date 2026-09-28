@@ -3,13 +3,16 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
 import express from 'express';
 import Database from 'better-sqlite3';
+
 import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
 import { HOOK_CONFIG_SCHEMA_SQL, migrateHookConfigurationModel } from '../database/hook-config-schema.js';
 import { createHookConfigService } from '../services/hook-configs.js';
 import { createAgentTemplateService } from '../services/agent-templates.js';
 import { createAgentTemplateFolderAssetStore } from '../services/agent-template-folder-assets.js';
+
 import { createTenantManagementRouter } from './tenant-management.js';
 
 const hookInput = (name = '租户记录 Hook') => ({ name, description: '', eventName: 'Stop', matcher: {},
@@ -126,6 +129,53 @@ test('Agent template lifecycle stays tenant-local, including DataAgent special t
   assert.equal(special.template.globalVisible, false);
   assert.equal((await request(`/agent-templates/${special.template.id}/publish`, { method: 'POST', tenant: 30 })).status, 200);
   assert.ok(!templates.listAvailableTemplates({ tenantId: 20 }).some((item) => item.id === special.template.id));
+});
+
+test('tenant administrators can inspect owned Hook executions with immutable tenant and Hook boundaries', async (t) => {
+  const { database, hooks, request } = await fixture(t);
+  const own = hooks.createHook({ input: hookInput('本租户'), userId: 2, ownerTenantId: 10 });
+  const peer = hooks.createHook({ input: hookInput('同租户另一管理员'), userId: 4, ownerTenantId: 10 });
+  const platform = hooks.createHook({ input: hookInput('平台下发'), userId: 1 });
+  const foreign = hooks.createHook({ input: hookInput('其他租户'), userId: 4, ownerTenantId: 20 });
+  const add = database.prepare(`INSERT INTO hook_executions(id,hook_id,user_id,tenant_id,workspace_id,event_name,status,
+    started_at_ms,completed_at_ms,duration_ms,input_json,script_output_json,logs_json)
+    VALUES(?,?,3,?,100,'Stop',?,1000,1250,250,'{"task":"tenant detail"}','{"count":5}','["done"]')`);
+  add.run('own-success', own.id, 10, 'succeeded');
+  add.run('own-failed', own.id, 10, 'failed');
+  add.run('own-cross-tenant', own.id, 20, 'succeeded');
+  add.run('own-unknown-tenant', own.id, null, 'succeeded');
+  add.run('peer', peer.id, 10, 'succeeded');
+  add.run('platform', platform.id, 10, 'succeeded');
+  add.run('foreign', foreign.id, 20, 'succeeded');
+  const base = `/hooks/${own.id}/executions`;
+  const list = await request(`${base}?tenantId=20&hookId=${platform.id}&limit=1`);
+  assert.equal(list.status, 200);
+  assert.equal(list.total, 2); assert.equal(list.executionTotal, 2);
+  assert.equal(list.executions.length, 1);
+  assert.equal(list.executions[0].tenantId, 10);
+  assert.equal(list.executions[0].hookId, own.id);
+  assert.equal(list.executions[0].input, null, 'list contains lightweight summaries');
+  const next = await request(`${base}?limit=1&offset=1`);
+  assert.notEqual(next.executions[0].id, list.executions[0].id);
+  assert.deepEqual((await request(`${base}?status=failed`)).executions.map(row => row.id), ['own-failed']);
+  assert.equal((await request(`${base}?q=not-found`)).total, 0);
+  const detail = await request(`${base}/own-success`);
+  assert.equal(detail.status, 200);
+  assert.deepEqual(detail.execution.scriptOutput, { count: 5 });
+  assert.deepEqual(detail.execution.logs, ['done']);
+  assert.equal((await request(`/hooks/${peer.id}/executions`)).total, 1);
+  for (const id of ['own-cross-tenant', 'own-unknown-tenant', 'platform', 'foreign', 'peer', 'missing']) {
+    assert.equal((await request(`${base}/${id}?tenantId=20`)).status, 404, id);
+  }
+  for (const hook of [platform, foreign]) {
+    assert.equal((await request(`/hooks/${hook.id}/executions`)).status, 404);
+    assert.equal((await request(`/hooks/${hook.id}/executions/platform`)).status, 404);
+  }
+  assert.equal((await request(base, { user: 3 })).status, 403);
+  assert.equal((await request(base, { tenant: 20 })).status, 403);
+  database.exec("UPDATE tenant_users SET role='member' WHERE tenant_id=10 AND user_id=2");
+  assert.equal((await request(base)).status, 403);
+  assert.equal((await request(`${base}/own-success`)).status, 403);
 });
 
 test('Admin-distributed Hooks and templates remain usable but never become tenant-editable', async (t) => {

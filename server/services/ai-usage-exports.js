@@ -33,6 +33,14 @@ export function createAiUsageExportService({ db, accessService, queryService, di
     }
   }
 
+  function checkHookScope(job, access) {
+    if (job.dataset !== 'hooks') return;
+    const exportedOwner = JSON.parse(job.filters_json).hookOwnerTenantId ?? null;
+    if (exportedOwner !== (access.hookOwnerTenantId ?? null)) {
+      throw aiUsageError(403, 'exportScopeChanged', 'Hook report visibility changed; create a new export');
+    }
+  }
+
   function publicJob(job) {
     return { id: job.id, tenantId: job.tenant_id, scope: job.scope, batchId: job.batch_id, dataset: job.dataset,
       status: Date.parse(job.expires_at) <= now().getTime() ? 'expired' : job.status,
@@ -51,6 +59,7 @@ export function createAiUsageExportService({ db, accessService, queryService, di
     const id = crypto.randomUUID();
     const createdAt = instant();
     const filters = { batchId: meta.batchId, from: meta.from, to: meta.to };
+    if (dataset === 'hooks') filters.hookOwnerTenantId = authorized.hookOwnerTenantId ?? null;
     for (const key of ['provider', 'userId', 'workspaceId', 'search', 'userSearch', 'workspaceSearch', 'sortBy', 'sortDir', 'postActionId', 'recordType', 'recordSource', 'hookVersion']) if (request[key] != null) filters[key] = request[key];
     db.transaction(() => {
       const count = db.prepare("SELECT COUNT(*) AS n FROM ai_usage_export_jobs WHERE tenant_id = ? AND user_id = ? AND status IN ('queued', 'running') AND expires_at > ?").get(authorized.tenantId, authorized.userId, createdAt).n;
@@ -65,7 +74,7 @@ export function createAiUsageExportService({ db, accessService, queryService, di
     freshAccess(access);
     const job = db.prepare('SELECT * FROM ai_usage_export_jobs WHERE id = ? AND tenant_id = ? AND user_id = ?').get(String(id), access.tenantId, access.userId);
     if (!job) throw aiUsageError(404, 'exportNotFound', 'Export not found');
-    accessService.resolve({ tenantId: job.tenant_id, userId: job.user_id, scope: job.scope });
+    checkHookScope(job, accessService.resolve({ tenantId: job.tenant_id, userId: job.user_id, scope: job.scope }));
     return publicJob(job);
   }
 
@@ -107,6 +116,7 @@ export function createAiUsageExportService({ db, accessService, queryService, di
       }).immediate();
       if (!job) return false;
       const access = accessService.resolve({ userId: job.user_id, tenantId: job.tenant_id, scope: job.scope });
+      checkHookScope(job, access);
       checkRevision(job);
       checkCurrentBatch(job);
       const preset = serializers[job.dataset];
@@ -124,7 +134,7 @@ export function createAiUsageExportService({ db, accessService, queryService, di
       await fs.writeFile(temporary, content, { flag: 'wx', mode: 0o600 });
       await fs.rename(temporary, finalFile);
       temporary = null;
-      freshAccess(access);
+      checkHookScope(job, freshAccess(access));
       checkRevision(job);
       const updated = db.transaction(() => {
         checkRevision(job);

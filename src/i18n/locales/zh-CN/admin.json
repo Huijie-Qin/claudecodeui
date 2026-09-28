@@ -534,6 +534,25 @@
       }
     },
     "bindings": {
+      "scopeLabel": "使用范围",
+      "defaultsTitle": "默认行为",
+      "selectionTitle": "已选范围",
+      "onlySelected": "仅看已选",
+      "selectResults": "全选搜索结果",
+      "noSelectedMatches": "暂无匹配的已选对象",
+      "noResults": "没有匹配的结果",
+      "moreSelected": "等另外 {{count}} 项",
+      "advanced": "高级设置",
+      "preserveHint": "默认保留用户已有选择。缺少必填个人变量时，需先补齐才能启用。",
+      "preserveShort": "保留用户设置",
+      "overwriteShort": "覆盖用户设置",
+      "overwritePending": "保存时需再次确认覆盖范围。",
+      "confirmTitle": "确认覆盖用户配置",
+      "confirmDescription": "保存后，将在以上范围内覆盖用户已有的启用和对话展示选择。Agent 模板带来的 Hook 配置不受影响，用户之后仍可修改。请确认范围与设置。",
+      "backToEdit": "返回修改",
+      "confirmOverwrite": "确认覆盖并保存",
+      "on": "开启",
+      "off": "关闭",
       "title": "设置用户范围与默认行为",
       "manage": "用户与启用",
       "boundCountShort": "{{count}} 人可见",
@@ -578,7 +597,7 @@
         "all_users": "当前覆盖 {{count}} 名有效用户"
       },
       "clear": "清空选择",
-      "save": "保存配置",
+      "save": "保存设置",
       "savedScopes": {
         "users": "已保存用户范围与默认行为",
         "tenants": "已保存用户范围与默认行为",
@@ -590,9 +609,9 @@
       "overwriteUserPreferencesHint": "将当前启用和对话展示设置应用到所选范围，覆盖用户已有配置；跳过 Agent 模板带来的 Hook 配置。用户之后仍可修改。",
       "overwritten": "已覆盖用户的启用和对话展示配置，Agent 模板配置保持不变",
       "defaultEnabled": "默认启用",
-      "defaultEnabledHint": "“保存配置”仅更新默认值，保留用户已有的启用选择；点击“覆盖用户配置”才会覆盖。缺少必填个人变量时需先补齐。",
+      "defaultEnabledHint": "“保存设置”仅更新默认值，保留用户已有的启用选择；在高级设置中勾选“覆盖用户配置”并确认后才会覆盖。缺少必填个人变量时需先补齐。",
       "defaultShowInChat": "在对话中展示",
-      "defaultShowInChatHint": "“保存配置”保留用户已有的展示选择；点击“覆盖用户配置”才会覆盖。关闭展示不影响 Hook 执行和执行记录。"
+      "defaultShowInChatHint": "“保存设置”保留用户已有的展示选择；在高级设置中勾选“覆盖用户配置”并确认后才会覆盖。关闭展示不影响 Hook 执行和执行记录。"
     },
     "deleteTitle": "删除 Hook",
     "confirmDelete": "删除 Hook“{{name}}”？此操作不可撤销。",

@@ -48,8 +48,20 @@ const templates = createAgentTemplateService(database, { folderAssets: createAge
 const hook = hooks.createHook({ ownerTenantId: 10, userId: 2, input: { name: 'SQL 产出记录', description: '统计对话中的 SQL 产出；演示配置，不执行模型。', eventName: 'Stop', matcher: {}, extensionLogic: { language: 'javascript', code: 'export async function run() { return { output: { sqlLineCount: 0 } }; }', outputs: [{ name: 'sqlLineCount', type: 'number' }] }, postActions: [], claudeResponse: { bindings: {} } } });
 hooks.publishHook({ hookId: hook.id, userId: 2 });
 hooks.replaceHookBindings({ hookId: hook.id, scope: 'tenants', tenantIds: [10], defaultEnabled: false, boundBy: 2 });
+// Exercise the real tenant-scoped diagnostics endpoints without executing a Hook.
+const executionFixture = database.prepare(`INSERT INTO hook_executions(
+  id,hook_id,hook_version,user_id,tenant_id,workspace_id,session_id,event_name,status,
+  started_at_ms,completed_at_ms,duration_ms,input_json,script_output_json,logs_json,error_message
+) VALUES(?,?,1,3,10,100,?,'Stop',?,?,?,?,?,?,?,?)`);
+const executionTime = Date.now();
+executionFixture.run('tenant-preview-success', hook.id, 'preview-session-1', 'succeeded', executionTime - 10000, executionTime - 9750, 250,
+  '{"source":"模拟会话，非真实数据"}', '{"sqlLineCount":12}', '["模拟 Hook 执行完成"]', null);
+executionFixture.run('tenant-preview-failed', hook.id, 'preview-session-2', 'failed', executionTime - 5000, executionTime - 4500, 500,
+  '{"source":"模拟会话，非真实数据"}', null, '["模拟执行失败，用于验证诊断页面"]', '模拟脚本异常');
 templates.saveTemplate({ ownerTenantId: 10, userId: 2, input: { name: 'SQL 分析助手', category: '数据分析', claudeMarkdown: '# SQL 分析助手\n协助分析本租户的 SQL。', tenantIds: [10], skillPresetRefs: [], mcpPresetRefs: [], hookRefs: [], guideText: '请描述分析需求' } });
 const report = await createPreviewDatabase();
+// Mixed ownership demonstrates tenant reports excluding platform/foreign Hooks.
+report.db.exec("UPDATE hooks SET owner_tenant_id=NULL WHERE id='hook-session-a'; UPDATE hooks SET owner_tenant_id=20 WHERE id='hook-session-b'");
 const port = Number(process.env.TENANT_MANAGEMENT_PREVIEW_PORT || 4402);
 const origin = `http://127.0.0.1:${port}`;
 const app = express();
@@ -116,7 +128,7 @@ app.get('/api/settings/feature-flags', (_req, res) => res.json({ features: {} })
 app.get('/api/settings/model-response-hooks', (_req, res) => res.json({ success: true, config: {} }));
 app.get('/api/mcp-utils/taskmaster-server', (_req, res) => res.json({ configured: false, server: null }));
 app.use('/api/tenant-management', createTenantManagementRouter({ database, hooks, templates, skills: { listConfigurationSkills: async () => ({ skills: [] }) } }));
-const reportAccess = { resolve: (input) => { const live = database.prepare('SELECT role FROM tenant_users WHERE user_id=? AND tenant_id=?').get(input.userId, input.tenantId); if (Number(input.userId) !== 1 && live?.role !== 'tenant_admin') throw Object.assign(new Error('需要租户管理员权限'), { statusCode: 403 }); return report.accessService.resolve({ ...input, userId: 2 }); } };
+const reportAccess = { resolve: (input) => { const live = database.prepare('SELECT role FROM tenant_users WHERE user_id=? AND tenant_id=?').get(input.userId, input.tenantId); if (Number(input.userId) !== 1 && live?.role !== 'tenant_admin') throw Object.assign(new Error('需要租户管理员权限'), { statusCode: 403 }); return report.accessService.resolve(input); } };
 app.use('/api/ai-usage', createAiUsageRouter({ db: report.db, accessService: reportAccess, queryService: report.queryService }));
 // Only the Admin membership UI is wired in this fixture, never other Admin actions.
 app.use('/api/admin', (req, res, next) => req.user.is_system_admin ? next() : res.status(403).json({ error: 'System admin access required' }));

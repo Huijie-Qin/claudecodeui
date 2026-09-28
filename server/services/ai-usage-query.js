@@ -97,13 +97,22 @@ export function createAiUsageQueryService({ db, getScheduleStatus = () => ({}) }
     if (filters.workspaceSearch != null && (typeof filters.workspaceSearch !== 'string' || filters.workspaceSearch.length > 150)) throw aiUsageError(400, 'invalidFilter', 'Invalid workspace search');
     const workspaceSearch = filters.workspaceSearch ? `%${filters.workspaceSearch.replace(/[\\%_]/g, '\\$&')}%` : null;
     const params = { batch: meta.batchId, tenant: access.tenantId, from, to, self: access.scope === 'self' ? access.userId : null, provider, userId, workspaceId, search, userSearch, workspaceSearch };
-    // These are safe report projections, never the raw message/Hook source tables.
+    // Apply ownership before grouping/counts/pagination, including numeric daily
+    // projections and direct record/export requests. The scope comes only from
+    // server-resolved access, never from a request filter or report JSON.
+    const ownedHooksOnly = !split && access.hookOwnerTenantId != null;
+    if (ownedHooksOnly) params.hookOwnerTenant = positiveId(access.hookOwnerTenantId);
+    // Facts remain report projections. Live Hook definitions are consulted only
+    // to authorize ownership, not to recalculate or read raw business records.
     const cte = `${split ? splitReportCte + ',' : 'WITH'} scoped_report AS (SELECT r.*, ${actorSql} AS actor_id FROM ${split ? 'split_report' : 'ai_usage_report_rows'} r
       WHERE r.tenant_id = @tenant AND @batch=(SELECT active_batch_id FROM ai_usage_tenant_state WHERE tenant_id=@tenant)
       AND (r.stat_date BETWEEN @from AND @to${publicationHistory ? " OR (r.dataset='skill_publications' AND r.stat_date<=@to)" : ''})
       AND (@self IS NULL OR ${actorSql} = @self)
       AND (@userId IS NULL OR ${actorSql} = @userId)
       AND (@workspaceId IS NULL OR r.workspace_id = @workspaceId)
+      ${ownedHooksOnly ? `AND (r.dataset NOT IN ('hook_records','hook_daily','hook_executions') OR EXISTS (
+        SELECT 1 FROM hooks owned_hook WHERE owned_hook.id = r.subject_id AND owned_hook.owner_tenant_id = @hookOwnerTenant
+      ))` : ''}
       AND (@provider IS NULL OR r.dataset NOT IN ('interactions', 'turns', 'skill_invocations','daily_active_users','active_users') OR json_extract(r.value_json, '$.provider') = @provider)
       AND NOT EXISTS (SELECT 1 FROM ai_usage_suppressed_rows suppressed WHERE suppressed.tenant_id = r.tenant_id AND suppressed.dataset = r.dataset AND suppressed.row_key = r.row_key)
       AND (r.user_id IS NULL OR EXISTS (SELECT 1 FROM users u WHERE u.id = r.user_id))),

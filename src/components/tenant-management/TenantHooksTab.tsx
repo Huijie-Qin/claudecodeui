@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Plus, Webhook } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Activity, Plus, Webhook, X } from 'lucide-react';
 
-import { Button } from '../../shared/view/ui';
+import { Button, Dialog, DialogContent, DialogTitle } from '../../shared/view/ui';
 import HookConfigEditor from '../admin/hook-config/HookConfigEditor';
+import HookDiagnosticsPanel from '../admin/hook-config/HookDiagnosticsPanel';
 import { createHookDraftSignature } from '../admin/hook-config/editorUtils';
 import type { HookConfig, HookConfigDraft, HookResources } from '../admin/hook-config/types';
 
@@ -19,6 +20,11 @@ export default function TenantHooksTab({ managementApi }: { managementApi: Tenan
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [defaultEnabled, setDefaultEnabled] = useState(false);
+  const [diagnosticsHook, setDiagnosticsHook] = useState<HookConfig | null>(null);
+  const executionApi = useMemo(() => diagnosticsHook ? {
+    list: (filters: Record<string, unknown>) => managementApi.hookExecutions(diagnosticsHook.id, filters),
+    get: (executionId: string) => managementApi.hookExecution(diagnosticsHook.id, executionId),
+  } : undefined, [diagnosticsHook, managementApi]);
   const load = useCallback(async () => {
     const payload = await readManagementJson<{ hooks: HookConfig[] }>(await managementApi.hooks());
     setHooks(payload.hooks);
@@ -77,9 +83,18 @@ export default function TenantHooksTab({ managementApi }: { managementApi: Tenan
       <div className="overflow-hidden rounded-xl border border-border">
         {loading ? <p className="p-10 text-center text-muted-foreground">正在加载…</p> : hooks.length === 0 ? <p className="p-10 text-center text-muted-foreground">本租户还没有创建 Hook</p> : hooks.map((hook) => <div key={hook.id} className="flex flex-wrap items-center gap-3 border-b border-border p-4 last:border-0">
           <Webhook className="h-5 w-5 text-primary" /><div className="min-w-0 flex-1"><h3 className="font-medium">{hook.name}</h3><p className="break-words text-sm text-muted-foreground">{hook.description || hook.eventName}</p><p className="mt-1 text-xs text-muted-foreground">{hook.status === 'published' ? '已发布' : '草稿'} · {hook.eventName} · v{hook.version}</p></div>
-          <Button variant="outline" disabled={busy} onClick={() => open(hook)}>配置</Button><Button variant="ghost" disabled={busy} onClick={() => void remove(hook)}>删除</Button>
+          <Button variant="outline" disabled={busy} onClick={() => open(hook)}>配置</Button>
+          <Button variant="ghost" onClick={() => setDiagnosticsHook(hook)}><Activity className="h-4 w-4" />执行记录</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => void remove(hook)}>删除</Button>
         </div>)}
       </div>
     </>}
+    <Dialog open={Boolean(diagnosticsHook)} onOpenChange={(open) => { if (!open) setDiagnosticsHook(null); }}>
+      <DialogContent className="max-h-[90vh] max-w-6xl overflow-y-auto p-4 pt-12 sm:p-5 sm:pt-12">
+        <DialogTitle className="sr-only">Hook 执行记录</DialogTitle>
+        <Button type="button" variant="ghost" size="icon" className="absolute right-3 top-3" aria-label="关闭执行记录" onClick={() => setDiagnosticsHook(null)}><X className="h-4 w-4" /></Button>
+        {diagnosticsHook && executionApi ? <HookDiagnosticsPanel key={diagnosticsHook.id} hook={diagnosticsHook} executionApi={executionApi} /> : null}
+      </DialogContent>
+    </Dialog>
   </div>;
 }

@@ -1,4 +1,5 @@
 import express from 'express';
+
 import { db } from '../database/db.js';
 import { createAiUsageAccessService, positiveId } from '../services/ai-usage-access.js';
 import { hookConfigService } from '../services/hook-configs.js';
@@ -55,6 +56,24 @@ export function createTenantManagementRouter({ database = db, hooks = hookConfig
   router.get('/:tenantId/hooks', route((_req, context) => ({
     hooks: database.prepare('SELECT id FROM hooks WHERE owner_tenant_id = ? ORDER BY updated_at DESC').all(context.tenantId).map((row) => hooks.getHook(row.id)),
   })));
+  router.get('/:tenantId/hooks/:hookId/executions', route((req) => {
+    const context = owned(req, 'hooks', req.params.hookId);
+    // Hook ownership and the execution's tenant must both match. Never accept
+    // the tenant scope from query parameters, even for an owned Hook.
+    return hooks.listExecutionPage(req.params.hookId, {
+      tenantId: context.tenantId,
+      eventName: req.query.eventName, status: req.query.status, userId: req.query.userId,
+      sessionId: req.query.sessionId, toolUseId: req.query.toolUseId, q: req.query.q,
+      outcome: req.query.outcome, limit: req.query.limit, offset: req.query.offset,
+    });
+  }));
+  router.get('/:tenantId/hooks/:hookId/executions/:executionId', route((req) => {
+    const context = owned(req, 'hooks', req.params.hookId);
+    const row = database.prepare('SELECT id FROM hook_executions WHERE id = ? AND hook_id = ? AND tenant_id = ?')
+      .get(req.params.executionId, req.params.hookId, context.tenantId);
+    if (!row) throw Object.assign(new Error('执行记录不存在或不属于当前租户 Hook'), { statusCode: 404 });
+    return { execution: hooks.getExecution(row.id) };
+  }));
   router.post('/:tenantId/hooks', route((req, context) => ({ hook: hooks.createHook({ input: req.body, userId: context.userId, ownerTenantId: context.tenantId }) })));
   router.put('/:tenantId/hooks/:hookId', route((req) => {
     const context = owned(req, 'hooks', req.params.hookId);

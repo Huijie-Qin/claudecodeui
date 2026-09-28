@@ -26,7 +26,7 @@ export function seedAiUsageSimulation(db) {
       provider_session_id TEXT,runtime_id TEXT,runtime_home_path TEXT);
     CREATE TABLE agent_session_messages(id INTEGER PRIMARY KEY,tenant_id INTEGER,workspace_id INTEGER,user_id INTEGER,
       provider TEXT,provider_session_id TEXT,message_id TEXT,provider_timestamp TEXT,created_at TEXT,normalized_json TEXT,runtime_id TEXT,sequence INTEGER);
-    CREATE TABLE hooks(id TEXT PRIMARY KEY,name TEXT);
+    CREATE TABLE hooks(id TEXT PRIMARY KEY,name TEXT,owner_tenant_id INTEGER);
     CREATE TABLE hook_published_versions(hook_id TEXT,version INTEGER,config_json TEXT,PRIMARY KEY(hook_id,version));
     CREATE TABLE hook_executions(id TEXT PRIMARY KEY,hook_id TEXT,hook_version INTEGER,user_id INTEGER,tenant_id INTEGER,
       workspace_id INTEGER,session_id TEXT,event_name TEXT,status TEXT,duration_ms INTEGER,started_at TEXT,completed_at TEXT,
@@ -99,7 +99,7 @@ export function seedAiUsageSimulation(db) {
         { key: 'sqlLineCount', label: 'SQL 行数', type: 'number' }] },
     ];
     for (const hook of hooks) {
-      db.prepare('INSERT INTO hooks VALUES(?,?)').run(hook.id, hook.name);
+      db.prepare('INSERT INTO hooks VALUES(?,?,10)').run(hook.id, hook.name);
       for (const version of [1, 2]) db.prepare('INSERT INTO hook_published_versions VALUES(?,?,?)').run(hook.id, version,
         JSON.stringify({ postActions: [{ id: hook.action, type: 'write_record', config: { recordType: hook.type, reportFields: hook.fields } }] }));
     }
