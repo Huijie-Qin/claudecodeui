@@ -327,6 +327,29 @@ function reviewerOptions({ model, sdkOptions, workspaceRoot, executionWorkspaceR
   return options;
 }
 
+function reviewerQueryError(message) {
+  const detail = [message?.result, ...(Array.isArray(message?.errors) ? message.errors : [])]
+    .filter((entry) => typeof entry === 'string').join(' ').slice(0, 2_000);
+  const reportedStatus = message?.api_error_status;
+  const parsedStatus = Number(/\bAPI Error:\s*(\d{3})\b/i.exec(detail)?.[1]);
+  const status = Number.isInteger(reportedStatus) && reportedStatus >= 400 && reportedStatus <= 599
+    ? reportedStatus : parsedStatus >= 400 && parsedStatus <= 599 ? parsedStatus : null;
+  const error = new Error('Completion reviewer model query failed');
+  error.apiErrorStatus = status;
+  if (/\bCodingPlan\b.*\bsubscription\b|\bsubscription\b.*\b(?:expired|invalid)\b/i.test(detail)) {
+    error.code = 'COMPLETION_REVIEW_SUBSCRIPTION_INVALID';
+  } else if (status === 401 || status === 403) {
+    error.code = 'COMPLETION_REVIEW_AUTH_FAILED';
+  } else if (status === 429) {
+    error.code = 'COMPLETION_REVIEW_RATE_LIMITED';
+  } else if (message?.subtype === 'error_max_turns') {
+    error.code = 'COMPLETION_REVIEW_MAX_TURNS';
+  } else {
+    error.code = 'COMPLETION_REVIEW_QUERY_FAILED';
+  }
+  return error;
+}
+
 /**
  * Run a separate, unsaved Claude query to check whether the main task is done.
  * Errors (including an unavailable reviewer, cancellation, or invalid output)
@@ -408,7 +431,7 @@ export async function reviewHookCompletion({
         }
         if (message?.type === 'result') {
           if (message.is_error || (message.subtype && message.subtype !== 'success')) {
-            throw new Error('Completion reviewer model query failed');
+            throw reviewerQueryError(message);
           }
           completed = true;
           if (message.structured_output !== undefined) structured = message.structured_output;

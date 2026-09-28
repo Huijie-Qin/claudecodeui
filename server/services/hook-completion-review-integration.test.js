@@ -309,6 +309,29 @@ test('review errors block, then fail explicitly at the bounded review limit', as
   } finally { database.close(); }
 });
 
+test('model subscription failure is actionable without exposing provider response text', async () => {
+  const database = databaseFixture();
+  const hook = reviewHook();
+  try {
+    const runtime = createHookRuntimeSession({ hooks: [hook], database, userId: 1,
+      reviewCompletion: async () => {
+        const error = new Error('Completion reviewer model query failed');
+        error.code = 'COMPLETION_REVIEW_SUBSCRIPTION_INVALID';
+        error.apiErrorStatus = 400;
+        throw error;
+      },
+    });
+    const response = await runtime.executeHook(hook, {
+      hook_event_name: 'Stop', session_id: 'main', last_assistant_message: '完成',
+    });
+    assert.equal(response.decision, 'block');
+    assert.match(response.reason, /没有有效的 CodingPlan 订阅/);
+    const output = database.prepare('SELECT actions_json FROM hook_executions ORDER BY rowid DESC LIMIT 1').get();
+    assert.match(output.actions_json, /没有有效的 CodingPlan 订阅/);
+    assert.doesNotMatch(output.actions_json, /private-sentinel|Your account/);
+  } finally { database.close(); }
+});
+
 test('audit storage failures cannot silently bypass completion review', async () => {
   const hook = reviewHook(2);
   const runtime = createHookRuntimeSession({ hooks: [hook], userId: 1,

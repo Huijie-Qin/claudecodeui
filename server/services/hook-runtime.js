@@ -550,11 +550,23 @@ async function executePostActions({
             ? '审查模型超时'
             : error?.name === 'AbortError'
               ? '审查已中止'
-              : '审查模型调用失败或返回无效结果';
+              : error?.code === 'COMPLETION_REVIEW_SUBSCRIPTION_INVALID'
+                ? '模型服务账号没有有效的 CodingPlan 订阅'
+                : error?.code === 'COMPLETION_REVIEW_AUTH_FAILED'
+                  ? '模型服务认证失败或没有访问权限'
+                  : error?.code === 'COMPLETION_REVIEW_RATE_LIMITED'
+                    ? '模型服务触发限流'
+                    : error?.code === 'COMPLETION_REVIEW_MAX_TURNS'
+                      ? '审查模型达到最大执行步数'
+                      : Number.isInteger(error?.apiErrorStatus)
+                        ? `模型接口返回 HTTP ${error.apiErrorStatus}`
+                        : '审查模型调用失败或返回无效结果';
           verdict = {
             complete: false,
             reason: `模型验收未能执行：${failure}。`,
-            nextStep: '检查审查模型和 Hook 配置后继续任务。',
+            nextStep: error?.code === 'COMPLETION_REVIEW_SUBSCRIPTION_INVALID'
+              ? '检查当前用户的模型服务订阅状态和环境变量 ANTHROPIC_MODEL。'
+              : '检查审查模型和 Hook 配置后继续任务。',
             failed: true,
           };
         }
