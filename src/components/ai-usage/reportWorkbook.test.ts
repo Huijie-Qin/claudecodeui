@@ -75,7 +75,11 @@ test('workbook includes unvisited tabs, fixed overview, every matching page and 
   }
   const workbook = XLSX.read(await workbookBytes(sheets), { type: 'array', cellNF: true });
   assert.equal(workbook.SheetNames.length, 7);
-  assert.equal(workbook.Sheets.usage[`A${sheets[1].detailHeaderRow! + 4}`].v, 'group.user');
+  assert.equal(workbook.Sheets.usage.A2.v, 'group.user');
+  assert.match(workbook.Sheets.usage.A1.v, /from：2026-08-14/);
+  assert.match(workbook.Sheets.usage.A1.v, /sessionCount：205/);
+  assert.match(workbook.Sheets.usage.A1.v, /workbook.durationSeconds：1.25/);
+  assert.match(workbook.Sheets.usage.A1.v, /activeUserCount：205/);
   const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[1]], { header: 1 });
   assert.deepEqual(rows.find(row => (row as unknown[])[0] === '用户 204'), ['用户 204', 1, 0.5]);
 });
@@ -103,13 +107,13 @@ test('XLSX preserves zero, null, precision, safe literal names and sortable Shan
   const book = XLSX.read(bytes, { type: 'array', cellNF: true });
   assert.deepEqual(book.SheetNames, ['统计 数据', '统计 数据 (2)']);
   const sheet = book.Sheets[book.SheetNames[0]];
-  assert.equal(sheet.A5.t, 's'); assert.equal(sheet.A5.f, undefined);
-  assert.equal(sheet.B5.t, 'n'); assert.equal(sheet.B5.v, 0); assert.equal(sheet.C5?.v, undefined);
-  assert.equal(sheet.B5.w, '0');
-  assert.equal(sheet.D5.v, 1.23456789); assert.equal(sheet.E5.w, '2026-09-12 09:02:03');
+  assert.equal(sheet.A2.t, 's'); assert.equal(sheet.A2.f, undefined);
+  assert.equal(sheet.B2.t, 'n'); assert.equal(sheet.B2.v, 0); assert.equal(sheet.C2?.v, undefined);
+  assert.equal(sheet.B2.w, '0');
+  assert.equal(sheet.D2.v, 1.23456789); assert.equal(sheet.E2.w, '2026-09-12 09:02:03');
 });
 
-test('Excel has real styles, bounded filters, frozen headers, typed dates and print settings', async () => {
+test('plain Excel retains bounded filters, frozen headers, typed dates and print settings without decorative styles', async () => {
   const rows = [['开始日期', '2026-09-01', '结束日期', '2026-09-12'], [], ['会话次数', '活跃人数'], [25, 2], [],
     ['用户名', '会话次数', '时长（秒）'], ...Array.from({ length: 25 }, (_, i) => [`用户 ${i}`, 1, 1.25]), [],
     ['每日趋势'], ['日期', '会话次数'], ['2026-09-12', 25]];
@@ -119,23 +123,25 @@ test('Excel has real styles, bounded filters, frozen headers, typed dates and pr
   const zip = await JSZip.loadAsync(bytes);
   const xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
   const styles = await zip.file('xl/styles.xml')!.async('string');
-  assert.match(styles, /<fonts count="5">/);
-  assert.match(styles, /FF294B7A/);
-  assert.match(styles, /FFF4F7FC/);
-  assert.match(xml, /showGridLines="0"/);
-  assert.match(xml, /ySplit="9" topLeftCell="A10"/);
-  assert.match(xml, /<autoFilter ref="A9:C34"/);
+  assert.match(styles, /<fonts count="1">/);
+  assert.match(styles, /<fills count="2">/);
+  assert.doesNotMatch(styles, /<b\b|<i\b|patternType="solid"|FF294B7A|FFF4F7FC/);
+  assert.doesNotMatch(xml, /<tabColor|每日趋势/);
+  assert.match(xml, /<mergeCell ref="A1:C1"/);
+  assert.match(xml, /showGridLines="1"/);
+  assert.match(xml, /ySplit="2" topLeftCell="A3"/);
+  assert.match(xml, /<autoFilter ref="A2:C27"/);
   assert.match(xml, /orientation="landscape" fitToWidth="1" fitToHeight="0"/);
   assert.equal((xml.match(/<sheetPr>/g) || []).length, 1);
   const book = XLSX.read(bytes, { type: 'array', cellNF: true, cellStyles: true });
   const sheet = book.Sheets['AI 使用'];
-  assert.equal(sheet.A1.v, 'AI 使用');
-  assert.deepEqual(sheet['!merges'], [{ s: { r: 0, c: 0 }, e: { r: 2, c: 3 } }]);
-  assert.equal(sheet.B4.t, 'n'); assert.equal(sheet.B4.w, '2026-09-01');
-  assert.equal(sheet.D4.w, '2026-09-12');
-  assert.equal(sheet.C10.v, 1.25);
-  assert.notDeepEqual(sheet.A10.s, sheet.A11.s);
-  assert.equal(sheet.A38.w, '2026-09-12');
+  assert.equal(sheet.A1.v, '开始日期：2026-09-01；结束日期：2026-09-12\n会话次数：25；活跃人数：2');
+  assert.deepEqual(sheet['!merges'], [XLSX.utils.decode_range('A1:C1')]);
+  assert.equal(sheet['!ref'], 'A1:C30');
+  assert.equal(sheet.C3.v, 1.25);
+  assert.deepEqual(sheet.A3.s, sheet.A4.s);
+  assert.equal(sheet.A30.t, 'n'); assert.equal(sheet.A30.w, '2026-09-12');
+  assert.equal(sheet['!rows']![0].hpt, 48);
   assert.ok(book.Workbook?.Names?.some(name => name.Name === '_xlnm.Print_Titles'));
   assert.deepEqual(rows[0], ['开始日期', '2026-09-01', '结束日期', '2026-09-12']);
 });
@@ -147,12 +153,69 @@ test('long names wrap with fitted heights and missing values remain blank', asyn
   assert.doesNotMatch(await zip.file('xl/worksheets/sheet1.xml')!.async('string'), /<pane |<autoFilter/);
   const book = XLSX.read(bytes, { type: 'array', cellStyles: true });
   const sheet = book.Sheets['长字段'];
-  assert.equal(sheet.B5?.v, undefined);
-  assert.ok(sheet['!rows']![4].hpt! > 25);
+  assert.equal(sheet.B2?.v, undefined);
+  assert.ok(sheet['!rows']![1].hpt! > 25);
   assert.ok(sheet['!cols']![0].wch! <= 48);
 });
 
-test('tables have four-sided borders including blank cells and spacer rows are not compressed', async () => {
+test('long information fits in a single merged cell without exceeding row heights or widening detail columns', async () => {
+  const search = '很长的工作区筛选条件'.repeat(60);
+  const bytes = await workbookBytes([{ title: '长筛选', rows: [
+    ['工作区'], [search], ['日期', '次数'], ['2026-09-12', 0],
+  ], metadataHeaderRows: [0], headerRows: [2], detailHeaderRow: 2, detailRowCount: 1,
+  dateCells: [{ row: 3, col: 0, dateOnly: true }] }]);
+  const book = XLSX.read(bytes, { type: 'array', cellNF: true, cellStyles: true });
+  const sheet = book.Sheets['长筛选'];
+  assert.equal(sheet.A1.v, `工作区：${search}`);
+  assert.equal(sheet['!merges']!.length, 1);
+  const merge = sheet['!merges']![0];
+  assert.ok(merge.e.r > 0);
+  assert.equal(merge.e.c, 1);
+  for (const row of sheet['!rows']!) assert.ok(row.hpt! <= 409);
+  assert.ok(sheet['!cols']!.every(col => col.wch! <= 18));
+  const header = merge.e.r + 2;
+  assert.equal(sheet[`A${header}`].v, '日期');
+  assert.equal(sheet[`A${header + 1}`].w, '2026-09-12');
+  assert.equal(sheet[`B${header + 1}`].v, 0);
+  assert.equal(sheet['!autofilter']!.ref, `A${header}:B${header + 1}`);
+});
+
+test('empty reports retain literal information, zero, false and readable metadata dates in one cell', async () => {
+  const bytes = await workbookBytes([{ title: '空报告', rows: [
+    ['名称', '次数', '启用', '日期'], ['=1+1', 0, false, shanghaiExcelTime('2026-09-12T01:02:03Z')],
+    ['用户', '次数'],
+  ], metadataHeaderRows: [0], dateCells: [{ row: 1, col: 3 }], headerRows: [2], detailHeaderRow: 2, detailRowCount: 0 }]);
+  const zip = await JSZip.loadAsync(bytes);
+  const xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
+  assert.doesNotMatch(xml, /<pane |<autoFilter/);
+  const sheet = XLSX.read(bytes, { type: 'array' }).Sheets['空报告'];
+  assert.equal(sheet['!ref'], 'A1:B2');
+  assert.equal(sheet.A1.t, 's');
+  assert.equal(sheet.A1.f, undefined);
+  assert.equal(sheet.A1.v, '名称：=1+1；次数：0；启用：false；日期：2026-09-12 09:02:03');
+  assert.equal(sheet.A2.v, '用户');
+});
+
+test('information beyond Excel cell capacity is rejected instead of truncated', async () => {
+  await assert.rejects(workbookBytes([{ title: '超长筛选', rows: [
+    ['名称'], ['x'.repeat(32768)], ['用户'],
+  ], metadataHeaderRows: [0], headerRows: [2], detailHeaderRow: 2, detailRowCount: 0 }]), /exportTooLarge/);
+});
+
+test('wrapped information and multiline detail strings do not add invalid OOXML whitespace attributes', async () => {
+  const bytes = await workbookBytes([{ title: '换行', rows: [
+    ['开始日期', '结束日期'], ['2026-09-01', '2026-09-12'], ['用户'], [' 全部 '],
+    ['名称', '次数'], [' 第一行\n第二行 ', 0],
+  ], metadataHeaderRows: [0, 2], headerRows: [4], detailHeaderRow: 4, detailRowCount: 1 }]);
+  const zip = await JSZip.loadAsync(bytes);
+  const xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
+  assert.doesNotMatch(xml, /<(?:row|c|v)\b[^>]*\bxml:space=/);
+  const sheet = XLSX.read(bytes, { type: 'array' }).Sheets['换行'];
+  assert.equal(sheet.A1.v, '开始日期：2026-09-01；结束日期：2026-09-12\n用户： 全部 ');
+  assert.equal(sheet.A3.v, ' 第一行\n第二行 ');
+});
+
+test('the whole used rectangle has four-sided borders, including missing values and blank separators', async () => {
   const bytes = await workbookBytes([{ title: '边框及行高', rows: [
     ['筛选与汇总', '', ''], ['开始日期', '结束日期', '用户'], ['2026-09-01', '2026-09-12', '全部'],
     ['工作区', '分组', '名称'], ['全部', '用户', '全部'], [],
@@ -165,7 +228,7 @@ test('tables have four-sided borders including blank cells and spacer rows are n
   const styles = await zip.file('xl/styles.xml')!.async('string');
   const borders = [...styles.matchAll(/<border(?:\s[^>]*)?>[\s\S]*?<\/border>|<border\/>/g)].map(match => match[0]);
   const formats = [...styles.match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/)![1].matchAll(/<xf\b[^>]*borderId="(\d+)"/g)].map(match => Number(match[1]));
-  for (const row of [10, 11, 15, 16, 17, 18]) {
+  for (let row = 1; row <= 5; row++) {
     for (const col of ['A', 'B', 'C']) {
       const cell = xml.match(new RegExp(`<c\\b[^>]*r="${col}${row}"[^>]*>`))![0];
       const border = borders[formats[Number(cell.match(/\bs="(\d+)"/)![1])]];
@@ -173,15 +236,18 @@ test('tables have four-sided borders including blank cells and spacer rows are n
     }
   }
   const sheet = XLSX.read(bytes, { type: 'array', cellStyles: true }).Sheets['边框及行高'];
-  for (const row of [1, 3, 9, 12, 13]) assert.equal(sheet['!rows']![row - 1].hpt, 20, `row ${row}`);
-  assert.equal(sheet.B16.v, 0);
-  assert.equal(sheet.C16?.v, undefined);
-  assert.equal(sheet.C17?.v, undefined);
-  assert.match(xml, /<c r="C16" s="\d+"\/>/);
+  for (const row of [2, 3, 4, 5]) assert.equal(sheet['!rows']![row - 1].hpt, 20, `row ${row}`);
+  assert.match(sheet.A1.v, /次数：0；时长：1.25；未知：/);
+  assert.equal(sheet.B3.v, 0);
+  assert.equal(sheet.C3?.v, undefined);
+  assert.equal(sheet.C4?.v, undefined);
+  assert.match(xml, /<c r="C3" s="\d+"\/>/);
+  assert.doesNotMatch(xml, /筛选与汇总|明细/);
+  assert.equal(sheet['!ref'], 'A1:C5');
   assert.equal(XLSX.utils.decode_range(sheet['!ref']!).e.c, 2);
 });
 
-test('information and details have independent frames, with merged titles, inner borders and an unframed gap', async () => {
+test('information occupies one wrapping cell above plain details, without report titles or section headings', async () => {
   const bytes = await workbookBytes([{ title: '展示区外框', rows: [
     ['筛选与汇总', '', '', ''], ['日期', '用户'], ['2026-09-12', '全部'], [],
     ['次数', '未知'], [0, null], [], [], ['明细', '', '', ''],
@@ -198,61 +264,64 @@ test('information and details have independent frames, with merged titles, inner
     const style = cell?.match(/\bs="(\d+)"/)?.[1];
     return style !== undefined && borders[formats[Number(style)]].includes(`<${edge} style="thin">`);
   };
-  for (const { start, end, cols } of [{ start: 1, end: 9, cols: ['A', 'B'] }, { start: 12, end: 14, cols: ['A', 'B', 'C', 'D'] }]) {
-    for (let row = start; row <= end; row++) {
-      assert.ok(hasEdge(`A${row}`, 'left'), `A${row} left`);
-      assert.ok(hasEdge(`${cols.at(-1)}${row}`, 'right'), `${cols.at(-1)}${row} right`);
-    }
-    for (const col of cols) {
-      assert.ok(hasEdge(`${col}${start}`, 'top'));
-      assert.ok(hasEdge(`${col}${end}`, 'bottom'));
-    }
-  }
-  for (const row of [5, 6, 7]) for (const col of ['A', 'B']) {
+  for (let row = 1; row <= 3; row++) for (const col of ['A', 'B', 'C', 'D']) {
     for (const edge of ['left', 'right', 'top', 'bottom']) assert.ok(hasEdge(`${col}${row}`, edge));
   }
-  assert.equal(hasEdge('D7', 'top'), false); // Do not grid unused metadata columns.
-  for (const row of [10, 11]) assert.doesNotMatch(xml, new RegExp(`<c\\b[^>]*r="[A-D]${row}"`));
-  assert.equal(hasEdge('B2', 'left'), false); // No grid inside the merged title.
-  assert.equal(hasEdge('A2', 'bottom'), false);
-  assert.equal(hasEdge('B3', 'bottom'), true);
-  assert.doesNotMatch(xml, /<c\b[^>]*r="[CD][1-9]"/);
-  assert.match(xml, /<autoFilter ref="A13:D14"/);
+  assert.doesNotMatch(xml, /展示区外框|筛选与汇总|明细/);
+  assert.match(xml, /<autoFilter ref="A2:D3"/);
+  assert.match(styles, /horizontal="left" vertical="top" wrapText="1"/);
   const sheet = XLSX.read(bytes, { type: 'array' }).Sheets['展示区外框'];
-  assert.equal(sheet['!ref'], 'A1:D14');
-  assert.deepEqual(sheet['!merges'], [{ s: { r: 0, c: 0 }, e: { r: 2, c: 1 } }]);
-  assert.equal(sheet.A1.v, '展示区外框');
-  assert.equal(sheet.A2?.v, undefined);
-  assert.equal(sheet.A9.v, 0);
-  assert.equal(sheet.B9?.v, undefined);
-  assert.equal(sheet.D9?.v, undefined);
+  assert.equal(sheet['!ref'], 'A1:D3');
+  assert.deepEqual(sheet['!merges'], [XLSX.utils.decode_range('A1:D1')]);
+  assert.equal(sheet.A1.v, '日期：2026-09-12；用户：全部\n次数：0；未知：');
+  assert.equal(sheet.A2.v, '用户');
+  assert.equal(sheet.A3.v, '小王');
+  assert.equal(sheet.B3.v, 0);
+  assert.equal(sheet.C3?.v, undefined);
+  assert.equal(sheet.D3.v, '研发');
 });
 
-test('daily trend has a three-column information panel and keeps all four detail columns', async () => {
+test('plain daily trend preserves all four data columns and remaps dates, filters and frozen headers', async () => {
   const source: WorkbookSheet = { title: 'AI 使用 · 每日趋势', rows: [
     ['筛选与汇总', '', '', ''], ['开始日期', '结束日期', '分组'], ['2026-09-01', '2026-09-30', '日期'],
     ['用户', '工作区', '名称'], ['全部', '全部', '全部'], [], [], ['明细', '', '', ''],
     ['日期', '会话次数', 'DAU', 'MAU'], ...Array.from({ length: 30 }, (_, i) => [`2026-09-${String(i + 1).padStart(2, '0')}`, 20, 4, 41]),
   ], sectionRows: [0, 7], metadataHeaderRows: [1, 3], headerRows: [8], detailHeaderRow: 8, detailRowCount: 30,
-  dateCells: [{ row: 2, col: 0, dateOnly: true }, { row: 2, col: 1, dateOnly: true }] };
+  dateCells: [{ row: 2, col: 0, dateOnly: true }, { row: 2, col: 1, dateOnly: true },
+    ...Array.from({ length: 30 }, (_, i) => ({ row: 9 + i, col: 0, dateOnly: true }))] };
   const original = structuredClone(source);
   const bytes = await workbookBytes([source]);
   const zip = await JSZip.loadAsync(bytes);
   const xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
-  assert.match(xml, /<mergeCell ref="A1:C3"/);
-  assert.doesNotMatch(xml, /<c\b[^>]*r="D(?:[1-9]|10)"/);
-  for (const row of [9, 10]) assert.doesNotMatch(xml, new RegExp(`<c\\b[^>]*r="[A-D]${row}"`));
-  assert.match(xml, /<autoFilter ref="A12:D42"/);
-  assert.match(xml, /ySplit="12" topLeftCell="A13"/);
+  assert.doesNotMatch(xml, /筛选与汇总|明细/);
+  assert.match(xml, /<mergeCell ref="A1:D1"/);
+  assert.match(xml, /<autoFilter ref="A2:D32"/);
+  assert.match(xml, /ySplit="2" topLeftCell="A3"/);
   const book = XLSX.read(bytes, { type: 'array', cellNF: true, cellStyles: true });
   const sheet = book.Sheets[source.title];
-  assert.equal(sheet['!ref'], 'A1:D42');
+  assert.equal(sheet['!ref'], 'A1:D32');
   assert.equal(sheet['!cols']!.length, 4);
-  assert.equal(sheet.A6.w, '2026-09-01');
-  assert.equal(sheet.D12.v, 'MAU');
-  assert.equal(sheet.D13.v, 41);
-  assert.equal(sheet.D42.v, 41);
+  assert.equal(sheet.A1.v, '开始日期：2026-09-01；结束日期：2026-09-30；分组：日期\n用户：全部；工作区：全部；名称：全部');
+  assert.equal(sheet.A3.t, 'n'); assert.equal(sheet.A3.w, '2026-09-01');
+  assert.equal(sheet.A32.w, '2026-09-30');
+  assert.equal(sheet.D2.v, 'MAU');
+  assert.equal(sheet.D3.v, 41);
+  assert.equal(sheet.D32.v, 41);
   assert.deepEqual(source, original);
+});
+
+test('plain export removes only marked headings, preserving literal labels, false, zero and empty detail records', async () => {
+  const bytes = await workbookBytes([{ title: '报告名', rows: [[], ['字段', '值'], ['明细', false], [], [], ['筛选与汇总', 0]],
+    headerRows: [1], detailHeaderRow: 1, detailRowCount: 4 }]);
+  const book = XLSX.read(bytes, { type: 'array' });
+  const sheet = book.Sheets['报告名'];
+  assert.equal(sheet['!ref'], 'A1:B5');
+  assert.equal(sheet.A1.v, '字段');
+  assert.equal(sheet.A2.v, '明细');
+  assert.equal(sheet.B2.v, false);
+  assert.equal(sheet.A5.v, '筛选与汇总');
+  assert.equal(sheet.B5.v, 0);
+  assert.equal(sheet['!autofilter']!.ref, 'A1:B5');
 });
 
 test('worksheet print settings precede ignored errors as required by Excel OOXML', async () => {
@@ -333,7 +402,7 @@ test('narrow sheets wrap information without adding blank columns and filters co
   const bytes = await workbookBytes([report]);
   const zip = await JSZip.loadAsync(bytes);
   const xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
-  const header = report.detailHeaderRow! + 4;
+  const header = 2;
   assert.ok(xml.includes(`ySplit="${header}" topLeftCell="A${header + 1}"`));
   assert.ok(xml.includes(`<autoFilter ref="A${header}:B${header + 30}"`));
   const book = XLSX.read(bytes, { type: 'array', cellNF: true, cellStyles: true });
@@ -343,8 +412,11 @@ test('narrow sheets wrap information without adding blank columns and filters co
   assert.equal(sheet[`A${header}`].v, 'group.user');
   assert.equal(sheet[`A${header + 1}`].v, '用户 0');
   assert.equal(sheet[`B${header + 1}`].v, 0);
-  assert.equal(sheet.A6.t, 'n'); assert.equal(sheet.A6.w, '2026-08-14');
-  assert.notDeepEqual(sheet[`A${header + 1}`].s, sheet[`A${header + 2}`].s);
+  assert.match(sheet.A1.v, /from：2026-08-14/);
+  assert.match(sheet.A1.v, /activeUserCount：29；sessionCount：435/);
+  assert.deepEqual(sheet['!merges'], [XLSX.utils.decode_range('A1:B1')]);
+  assert.ok(sheet['!rows']![0].hpt! > 100);
+  assert.deepEqual(sheet[`A${header + 1}`].s, sheet[`A${header + 2}`].s);
   assert.equal(book.Workbook?.Names?.find(name => name.Name === '_xlnm.Print_Titles')?.Ref, `'templates · sql'!$${header}:$${header}`);
   assert.equal(book.Workbook?.Names?.find(name => name.Name === '_xlnm.Print_Area')?.Ref, `'templates · sql'!$A$1:$B$${header + 30}`);
 });
