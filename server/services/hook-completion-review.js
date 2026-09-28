@@ -295,9 +295,12 @@ function reviewerToolPermission(root, executionWorkspaceRoot) {
 function reviewerOptions({ model, sdkOptions, workspaceRoot, executionWorkspaceRoot, abortController }) {
   const source = sdkOptions && typeof sdkOptions === 'object' ? sdkOptions : {};
   const cwd = source.cwd || workspaceRoot;
+  const configuredModel = typeof model === 'string' ? model.trim() : '';
+  const userEnvModel = typeof source.env?.ANTHROPIC_MODEL === 'string'
+    ? source.env.ANTHROPIC_MODEL.trim() : '';
   const options = {
     cwd,
-    model: model || source.model,
+    model: configuredModel || userEnvModel || source.model,
     persistSession: false,
     settingSources: [],
     skills: [],

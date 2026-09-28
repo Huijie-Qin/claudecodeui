@@ -78,6 +78,31 @@ test('review uses a fresh restricted query each time and includes bounded task e
   assert.equal(sdkOptions.env.CLAUDECODE, '1', 'Source environment is not mutated');
 });
 
+test('blank review model uses the current user environment before the main model', async (t) => {
+  const { root } = await fixture(t);
+  const models = [];
+  const queryFn = ({ options }) => {
+    models.push(options.model);
+    return answer(complete)();
+  };
+  const sdkOptions = {
+    cwd: root,
+    model: 'main-model',
+    env: { ANTHROPIC_MODEL: '  user-model  ' },
+  };
+  const input = { workspaceRoot: root, userPrompt: '验收报告', sdkOptions, queryFn };
+
+  await reviewHookCompletion({ ...input, model: '' });
+  await reviewHookCompletion({ ...input, model: '   ' });
+  await reviewHookCompletion({ ...input, model: '  selected-model  ' });
+  await reviewHookCompletion({ ...input, sdkOptions: {
+    ...sdkOptions, env: { ANTHROPIC_MODEL: '   ' },
+  } });
+
+  assert.deepEqual(models, ['user-model', 'user-model', 'selected-model', 'main-model']);
+  assert.equal(sdkOptions.env.ANTHROPIC_MODEL, '  user-model  ', 'User environment is not mutated');
+});
+
 test('completion review leaves the parent user concurrency slot unchanged', async (t) => {
   const { root } = await fixture(t);
   const limiter = createSessionConcurrencyLimiter({
