@@ -1889,6 +1889,7 @@ export function createAgentSessionRuntimeManager({
   }
 
   return {
+    resolveClaudeRuntimeEnv,
     async prepareClaudeRuntime(options = {}) {
       const mode = resolveClaudeExecutionMode(env);
       if (mode === 'local') {

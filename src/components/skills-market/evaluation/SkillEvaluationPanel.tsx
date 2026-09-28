@@ -119,7 +119,7 @@ export default function SkillEvaluationPanel({ workspaceId, name, canManage, onF
   const active = isActive(job), latestRound = job?.rounds.at(-1);
   return <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-      <div><h2 className="text-lg font-semibold">{tr('title')}</h2><p className="mt-1 text-xs text-muted-foreground">{tr('latestOnly')}</p></div>
+      <div><h2 className="text-lg font-semibold">{tr('title')}</h2><p className="mt-1 text-xs text-muted-foreground">{tr('latestOnly')}</p><p className="mt-1 text-xs text-muted-foreground">{tr('runtimeNotice')}</p></div>
       <div className="flex flex-wrap gap-2">
         <AddCaseMenu disabled={!editable || busy || !data} aiDisabled={active || generating} onManual={() => edit()} onAi={() => void act(async () => { const accepted = await payload(await api.skillEvaluations.generate(workspaceId, name, data?.revision)); let task = accepted.job; await refreshCases(); while (live.current && ['queued', 'running', 'cancelling'].includes(task.status)) { await new Promise((resolve) => setTimeout(resolve, 1500)); if (!live.current) return; task = (await payload(await api.skillEvaluations.job(workspaceId, task.id))).job; } if (task.status !== 'completed') throw new Error(task.error || task.stopReason); await refreshCases(); onFilesChanged(); })} />
         <button type="button" className={button} disabled={!editable || busy || active || generating || !data?.document.evals.length} onClick={() => void start('run-all')}><Play className="h-4 w-4" />{tr('run')}</button>

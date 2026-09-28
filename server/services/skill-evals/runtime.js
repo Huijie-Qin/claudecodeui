@@ -10,6 +10,7 @@ import { CLAUDE_MODELS } from '../../../shared/modelConstants.js';
 import { fail, redact } from './contracts.js';
 import { writeTree } from './files.js';
 import { createSandboxImageManager, resolveEvaluationSandboxConfig } from './sandbox-image.js';
+import { NATIVE_CASE_TOOLS, prepareEvaluationSession, readEvaluationMcpConfig } from './session-container.js';
 
 const COLLECT_ARTIFACTS = `
 import os, stat, json, base64
@@ -30,17 +31,8 @@ print(json.dumps(files))
 `;
 const exec = promisify(execFile);
 const AUTH_KEYS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL'];
-export function buildSandboxArgs({ id, image, projection, jobId }) {
-  return ['run', '-d', '--pull=never', '--name', id, '--label', 'cloudcli.skill-eval=true',
-    ...(jobId ? ['--label', `cloudcli.eval-job=${jobId}`] : []),
-    '--network=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
-    '--pids-limit=128', '--memory=512m', '--cpus=1', '--user=1000:1000',
-    '--tmpfs=/tmp:rw,nosuid,nodev,size=128m', '--tmpfs=/work:rw,nosuid,nodev,size=128m,mode=1777',
-    '--mount', `type=bind,src=${projection},dst=/skill,readonly`,
-    '--tmpfs=/output:rw,nosuid,nodev,size=50m,mode=1777', '-w', '/work', '--entrypoint', 'sleep', image, 'infinity'];
-}
 
-export function createEvaluationRuntime({ resolveEnvironment, runQuery, env = process.env,
+export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvironment, runQuery, env = process.env,
   docker = resolveEvaluationSandboxConfig(env).docker, image = resolveEvaluationSandboxConfig(env).image,
   autoBuild = resolveEvaluationSandboxConfig(env).autoBuild,
   autoPull = resolveEvaluationSandboxConfig(env).autoPull && image === resolveEvaluationSandboxConfig(env).image,
@@ -55,10 +47,11 @@ export function createEvaluationRuntime({ resolveEnvironment, runQuery, env = pr
   async function preflight(scope) {
     if (!image) throw fail('请在 .env 中配置 SKILL_EVAL_IMAGE。', 'EVAL_RUNTIME_UNAVAILABLE', 503);
     const { model } = await profile(scope);
+    await readEvaluationMcpConfig(scope.workspacePath);
     if (sandboxImage.preparing) throw fail('测评环境正在准备中，首次拉取或构建镜像可能需要几分钟，请稍后重试。', 'EVAL_RUNTIME_PREPARING', 503);
-    return { image: await sandboxImage.ensure(), model, kind: 'sdk-broker-docker-network-none-v1' };
+    return { image: await sandboxImage.ensure(), imageName: image, model, kind: 'sdk-session-docker-mcp-v2' };
   }
-  async function modelCall({ scope, prompt, systemPrompt, signal, tools = [], onText = () => {}, budget, model, outputSchema }) {
+  async function modelCall({ scope, prompt, systemPrompt, signal, tools = [], onText = () => {}, budget, model, outputSchema, execution, onToolEvent = () => {} }) {
     if (signal?.aborted) throw signal.reason || fail('Cancelled');
     if (budget.remainingUsd <= 0 || budget.calls >= 1500) throw fail('Model budget exhausted', 'EVAL_LIMIT_EXCEEDED');
     budget.calls++;
@@ -75,27 +68,36 @@ export function createEvaluationRuntime({ resolveEnvironment, runQuery, env = pr
     try {
       const sdk = await import('@anthropic-ai/claude-agent-sdk');
       const queryFn = runQuery || sdk.query;
-      const toolNames = tools.map((t) => `mcp__evaluation__${t.name}`);
+      const brokerName = execution?.brokerName || 'evaluation';
+      const toolNames = tools.map((t) => `mcp__${brokerName}__${t.name}`);
       const env = { PATH: process.env.PATH, HOME: home, TMPDIR: home, ...auth,
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CONFIG_DIR: home };
-      // Model process has zero native filesystem/shell/Agent tools. All execution is brokered below.
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CONFIG_DIR: home, ...execution?.env };
+      // Case execution runs inside Docker; grading and optimization retain a tool-free host model.
       const input = tools.length ? (async function* () { yield { type: 'user', message: { role: 'user', content: prompt }, parent_tool_use_id: null, session_id: '' }; })() : prompt;
       query = queryFn({ prompt: input, options: {
-        cwd: home, env, executable: 'node', tools: [], settingSources: [], plugins: [],
-        persistSession: false, permissionMode: 'dontAsk', allowedTools: toolNames,
-        canUseTool: async (name, input) => toolNames.includes(name)
+        cwd: execution?.workspace || home, env, executable: 'node', tools: execution ? NATIVE_CASE_TOOLS : [], settingSources: [], plugins: [],
+        persistSession: false, permissionMode: execution ? 'default' : 'dontAsk', allowedTools: toolNames,
+        disallowedTools: execution?.access.disallowedTools || [], strictMcpConfig: true,
+        canUseTool: async (name, input) => toolNames.includes(name) || (execution && (NATIVE_CASE_TOOLS.includes(name)
+          || (Object.keys(execution.mcpServers).some(server => name.startsWith(`mcp__${server}__`)) && execution.access.isAllowed(name))))
           ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'Tool unavailable in evaluations' },
-        mcpServers: tools.length ? { evaluation: sdk.createSdkMcpServer({ name: 'evaluation', version: '1.0.0', tools }) } : {},
+        mcpServers: { ...execution?.mcpServers, ...(tools.length ? { [brokerName]: sdk.createSdkMcpServer({ name: brokerName, version: '1.0.0', tools }) } : {}) },
         model: model || defaultModel, systemPrompt, maxTurns: 24, maxBudgetUsd: reserved,
         abortController: controller, includePartialMessages: false,
         ...(outputSchema ? { outputFormat: { type: 'json_schema', schema: outputSchema } } : {}),
-        spawnClaudeCodeProcess: (options) => spawn(options.command === 'node' ? process.execPath : options.command, options.args, {
+        ...(execution ? { pathToClaudeCodeExecutable: 'claude' } : {}),
+        spawnClaudeCodeProcess: execution?.spawn || ((options) => spawn(options.command === 'node' ? process.execPath : options.command, options.args, {
           cwd: home, env, stdio: ['pipe', 'pipe', 'pipe'], signal: options.signal,
-        }),
+        })),
       } });
       let text = '', result = null;
       for await (const event of query) {
         if (controller.signal.aborted) throw controller.signal.reason || fail('Cancelled');
+        if (execution && ['assistant', 'user'].includes(event.type)) {
+          for (const block of event.message?.content || []) {
+            if (['tool_use', 'tool_result'].includes(block.type) && !toolNames.includes(block.name)) await onToolEvent(block);
+          }
+        }
         if (event.type === 'assistant') {
           const chunk = (event.message?.content || []).filter((p) => p.type === 'text').map((p) => p.text).join('\n');
           if (chunk) { text = chunk; await onText(chunk); }
@@ -125,9 +127,21 @@ export function createEvaluationRuntime({ resolveEnvironment, runQuery, env = pr
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort();
     const timer = setTimeout(() => controller.abort(fail('Case timed out', 'EVAL_TIMEOUT')), 300000);
-    let count = 0, size = 0, created = false;
+    let count = 0, size = 0, created = false, execution;
+    const sanitizeText = text => execution ? execution.sanitize(text) : redact(text);
+    const toolCalls = new Map();
+    function toolEvent(block, parent) {
+      if (block.type === 'tool_use') {
+        if (++count > 32) throw fail('Tool call limit exceeded', 'EVAL_LIMIT_EXCEEDED');
+        const event = emit({ role: 'tool', kind: 'tool_use', tool: block.name, input: typeof block.input === 'string' ? block.input : JSON.stringify(block.input, null, 2), parent });
+        toolCalls.set(block.id, event.id);
+      } else if (toolCalls.has(block.tool_use_id)) {
+        emit({ role: 'tool', kind: 'tool_result', text: typeof block.content === 'string' ? block.content : JSON.stringify(block.content),
+          parent: toolCalls.get(block.tool_use_id), isError: block.is_error === true });
+      }
+    }
     function emit(event) {
-      const sanitize = (value) => typeof value === 'string' ? redact(value) : Array.isArray(value) ? value.map(sanitize)
+      const sanitize = (value) => typeof value === 'string' ? sanitizeText(value) : Array.isArray(value) ? value.map(sanitize)
         : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, sanitize(v)])) : value;
       const safe = sanitize(event);
       size += Buffer.byteLength(JSON.stringify(safe));
@@ -136,11 +150,11 @@ export function createEvaluationRuntime({ resolveEnvironment, runQuery, env = pr
       events.push(record); onEvent(record); return record;
     }
     const makeTools = (parent = null, depth = 0) => {
-      const shell = tool('shell', 'Run a shell command in the offline test container. Skill files: /skill (read only). Inputs under /skill/evals/files. Write deliverables to /output. No external network or production tools.', { command: z.string().min(1).max(16000) }, async ({ command: script }) => {
+      const shell = tool('shell', 'Run a shell command in the isolated test container. Working directory: /workspace. Skill files: /skill (read only). Inputs under /skill/evals/files. Write deliverables to /output. Workspace MCP services and network are available; external operations have real effects.', { command: z.string().min(1).max(16000) }, async ({ command: script }) => {
         if (++count > 32) { controller.abort(fail('Tool call limit exceeded', 'EVAL_LIMIT_EXCEEDED')); throw controller.signal.reason; }
         const call = emit({ role: 'tool', kind: 'tool_use', tool: 'shell', input: script, parent });
         try {
-          const result = await command(docker, ['exec', id, 'sh', '-lc', script], { signal: controller.signal, timeout: 60000, maxBuffer: 1024 * 1024 });
+          const result = await command(docker, execution.shellArgs(script), { signal: controller.signal, timeout: 60000, maxBuffer: 1024 * 1024 });
           const text = result.stdout + result.stderr;
           emit({ role: 'tool', kind: 'tool_result', text, parent: call.id });
           return { content: [{ type: 'text', text }] };
@@ -158,8 +172,8 @@ export function createEvaluationRuntime({ resolveEnvironment, runQuery, env = pr
         if (++count > 32) { controller.abort(fail('Tool call limit exceeded', 'EVAL_LIMIT_EXCEEDED')); throw controller.signal.reason; }
         const started = emit({ role: 'assistant', kind: 'task_started', text: task, parent });
         try {
-          const result = await modelCall({ scope, prompt: task, signal: controller.signal, budget, model: runtimeProfile.model,
-            systemPrompt: 'Complete only this delegated test task. Use evaluation shell for all file operations. Read skill instructions at /skill/SKILL.md. No external network. Output files under /output.',
+          const result = await modelCall({ scope, prompt: task, signal: controller.signal, budget, model: runtimeProfile.model, execution, onToolEvent: block => toolEvent(block, started.id),
+            systemPrompt: 'Complete only this delegated test task. Use evaluation shell for all file operations. Read skill instructions at /skill/SKILL.md. Workspace MCP tools are available with the current user permissions. External operations have real effects. Output files under /output.',
             tools: makeTools(started.id, 1), onText: (text) => emit({ role: 'assistant', kind: 'text', text, parent: started.id }) });
           emit({ role: 'assistant', kind: 'task_completed', text: result.text, parent: started.id });
           return { content: [{ type: 'text', text: result.text }] };
@@ -173,21 +187,25 @@ export function createEvaluationRuntime({ resolveEnvironment, runQuery, env = pr
       await writeTree(projection, projected);
       // Read-only mount still needs traversable/readable modes for the unprivileged container uid.
       await command('chmod', ['-R', 'a+rX', projection], { timeout: 10000 });
-      created = true; // Even a CLI timeout may leave a started container that needs cleanup.
-      await command(docker, buildSandboxArgs({ id, image: runtimeProfile.image, projection, jobId: scope.id }), { timeout: 15000, maxBuffer: 4096 });
+      execution = await prepareEvaluationSession({ scope, temp, projection, id, image: runtimeProfile.image, sharedImage: runtimeProfile.imageName || image, docker, env,
+        auth: (await profile(scope)).auth, resolvedEnvironment: await resolveSessionEnvironment?.(scope) });
+      created = true; // A CLI timeout can leave a container that still needs cleanup.
+      await command(docker, execution.args, { timeout: 15000, maxBuffer: 4096 });
+      try {
+        await command(docker, ['exec', id, 'sh', '-lc', 'command -v claude >/dev/null && test -x /usr/bin/python3'], { timeout: 10000, maxBuffer: 4096 });
+      } catch { throw fail('测评镜像需要与会话镜像一样安装 Claude CLI 和 /usr/bin/python3。请检查 CLOUDCLI_CLAUDE_DOCKER_IMAGE 或移除旧的 SKILL_EVAL_IMAGE 覆盖项。', 'EVAL_RUNTIME_UNAVAILABLE', 503); }
       emit({ role: 'user', kind: 'text', text: testCase.prompt });
-      result = await modelCall({ scope, prompt: testCase.prompt, signal: controller.signal, budget, model: runtimeProfile.model,
-        systemPrompt: `Execute this task using the following skill. Use only evaluation.shell for file/command operations and evaluation.delegate for subagents. Skill resources are at /skill; test inputs: ${JSON.stringify(testCase.files || [])}. Save final files under /output. Network and production tools are unavailable. Do not simulate external results.\n\n${Buffer.from(files['SKILL.md'], 'base64').toString('utf8')}`,
+      result = await modelCall({ scope, prompt: testCase.prompt, signal: controller.signal, budget, model: runtimeProfile.model, execution, onToolEvent: block => toolEvent(block),
+        systemPrompt: `Execute this task using the following skill. You may use native file/shell tools, the evaluation shell and delegate tools, and configured workspace MCP tools. Skill resources are at /skill; test inputs: ${JSON.stringify(testCase.files || [])}. Save final files under /output. Your working directory is /workspace, an independent temporary workspace. Workspace MCP tools and network are available with current user permissions. External operations have real effects. Do not simulate external results.\n\n${Buffer.from(files['SKILL.md'], 'base64').toString('utf8')}`,
         tools: makeTools(), onText: (text) => emit({ role: 'assistant', kind: 'text', text }) });
       if (controller.signal.aborted) throw controller.signal.reason;
-      const processes = await command(docker, ['top', id, '-eo', 'pid,comm'], { timeout: 10000, maxBuffer: 16000 });
-      if (processes.stdout.trim().split('\n').length > 2) throw fail('Background processes are still running; artifacts are not complete', 'EVAL_BACKGROUND_ACTIVE');
-      // Outputs live in a bounded container tmpfs; never grant generated code a writable host mount.
+      // Outputs live in a bounded container tmpfs; only /output is collected, never the temporary home or MCP credentials.
       const collected = await command(docker, ['exec', id, '/usr/bin/python3', '-I', '-c', COLLECT_ARTIFACTS], { signal: controller.signal, timeout: 15000, maxBuffer: 72 * 1024 * 1024 });
       const artifacts = JSON.parse(collected.stdout);
       await command(docker, ['stop', '-t', '0', id], { timeout: 15000, maxBuffer: 4096 });
-      return { events, artifacts, finalText: result.text, complete: true };
+      return { events, artifacts, finalText: sanitizeText(result.text), complete: true };
     } catch (error) {
+      error.message = sanitizeText(error.message);
       error.evidence = { events, artifacts: {}, complete: false };
       throw error;
     } finally {

@@ -5,6 +5,7 @@ import { db } from '../../database/db.js';
 import { createSkillEvaluationDb } from '../../database/skill-evaluation-db.js';
 import { workspaceAccess } from '../workspace-access.js';
 import { claudeEnvService } from '../claude-env.js';
+import { agentSessionRuntimeManager } from '../agent-session-runtime.js';
 
 import { createEvaluationRuntime } from './runtime.js';
 import { createSkillEvaluationService } from './service.js';
@@ -12,6 +13,8 @@ import { setSkillMutationGuard } from './coordination.js';
 
 const repository = createSkillEvaluationDb(db);
 const runtime = createEvaluationRuntime({
+  resolveSessionEnvironment: (scope) => agentSessionRuntimeManager.resolveClaudeRuntimeEnv({ ...scope,
+    workspaceHostPath: scope.workspacePath, includeCodeHub: true }),
   resolveEnvironment: ({ tenantId, userId }) => claudeEnvService.resolveEffectiveEnv({ tenantId, userId,
     baseEnv: Object.fromEntries(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL']
       .filter((name) => process.env[name]).map((name) => [name, process.env[name]])) }).env,

@@ -618,6 +618,7 @@
     }
   },
   "skillEvaluation": {
+    "runtimeNotice": "测评使用独立测试目录，并可调用当前工作区的 MCP 工具；外部写入操作会真实生效。",
     "comparison": {"swipe": "左右滑动查看优化前后的结果", "title": "优化前后对比", "after": "优化后", "pending": "尚未开始后测。完成优化后，这里会显示本次后测结果。"},
     "title": "技能测评",
     "filesTab": "文件",

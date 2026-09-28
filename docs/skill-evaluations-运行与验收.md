@@ -38,7 +38,7 @@ CLOUDCLI_CLAUDE_DOCKER_IMAGE=docker.io/cloudcliai/sandbox:claude-code
 
 如果服务器已配置普通会话的镜像，直接沿用现有值，无需新增配置。**从旧版本迁移时，移除 `.env` 中的 `SKILL_EVAL_IMAGE` 和 `SKILL_EVAL_AUTO_BUILD`，然后重启 PM2 后端**；否则显式设置的测评镜像仍然优先。`DOCKER_CLI_PATH` 作为旧版测评专用覆盖项仍有效，若要共用会话的 CLI，也应移除它。
 
-准备时先检查本地镜像，存在则直接复用，缺失则自动拉取配置的会话镜像（最多 10 分钟），不执行 Dockerfile 构建。并发请求提示环境正在准备，失败后可以重试。Docker CLI、daemon 和仓库登录权限与普通会话一致。这里只复用镜像与 CLI 配置：每条用例仍新建临时容器，结束即删除；不复用正在运行的会话容器，也不挂载原 workspace、会话凭据或共享 Python 可写目录。测评所需 Python 包应预装在镜像中，普通会话运行后安装到共享目录的包不会自动带入测评。
+准备时先检查本地镜像，存在则直接复用，缺失则自动拉取配置的会话镜像（最多 10 分钟），不执行 Dockerfile 构建。并发请求提示环境正在准备，失败后可以重试。Docker CLI、daemon 和仓库登录权限与普通会话一致。这里只复用镜像与 CLI 配置：每条用例仍新建临时容器，结束即删除；不复用正在运行的会话容器，也不挂载原 workspace。测评有独立的临时 workspace 和 home；已有共享 Python 目录以只读方式带入，测评不会修改共享依赖。额外依赖可安装在临时 home 或测试目录中。
 
 如确实需要独立测评镜像，可选择旧方式：
 
@@ -75,9 +75,15 @@ docker --context colima-skill-eval build \
   -t cloudcli-skill-eval:local -f examples/skill-evaluations/Dockerfile examples/skill-evaluations
 ```
 
-这些代理仅服务于依赖下载和镜像构建；实际测评容器仍使用 `--network=none`。本地应用使用 `npm run server:dev` 启动，在 `http://127.0.0.1:3001` 完成首次账号设置后使用；`5188` 为独立模拟页面夹具。
+这些代理仅服务于依赖下载和镜像构建；实际测评容器使用与会话相同的默认 Docker 网络，并配置 `host.docker.internal:host-gateway`。本地应用使用 `npm run server:dev` 启动，在 `http://127.0.0.1:3001` 完成首次账号设置后使用；`5188` 为独立模拟页面夹具。
 
-执行器使用 Claude SDK 的独立模型进程，关闭原生工具、用户/项目设置和插件，通过两个专用工具执行：`shell` 在离线容器中运行，`delegate` 启动同一容器内的一层子任务并等待完成。容器无网络、无模型凭据、非 root、只读根文件系统，仅挂载只读技能快照与指定输入；产物写入 50 MiB tmpfs，再由受信采集器读取。镜像需有 `sh`、`sleep`、`/usr/bin/python3`；额外依赖应预装进镜像。
+用例执行使用与普通会话共用的 Docker 启动参数与 Claude CLI 进程启动方式：模型在容器内执行，支持原生文件/命令工具、workspace MCP 和有界子任务。`/workspace` 和 `/home/cloudcli` 是当前用例的临时目录，原技能快照只读挂载于 `/skill`，输出统一写入 `/output`。根文件系统只读，CPU、内存、容器用户和 Docker 路径映射沿用会话配置。镜像必须包含 `claude`、`sh`、`sleep`、`/usr/bin/python3`；旧的仅包含 Node/Python 的测评镜像不再适用。
+
+每条用例开始时读取当前 workspace 的 `.mcp.json`，生成临时 `/workspace/.mcp.json` 并显式传给 SDK，不加载宿主机全局 MCP。管理端安装的认证辅助脚本按会话逻辑写入临时 home；当前用户禁用的 MCP 工具仍然禁用。配置格式错误会明确报错，不会静默变成无 MCP 的测评。自定义配置若引用原 workspace 中的其他脚本或绝对路径，需要将这些依赖预装进镜像或作为测试输入提供；不会为此自动挂载整个原 workspace。
+
+测评可联网，MCP 调用和返回内容会进入执行记录。MCP 的外部写入操作真实生效，删除容器不会撤销；自动优化的多轮复测也可能重复调用外部工具。页面运行入口提供简短说明。配置本身、临时 home 和原 workspace 不作为产物收集，记录中的已知凭据会脱敏。评分、用例生成和技能优化仍使用无原生工具、无 workspace MCP 的独立模型进程，只有执行用例时加载 MCP。
+
+每例结束、失败或取消均清理容器和临时目录，MCP 常驻进程随容器退出，不再将它们误判为未完成的后台任务。
 
 模型/评审/优化仍需访问配置的模型服务。模型请求包含技能、用例和所需执行证据；执行容器不访问生产 MCP、业务网络或真实工作区。普通聊天运行环境不会用于降级执行。
 

@@ -13,7 +13,6 @@ import { createSkillEvaluationService } from './service.js';
 import { applyChanges, commitCandidate, recoverCommit } from './commit.js';
 import { validateStart, parseEvals, inputFileName, relativePath } from './contracts.js';
 import { atomicJson, readTree, treeHash } from './files.js';
-import { buildSandboxArgs } from './runtime.js';
 import { validateGrade } from './grading.js';
 
 const skill = '---\nname: weekly\ndescription: Write a weekly report\n---\nReport results.\n';
@@ -165,11 +164,6 @@ test('reviewer cannot omit checks or invent references; optimizer cannot edit te
   assert.throws(() => validateGrade({ checks: [] }, [{ id: 'a' }], new Set()));
   assert.throws(() => validateGrade({ checks: [{ id: 'a', status: 'passed', reason: 'ok', evidenceRefs: ['fake'] }] }, [{ id: 'a' }], new Set()));
   assert.throws(() => applyChanges({}, [{ path: 'evals/evals.json', operation: 'write', content: '{}' }]));
-});
-test('sandbox has no network, credentials, host home or broad workspace mounts', () => {
-  const args = buildSandboxArgs({ id: 'test', image: 'test', projection: '/tmp/projection', output: '/tmp/output' });
-  assert.ok(args.includes('--network=none')); assert.ok(args.includes('--read-only')); assert.ok(args.includes('--cap-drop=ALL'));
-  assert.ok(!args.includes('-e')); assert.ok(args.includes('type=bind,src=/tmp/projection,dst=/skill,readonly'));
 });
 test('interrupted file transaction can restore a complete skill', async (t) => {
   const f = await fixture(t), before = await readTree(f.root);
