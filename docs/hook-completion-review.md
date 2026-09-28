@@ -6,7 +6,9 @@
 
 `maxReviews` 为一次主模型运行内最多复核的次数，新配置范围 1–5，默认 3。已有的 6–10 次配置仍可读取，但运行时最多执行 5 次复核。每次主代理准备正常结束时都会复核；未通过且尚有次数时，Hook 返回 `decision: "block"` 和具体缺口，Claude SDK 会把原因送回**同一个主循环**继续工作。复核通过后返回 `decision: "approve"`。达到次数上限仍未通过，或审查连续失败达到上限时，Hook 返回 `continue: false` 和明确的 `stopReason`，不会把未完成任务伪装为成功。
 
-`model` 留空时继承当前主模型；填写模型标识时由该模型复核。每次复核都是独立的新 SDK query：不恢复主会话、不继承主会话 Hook/MCP/Agent/Skill/设置、不保存审查会话，仅开放 Read、Glob、Grep 三个只读工具。复核只能给出完成判断和下一步建议，不能代替主代理修改交付物。
+`model` 留空时先使用当前用户环境中的 `ANTHROPIC_MODEL`，没有该变量时使用当前主模型，再没有则由 SDK 选择默认模型；填写模型标识时由该模型复核。每次复核都是独立的新 SDK query：不恢复主会话、不继承主会话 Hook/MCP/Agent/Skill/设置、不保存审查会话，仅开放 Read、Glob、Grep 三个只读工具。复核只能给出完成判断和下一步建议，不能代替主代理修改交付物。
+
+审查模型的最终答复使用三行纯文本：`STATUS: PASS` 或 `STATUS: FAIL`、`REASON: ...`、`NEXT_STEP: ...`。未通过时必须给出下一步，通过时下一步可留空。运行时仍兼容已有的 JSON 验收对象和 SDK 的 `structured_output`，但不要求模型自行生成 JSON；无明确结论的自由文本不会被猜测为通过。
 
 `criteria` 是可选的额外验收标准，最多 8000 字符。应写明要核对的内容、来源和通过条件，并与当前用户任务一起交给审查模型。`artifactPaths` 是可选的交付物线索，最多 20 项，每项最多 500 字符；填写工作区内的相对路径或 glob，例如 `reports/**/*.html` 和 `data/**/*.csv`。不得填写绝对路径或越出工作区的路径。路径只是帮助审查模型定位候选文件，仍须实际核对其内容；请在发布前将示例路径改为当前工作区真实的输出位置。
 
@@ -38,7 +40,7 @@
 ```sh
 node --test server/services/hook-completion-review.test.js server/services/hook-completion-review-integration.test.js
 node --test server/services/hook-examples.test.js
-node --test scripts/hook-completion-review-e2e.test.mjs scripts/hook-completion-review-tools-e2e.test.mjs
+node --test server/services/hook-runtime.test.js
 ```
 
-最后一条使用本地回环模型服务与原生 Claude SDK，检查“主模型准备结束 → 新审查会话判定未完成 → 原主循环继续 → 再次审查通过”的完整路径，并验证验收模型能读取工作区报告、会拒绝工作区外的文件读取；不需要真实模型凭据。
+集成测试用模拟 SDK 结果检查“未通过 → 原主循环继续 → 再次审查通过”的 Hook 返回值；它不需要真实模型凭据，也不能证明特定模型网关会遵循输出格式。

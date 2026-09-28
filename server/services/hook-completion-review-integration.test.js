@@ -361,6 +361,33 @@ test('SDK result failure reaches the visible Hook output with a blank configured
   } finally { database.close(); }
 });
 
+test('plain-text reviewer verdict blocks and then approves the same main loop', async () => {
+  const database = databaseFixture();
+  try {
+    const hook = reviewHook(3);
+    let calls = 0;
+    const runtime = createHookRuntimeSession({ hooks: [hook], database, userId: 1,
+      reviewCompletion: (request) => reviewHookCompletion({ ...request,
+        userPrompt: '请完成报告。', sdkOptions: { cwd: process.cwd() },
+        queryFn: async function* () {
+          calls += 1;
+          yield { type: 'result', subtype: 'success', result: calls === 1
+            ? 'STATUS: FAIL\nREASON: 报告缺少结论。\nNEXT_STEP: 补充结论章节。'
+            : 'STATUS: PASS\nREASON: 结论已补充。\nNEXT_STEP:' };
+        },
+      }),
+    });
+    const event = { hook_event_name: 'Stop', session_id: 'main' };
+    assert.deepEqual(await runtime.executeHook(hook, event), {
+      decision: 'block', reason: '报告缺少结论。\n补充结论章节。',
+    });
+    assert.deepEqual(await runtime.executeHook(hook, { ...event, stop_hook_active: true }), {
+      decision: 'approve', reason: '结论已补充。',
+    });
+    assert.equal(calls, 2);
+  } finally { database.close(); }
+});
+
 test('audit storage failures cannot silently bypass completion review', async () => {
   const hook = reviewHook(2);
   const runtime = createHookRuntimeSession({ hooks: [hook], userId: 1,

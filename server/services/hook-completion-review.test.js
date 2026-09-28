@@ -258,7 +258,7 @@ test('reviewer receives program validation evidence and cannot override a failed
   assert.deepEqual(verdict, incomplete);
   assert.deepEqual(seen.prompt.validationResult, validationResult);
   assert.match(seen.systemPrompt, /程序校验/);
-  assert.match(seen.systemPrompt, /complete/);
+  assert.match(seen.systemPrompt, /STATUS: PASS/);
 });
 
 test('missing transcript and absent artifact remain reviewer evidence, not automatic approval', async (t) => {
@@ -393,7 +393,42 @@ test('review accepts one fenced JSON verdict and prefers the SDK final result', 
     queryFn: async function* () {
       yield { type: 'result', subtype: 'success', result: `说明：\n${JSON.stringify(complete)}` };
     },
-  }), /invalid JSON/);
+  }), /unrecognized verdict format/);
+});
+
+test('review accepts a three-line plain-text verdict without JSON', async (t) => {
+  const { root } = await fixture(t);
+  const cases = [
+    ['STATUS: PASS\nREASON: 报告结构和数据均符合要求。\nNEXT_STEP:',
+      { complete: true, reason: '报告结构和数据均符合要求。', nextStep: '' }],
+    ['STATUS: FAIL\nREASON: 报告缺少结论。\nNEXT_STEP: 补充结论章节。',
+      { complete: false, reason: '报告缺少结论。', nextStep: '补充结论章节。' }],
+    ['```text\nSTATUS: FAIL\nREASON: 数据没有 id 字段。\nNEXT_STEP: 补齐 id。\n```',
+      { complete: false, reason: '数据没有 id 字段。', nextStep: '补齐 id。' }],
+    ['STATUS：未通过\nREASON：字段缺失。\nNEXT_STEP：补齐字段。',
+      { complete: false, reason: '字段缺失。', nextStep: '补齐字段。' }],
+  ];
+  for (const [result, expected] of cases) {
+    assert.deepEqual(await reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+      queryFn: async function* () { yield { type: 'result', subtype: 'success', result }; },
+    }), expected);
+  }
+  const invalid = [
+    '报告符合要求，已经完成。',
+    'STATUS: PASS\nREASON: 完成\nNEXT_STEP:\n补充说明',
+    'STATUS: PASS\nREASON: 完成\nNEXT_STEP:\nSTATUS: FAIL',
+  ];
+  for (const result of invalid) {
+    await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+      queryFn: async function* () { yield { type: 'result', subtype: 'success', result }; },
+    }), (error) => completionReviewFailure(error).diagnostic.code === 'invalid_format');
+  }
+  await assert.rejects(reviewHookCompletion({ workspaceRoot: root, userPrompt: '完成任务',
+    queryFn: async function* () {
+      yield { type: 'result', subtype: 'success',
+        result: 'STATUS: FAIL\nREASON: 缺少结论\nNEXT_STEP:' };
+    },
+  }), (error) => completionReviewFailure(error).diagnostic.code === 'invalid_verdict');
 });
 
 test('structured output is accepted and model errors are propagated', async (t) => {
@@ -447,8 +482,8 @@ test('review failures distinguish empty, malformed and absent results', async (t
   const cases = [
     [async function* () { yield { type: 'result', subtype: 'success' }; }, 'empty_output'],
     [async function* () {
-      yield { type: 'result', subtype: 'success', result: 'not json' };
-    }, 'invalid_json'],
+      yield { type: 'result', subtype: 'success', result: 'not a verdict' };
+    }, 'invalid_format'],
     [async function* () { yield { type: 'assistant', message: { content: [] } }; }, 'no_result'],
   ];
   for (const [queryFn, expectedCode] of cases) {
