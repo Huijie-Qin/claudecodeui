@@ -97,3 +97,29 @@ test('CodeHub MCP parses streamable HTTP event-stream tool results', withMcpEnv(
     state: 'opened',
   });
 }));
+
+test('CodeHub MCP includes project_id when creating an upstream merge request', withMcpEnv(async () => {
+  let request;
+  const service = createCodeHubMcpService({
+    headerResolver: async () => ({}),
+    fetchImpl: async (_url, init) => {
+      request = JSON.parse(init.body).params.arguments.request;
+      return createJsonResponse({ result: { content: [{ json: { id: 789, iid: 9 } }] } });
+    },
+  });
+
+  await service.createMergeRequest({
+    userId: 1,
+    projectId: 123,
+    sourceProjectId: 123,
+    targetProjectId: 456,
+    sourceBranch: 'feature/test',
+    targetBranch: 'develop',
+    title: 'Upstream MR',
+    description: 'Test description',
+  });
+
+  assert.equal(request.project_id, 123);
+  assert.equal(request.source_project_id, 123);
+  assert.equal(request.target_project_id, 456);
+}));

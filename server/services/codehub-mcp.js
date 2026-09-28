@@ -252,6 +252,7 @@ export function createCodeHubMcpService({ fetchImpl = fetch, headerResolver = ge
       issueNums,
     }) => {
       const request = {
+        project_id: Number(projectId),
         source_branch: sourceBranch,
         target_branch: targetBranch,
         title,
@@ -263,8 +264,6 @@ export function createCodeHubMcpService({ fetchImpl = fetch, headerResolver = ge
       if (sourceProjectId && targetProjectId) {
         request.source_project_id = Number(sourceProjectId);
         request.target_project_id = Number(targetProjectId);
-      } else {
-        request.project_id = Number(projectId);
       }
       return callTool({
         userId,
