@@ -7,6 +7,7 @@ import { atomicJson, createEvalFiles, treeHash, validateSnapshot } from './files
 import { applyChanges, commitCandidate, recoverCommit } from './commit.js';
 import { gradeCase, parseModelJson } from './grading.js';
 import { interruptionError } from './interruption.js';
+import { GENERATE_CASES_PROMPT } from './prompts.js';
 
 export function createSkillEvaluationService({ repository, runtime, storageRoot, authorize = () => {}, now = () => Date.now() }) {
   const files = createEvalFiles({ repository }), owner = randomUUID();
@@ -279,7 +280,7 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
   async function executeGenerateCases(job, signal) {
     const snapshot = await readJson(path.join(jobDir(job.id), 'snapshot.json'));
     const response = await runtime.modelCall({ scope: job, signal, budget: job.budget,
-      systemPrompt: 'Generate 3 realistic evaluation cases: normal input, missing input, boundary condition. Return JSON {"cases":[{"prompt":"...","expected_output":"...","files":[],"expectations":["..."]}]}. Use self-contained prompts; do not invent available files or copy existing cases. No execution or fabricated results.',
+      systemPrompt: GENERATE_CASES_PROMPT,
       prompt: JSON.stringify({ skill: Buffer.from(snapshot.files['SKILL.md'], 'base64').toString('utf8'), existing: snapshot.document.evals }) });
     const value = parseModelJson(response);
     if (!Array.isArray(value.cases) || !value.cases.length || value.cases.length > 5) throw fail('AI returned invalid cases');

@@ -14,6 +14,7 @@ import { applyChanges, commitCandidate, recoverCommit } from './commit.js';
 import { validateStart, parseEvals, inputFileName, relativePath } from './contracts.js';
 import { atomicJson, readTree, treeHash } from './files.js';
 import { validateGrade } from './grading.js';
+import { GENERATE_CASES_PROMPT } from './prompts.js';
 
 const skill = '---\nname: weekly\ndescription: Write a weekly report\n---\nReport results.\n';
 const document = { skill_name: 'weekly', evals: [{ id: 1, prompt: 'Report the week', expected_output: 'Report the week without inventing numbers', expectations: ['No invented numbers'], files: [] }] };
@@ -227,7 +228,13 @@ test('worker shutdown is recorded as interrupted execution rather than user canc
 });
 test('AI generation is durable, mutually exclusive and leaves the latest evaluation intact', async (t) => {
   const f = await fixture(t); const run = await f.start(); await f.service.runPendingForTest();
-  f.runtime.modelCall = async () => ({ structured: { cases: [{ prompt: 'Report missing data', expected_output: 'Ask for data', files: [] }] } });
+  let generationCalls = 0;
+  f.runtime.modelCall = async ({ systemPrompt, prompt }) => {
+    generationCalls++;
+    assert.equal(systemPrompt, GENERATE_CASES_PROMPT);
+    assert.deepEqual(JSON.parse(prompt), { skill, existing: document.evals });
+    return { structured: { cases: [{ prompt: 'Report missing data', expected_output: 'Ask for data', files: [] }] } };
+  };
   const current = await f.service.listCases(f.scope), id = randomUUID();
   const generated = await f.service.generateCases(f.scope, current.revision, id);
   assert.equal((await f.service.generateCases(f.scope, current.revision, id)).id, generated.id);
@@ -236,6 +243,8 @@ test('AI generation is durable, mutually exclusive and leaves the latest evaluat
   assert.equal(f.service.get(f.scope, generated.id).status, 'completed');
   const cases = await f.service.listCases(f.scope);
   assert.equal(cases.document.evals.length, 2); assert.equal(cases.sources[2], 'ai');
+  assert.deepEqual(cases.document.evals[0], document.evals[0]);
+  assert.equal(generationCalls, 1);
   assert.equal((await f.service.latest(f.scope)).id, run.id);
 });
 test('AI generation rejects a concurrent edit without deleting user cases', async (t) => {
