@@ -41,6 +41,11 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
   const sandboxImage = createSandboxImageManager({ docker, image, autoBuild, autoPull, command });
   const caseTimeoutMs = timeoutSetting(env, 'SKILL_EVAL_CASE_TIMEOUT_MS', 1800000);
   const modelTimeoutMs = timeoutSetting(env, 'SKILL_EVAL_MODEL_TIMEOUT_MS', 300000);
+  const configuredToolLimit = env.SKILL_EVAL_MAX_TOOL_CALLS;
+  const maxToolCalls = configuredToolLimit == null || String(configuredToolLimit).trim() === '' ? 100 : Number(configuredToolLimit);
+  if (!Number.isSafeInteger(maxToolCalls) || maxToolCalls <= 0) {
+    throw fail('SKILL_EVAL_MAX_TOOL_CALLS 必须是正整数（每条用例的工具调用上限）。', 'EVAL_RUNTIME_CONFIGURATION', 503);
+  }
   async function profile(scope) {
     const resolved = await resolveEnvironment(scope);
     const auth = Object.fromEntries(AUTH_KEYS.filter((k) => typeof resolved[k] === 'string').map((k) => [k, resolved[k]]));
@@ -138,9 +143,17 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
     let count = 0, size = 0, created = false, execution;
     const sanitizeText = text => execution ? execution.sanitize(text) : redact(text);
     const toolCalls = new Map();
+    function countToolCall() {
+      if (controller.signal.aborted) throw interruptionError(controller.signal);
+      if (count >= maxToolCalls) {
+        controller.abort(fail(`测试用例的工具调用次数已达到上限（${maxToolCalls} 次），已停止。可通过 SKILL_EVAL_MAX_TOOL_CALLS 调整。`, 'EVAL_LIMIT_EXCEEDED'));
+        throw controller.signal.reason;
+      }
+      count++;
+    }
     function toolEvent(block, parent) {
       if (block.type === 'tool_use') {
-        if (++count > 32) throw fail('Tool call limit exceeded', 'EVAL_LIMIT_EXCEEDED');
+        countToolCall();
         const event = emit({ role: 'tool', kind: 'tool_use', tool: block.name, input: typeof block.input === 'string' ? block.input : JSON.stringify(block.input, null, 2), parent });
         toolCalls.set(block.id, event.id);
       } else if (toolCalls.has(block.tool_use_id)) {
@@ -159,7 +172,7 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
     }
     const makeTools = (parent = null, depth = 0) => {
       const shell = tool('shell', 'Run a shell command in the isolated test container. Working directory: /workspace. Skill files: /skill (read only). Inputs under /skill/evals/files. Write deliverables to /output. Workspace MCP services and network are available; external operations have real effects.', { command: z.string().min(1).max(16000) }, async ({ command: script }) => {
-        if (++count > 32) { controller.abort(fail('Tool call limit exceeded', 'EVAL_LIMIT_EXCEEDED')); throw controller.signal.reason; }
+        countToolCall();
         const call = emit({ role: 'tool', kind: 'tool_use', tool: 'shell', input: script, parent });
         try {
           const result = await command(docker, execution.shellArgs(script), { signal: controller.signal, timeout: 60000, maxBuffer: 1024 * 1024 });
@@ -177,7 +190,7 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
       });
       if (depth) return [shell];
       return [shell, tool('delegate', 'Delegate a bounded subtask to a separate agent in the same test container; waits for completion. No nested delegation.', { task: z.string().min(1).max(16000) }, async ({ task }) => {
-        if (++count > 32) { controller.abort(fail('Tool call limit exceeded', 'EVAL_LIMIT_EXCEEDED')); throw controller.signal.reason; }
+        countToolCall();
         const started = emit({ role: 'assistant', kind: 'task_started', text: task, parent });
         try {
           const result = await modelCall({ scope, prompt: task, signal: controller.signal, budget, model: runtimeProfile.model, execution, onToolEvent: block => toolEvent(block, started.id),

@@ -71,6 +71,24 @@ test('second accepted run replaces report even when it fails, and deletes old ar
   await assert.rejects(fs.stat(path.join(f.temp, 'reports', first.id)), { code: 'ENOENT' });
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.root, 'evals/evals.json'), 'utf8')), document);
 });
+test('tool limit failure finishes the job and retains case evidence instead of staying running', async t => {
+  const event = { id: 'message:1', seq: 1, role: 'assistant', kind: 'text', text: 'Working' };
+  const reason = '测试用例的工具调用次数已达到上限（100 次），已停止。可通过 SKILL_EVAL_MAX_TOOL_CALLS 调整。';
+  const f = await fixture(t, { runCase: async ({ onEvent }) => {
+    onEvent(event);
+    throw Object.assign(new Error(reason), { code: 'EVAL_LIMIT_EXCEEDED', evidence: { events: [event], artifacts: {}, complete: false } });
+  } });
+  const job = await f.start();
+  await f.service.runPendingForTest();
+  const latest = await f.service.latest(f.scope);
+  assert.equal(latest.status, 'failed');
+  assert.equal(latest.stopReason, 'EVAL_LIMIT_EXCEEDED');
+  assert.equal(latest.rounds[0].cases[0].status, 'error');
+  const report = await f.service.report(f.scope, job.id, 0, 1);
+  assert.equal(report.status, 'error');
+  assert.equal(report.reason, reason);
+  assert.equal(report.evidence.events[0].text, event.text);
+});
 test('rejected start preserves previous report; duplicate requests do not replace it', async (t) => {
   const f = await fixture(t), data = await f.service.listCases(f.scope);
   const request = { mode: 'run-all', requestId: randomUUID(), expectedContentHash: data.contentHash, expectedEvalsRevision: data.revision };
