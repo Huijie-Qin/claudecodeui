@@ -25,7 +25,7 @@ export function validateCreatedSkill(markdown) {
 
 export function createSkillCreator({ modelCall, instructions = () => fs.readFile(path.join(findAppRoot(getModuleDir(import.meta.url)), 'server/skills/skill-creator/SKILL.md'), 'utf8') }) {
   return async ({ scope, description, snippets, signal, onPhase }) => {
-    const budget = { remainingUsd: 10, calls: 0, costUsd: 0 };
+    const budget = { calls: 0, costUsd: 0 };
     const selected = new Map(), notes = [];
     // Examine every catalog entry in bounded batches, rather than truncating the library.
     const batches = []; let batch = [], length = 0;

@@ -12,7 +12,7 @@ import { createConversationRegistrar } from './conversations.js';
 import { createSkillCreationService } from './service.js';
 
 const snippets = createSkillSnippetService(db);
-const runtime = createEvaluationRuntime({ enforceCostBudget: true, resolveEnvironment: ({ tenantId, userId }) => claudeEnvService.resolveEffectiveEnv({ tenantId, userId,
+const runtime = createEvaluationRuntime({ resolveEnvironment: ({ tenantId, userId }) => claudeEnvService.resolveEffectiveEnv({ tenantId, userId,
   baseEnv: Object.fromEntries(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL'].filter((key) => process.env[key]).map((key) => [key, process.env[key]])),
 }).env });
 export const skillCreationService = createSkillCreationService({ db, creator: createSkillCreator({ modelCall: runtime.modelCall }),

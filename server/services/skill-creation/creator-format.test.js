@@ -1,10 +1,38 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { createEvaluationRuntime } from '../skill-evals/runtime.js';
+
 import { createSkillCreator, validateCreatedSkill } from './creator.js';
 
 const markdown = '---\nname: weekly-report\ndescription: "Generate a weekly report"\n---\n# Weekly report\nAsk for missing data.\n\n```json\n{"example":true}\n```';
 const args = () => ({ scope: {}, description: '生成周报技能', snippets: [], signal: new AbortController().signal, onPhase: () => {} });
+
+test('snippet selection, generation and format correction have no cost cap and retain usage statistics', async () => {
+  let calls = 0, usage;
+  const runtime = createEvaluationRuntime({ resolveEnvironment: () => ({ ANTHROPIC_API_KEY: 'test-key' }),
+    runQuery: ({ prompt, options }) => (async function* () {
+      assert.equal(Object.hasOwn(options, 'maxBudgetUsd'), false);
+      const request = JSON.parse(prompt);
+      calls++;
+      const result = request.catalog
+        ? JSON.stringify({ selected: [{ id: 'public-1', reason: '相关' }], note: '' })
+        : request.formatCorrection ? markdown : '# Missing YAML';
+      // Selection already exceeds both old caps; generation and repair must still run.
+      yield { type: 'result', subtype: 'success', result, ...(calls < 3 ? { total_cost_usd: 12 } : {}) };
+    })(),
+  });
+  const creator = createSkillCreator({ instructions: async () => 'Skill authoring rules', modelCall: call => {
+    usage = call.budget;
+    return runtime.modelCall(call);
+  } });
+  const result = await creator({ ...args(), snippets: [{ id: 'public-1', title: 'Reporting', description: 'Reporting rules', markdown: 'Use verified data.' }] });
+  assert.equal(result.name, 'weekly-report');
+  assert.equal(calls, 3);
+  assert.equal(usage.costUsd, 24);
+  assert.equal(usage.costIncomplete, true);
+  assert.equal(Object.hasOwn(usage, 'remainingUsd'), false);
+});
 
 test('accepts leading whitespace/BOM, CRLF and a single outer fence while preserving inner examples', () => {
   const expected = validateCreatedSkill(markdown);

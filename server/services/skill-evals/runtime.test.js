@@ -87,15 +87,8 @@ test('unavailable cost statistics do not interrupt successful evaluations', asyn
   }
 });
 
-test('model-call count and explicit non-evaluation budgets remain enforced', async () => {
+test('model-call count remains enforced without a cost limit', async () => {
   const runtime = createEvaluationRuntime({ runQuery: () => assert.fail('No model should run') });
   await assert.rejects(runtime.modelCall({ scope: {}, prompt: 'Test', budget: { costUsd: 0, calls: 1500 } }), { code: 'EVAL_LIMIT_EXCEEDED' });
-  const limited = createEvaluationRuntime({ enforceCostBudget: true, resolveEnvironment: () => ({ ANTHROPIC_API_KEY: 'test-key' }), runQuery: ({ options }) => {
-    assert.equal(options.maxBudgetUsd, 2);
-    return (async function* () { yield { type: 'result', subtype: 'success', result: 'OK', total_cost_usd: 0.5 }; })();
-  } });
-  const usage = { remainingUsd: 10, calls: 0, costUsd: 0 };
-  await limited.modelCall({ scope: {}, prompt: 'Test', budget: usage });
-  assert.equal(usage.remainingUsd, 9.5);
-  await assert.rejects(limited.modelCall({ scope: {}, prompt: 'Test', budget: { remainingUsd: 0, costUsd: 0, calls: 0 } }), { code: 'EVAL_LIMIT_EXCEEDED' });
+
 });
