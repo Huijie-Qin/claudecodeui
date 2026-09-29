@@ -191,6 +191,22 @@ test('cancelling an executing job survives stale worker saves and prevents optim
   const job = await f.service.latest(f.scope);
   assert.equal(job.status, 'cancelled'); assert.equal(job.iteration, 0);
 });
+test('worker shutdown is recorded as interrupted execution rather than user cancellation', async t => {
+  let f;
+  f = await fixture(t, { runCase: async () => {
+    await f.service.stopWorker();
+    throw new Error('Claude Code process aborted by user');
+  } });
+  const job = await f.start();
+  await f.service.runPendingForTest();
+  const latest = await f.service.latest(f.scope);
+  assert.equal(latest.status, 'failed');
+  assert.equal(latest.stopReason, 'EVAL_SERVER_STOP');
+  const report = await f.service.report(f.scope, job.id, 0, 1);
+  assert.equal(report.status, 'error');
+  assert.equal(report.code, 'EVAL_SERVER_STOP');
+  assert.match(report.reason, /服务正在停止或重启/);
+});
 test('AI generation is durable, mutually exclusive and leaves the latest evaluation intact', async (t) => {
   const f = await fixture(t); const run = await f.start(); await f.service.runPendingForTest();
   f.runtime.modelCall = async () => ({ structured: { cases: [{ prompt: 'Report missing data', expected_output: 'Ask for data', files: [] }] } });

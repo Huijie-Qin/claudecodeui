@@ -6,6 +6,7 @@ import { ACTIVE, fail, hash, outcome, redact, validateStart, relativePath } from
 import { atomicJson, createEvalFiles, treeHash, validateSnapshot } from './files.js';
 import { applyChanges, commitCandidate, recoverCommit } from './commit.js';
 import { gradeCase, parseModelJson } from './grading.js';
+import { interruptionError } from './interruption.js';
 
 export function createSkillEvaluationService({ repository, runtime, storageRoot, authorize = () => {}, now = () => Date.now() }) {
   const files = createEvalFiles({ repository }), owner = randomUUID();
@@ -69,9 +70,9 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
   function checkActive(job, controller) {
     authorized(job, true);
     if (!repository.isLeader(owner)) throw fail('Worker lease was lost', 'EVAL_WORKER_LOST');
-    if (controller.signal.aborted) throw controller.signal.reason || fail('Cancelled', 'EVAL_CANCELLED');
+    if (controller.signal.aborted) throw controller.signal.reason || fail('已停止测评任务。', 'EVAL_CANCELLED');
     if (repository.get(job, job.id).cancelRequested) {
-      controller.abort(fail('Cancelled', 'EVAL_CANCELLED'));
+      controller.abort(fail('已停止测评任务。', 'EVAL_CANCELLED'));
       throw controller.signal.reason;
     }
   }
@@ -113,11 +114,14 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
         grade = await gradeCase({ runtime, scope: job, testCase, evidence, files: candidate, signal: controller.signal, budget: job.budget, model: job.runtimeProfile.model });
       } catch (error) {
         evidence = error.evidence || evidence;
-        grade = { status: controller.signal.aborted ? 'cancelled' : 'error', checks: [], reason: redact(error.message), code: error.code || 'EVAL_EXECUTION_ERROR' };
+        grade = { status: error.code === 'EVAL_CANCELLED' ? 'cancelled' : 'error', checks: [], reason: redact(error.message), code: error.code || 'EVAL_EXECUTION_ERROR' };
         if (error.cleanupRequired) job.recoveryRequired = true;
       }
-      if (repository.get(job, job.id).cancelRequested && !controller.signal.aborted) controller.abort(fail('Cancelled', 'EVAL_CANCELLED'));
-      if (controller.signal.aborted) grade = { ...grade, status: 'cancelled' };
+      if (repository.get(job, job.id).cancelRequested && !controller.signal.aborted) controller.abort(fail('已停止测评任务。', 'EVAL_CANCELLED'));
+      if (controller.signal.aborted && !job.recoveryRequired) {
+        const reason = interruptionError(controller.signal);
+        grade = { ...grade, status: reason.code === 'EVAL_CANCELLED' ? 'cancelled' : 'error', reason: redact(reason.message), code: reason.code || 'EVAL_EXECUTION_ERROR' };
+      }
       Object.assign(row, { status: grade.status, reason: grade.reason });
       await checkpoint;
       if (checkpointError) throw checkpointError;
@@ -126,7 +130,7 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
       if (job.budget.storedBytes > 512 * 1024 * 1024) throw fail('Job evidence storage limit exceeded', 'EVAL_LIMIT_EXCEEDED');
       await atomicJson(reportFile(job, round, testCase.id), report);
       save(job);
-      if (grade.status === 'cancelled') throw controller.signal.reason || fail('Cancelled', 'EVAL_CANCELLED');
+      if (grade.status === 'cancelled') throw controller.signal.reason || fail('已停止测评任务。', 'EVAL_CANCELLED');
       // Infrastructure failures cannot safely be optimized away. Fail closed in both modes.
       if (grade.status === 'error' || (job.mode === 'optimize' && grade.status === 'inconclusive')) {
         throw fail(grade.reason || 'Evaluation is inconclusive', grade.code || 'EVAL_INCONCLUSIVE');
@@ -149,7 +153,7 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
   }
   async function execute(job) {
     const controller = new AbortController(); activeController = controller;
-    const deadline = setTimeout(() => controller.abort(fail('Job deadline exceeded', 'EVAL_TIMEOUT')), 3600000);
+    const deadline = setTimeout(() => controller.abort(fail('测评任务运行超过 60 分钟，已停止。', 'EVAL_TIMEOUT')), 3600000);
     const monitor = setInterval(() => {
       try { checkActive(job, controller); } catch (e) { controller.abort(e); }
     }, 1000);
@@ -188,7 +192,8 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
       }
       update(job, { status: 'completed', phase: 'finalizing', outcome: round.outcome,
         stopReason: round.outcome === 'passed' ? 'all_passed' : job.mode === 'optimize' ? 'max_iterations' : 'finished', completedAt: new Date(now()).toISOString() });
-    } catch (error) {
+    } catch (caught) {
+      const error = job.recoveryRequired ? caught : interruptionError(controller.signal, caught);
       const cancelled = error.code === 'EVAL_CANCELLED';
       update(job, { status: job.recoveryRequired ? 'cancelling' : cancelled ? 'cancelled' : 'failed',
         outcome: cancelled ? 'not_evaluated' : error.code === 'EVAL_INCONCLUSIVE' ? 'inconclusive' : 'error',
@@ -295,7 +300,7 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
       void runtime.warmup?.().catch((error) => console.warn('[skill-evals]', error.message));
       stopped = false; interval = setInterval(() => void tick().catch((e) => console.error('[skill-evals]', e.code || 'WORKER_ERROR')), 1000); interval.unref();
     },
-    async stopWorker() { stopped = true; clearInterval(interval); interval = null; activeController?.abort(fail('Server stopping', 'EVAL_SERVER_STOP')); if (!working) repository.releaseLeader(owner); },
+    async stopWorker() { stopped = true; clearInterval(interval); interval = null; activeController?.abort(fail('后端服务正在停止或重启，测评已中断。', 'EVAL_SERVER_STOP')); if (!working) repository.releaseLeader(owner); },
     async runPendingForTest() { stopped = false; await tick(); stopped = true; repository.releaseLeader(owner); recovered = false; },
     cleanReplaced,
   };

@@ -11,6 +11,7 @@ import { fail, redact } from './contracts.js';
 import { writeTree } from './files.js';
 import { createSandboxImageManager, resolveEvaluationSandboxConfig } from './sandbox-image.js';
 import { NATIVE_CASE_TOOLS, prepareEvaluationSession, readEvaluationMcpConfig } from './session-container.js';
+import { interruptionError, timeoutError, timeoutSetting } from './interruption.js';
 
 const COLLECT_ARTIFACTS = `
 import os, stat, json, base64
@@ -38,6 +39,8 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
   autoPull = resolveEvaluationSandboxConfig(env).autoPull && image === resolveEvaluationSandboxConfig(env).image,
   command = exec } = {}) {
   const sandboxImage = createSandboxImageManager({ docker, image, autoBuild, autoPull, command });
+  const caseTimeoutMs = timeoutSetting(env, 'SKILL_EVAL_CASE_TIMEOUT_MS', 1800000);
+  const modelTimeoutMs = timeoutSetting(env, 'SKILL_EVAL_MODEL_TIMEOUT_MS', 300000);
   async function profile(scope) {
     const resolved = await resolveEnvironment(scope);
     const auth = Object.fromEntries(AUTH_KEYS.filter((k) => typeof resolved[k] === 'string').map((k) => [k, resolved[k]]));
@@ -52,7 +55,7 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
     return { image: await sandboxImage.ensure(), imageName: image, model, kind: 'sdk-session-docker-mcp-v2' };
   }
   async function modelCall({ scope, prompt, systemPrompt, signal, tools = [], onText = () => {}, budget, model, outputSchema, execution, onToolEvent = () => {} }) {
-    if (signal?.aborted) throw signal.reason || fail('Cancelled');
+    if (signal?.aborted) throw interruptionError(signal);
     if (budget.calls >= 1500) throw fail('模型调用次数已达到上限', 'EVAL_LIMIT_EXCEEDED');
     budget.calls++;
     const { auth, model: defaultModel } = await profile(scope);
@@ -61,8 +64,9 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
     const abort = () => controller.abort(signal?.reason);
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort();
-    const timer = setTimeout(() => controller.abort(fail('Model request timed out', 'EVAL_TIMEOUT')), 300000);
-    let query;
+    const timeoutMs = execution ? caseTimeoutMs : modelTimeoutMs;
+    const timer = setTimeout(() => controller.abort(timeoutError(timeoutMs, Boolean(execution))), timeoutMs);
+    let query, failure;
     try {
       const sdk = await import('@anthropic-ai/claude-agent-sdk');
       const queryFn = runQuery || sdk.query;
@@ -90,7 +94,7 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
       } });
       let text = '', result = null;
       for await (const event of query) {
-        if (controller.signal.aborted) throw controller.signal.reason || fail('Cancelled');
+        if (controller.signal.aborted) throw interruptionError(controller.signal);
         if (execution && ['assistant', 'user'].includes(event.type)) {
           for (const block of event.message?.content || []) {
             if (['tool_use', 'tool_result'].includes(block.type) && !toolNames.includes(block.name)) await onToolEvent(block);
@@ -102,6 +106,7 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
         }
         if (event.type === 'result') result = event;
       }
+      if (controller.signal.aborted) throw interruptionError(controller.signal);
       const cost = result?.total_cost_usd;
       if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0) {
         budget.costUsd += cost;
@@ -110,10 +115,13 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
       }
       if (!result || result.is_error || result.subtype !== 'success') throw fail('Model execution did not complete successfully', 'EVAL_MODEL_ERROR');
       return { text: result.result || text, structured: result.structured_output, model: model || defaultModel };
+    } catch (error) {
+      failure = interruptionError(controller.signal, error);
+      throw failure;
     } finally {
       clearTimeout(timer); signal?.removeEventListener('abort', abort);
-      query?.close?.();
-      await fs.rm(home, { recursive: true, force: true });
+      try { query?.close?.(); } catch (error) { if (!failure) throw error; }
+      finally { await fs.rm(home, { recursive: true, force: true }); }
     }
   }
   async function runCase({ scope, files, testCase, signal, budget, runtimeProfile, onEvent = () => {} }) {
@@ -126,7 +134,7 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
     const abort = () => controller.abort(signal?.reason);
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort();
-    const timer = setTimeout(() => controller.abort(fail('Case timed out', 'EVAL_TIMEOUT')), 300000);
+    const timer = setTimeout(() => controller.abort(timeoutError(caseTimeoutMs, true)), caseTimeoutMs);
     let count = 0, size = 0, created = false, execution;
     const sanitizeText = text => execution ? execution.sanitize(text) : redact(text);
     const toolCalls = new Map();
@@ -204,7 +212,8 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
       const artifacts = JSON.parse(collected.stdout);
       await command(docker, ['stop', '-t', '0', id], { timeout: 15000, maxBuffer: 4096 });
       return { events, artifacts, finalText: sanitizeText(result.text), complete: true };
-    } catch (error) {
+    } catch (caught) {
+      const error = caught.cleanupRequired ? caught : interruptionError(controller.signal, caught);
       error.message = sanitizeText(error.message);
       error.evidence = { events, artifacts: {}, complete: false };
       throw error;
