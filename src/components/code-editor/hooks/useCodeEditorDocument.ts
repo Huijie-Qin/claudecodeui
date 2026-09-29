@@ -116,7 +116,7 @@ export const useCodeEditorDocument = ({
     };
   }, [file.diffInfo, file.name, file.workspaceId, fileDiffNewString, fileDiffOldString, fileName, filePath, fileProjectName, reloadToken, showLoadError]);
 
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (contentToSave: string = content) => {
     setSaving(true);
     setSaveError(null);
 
@@ -129,7 +129,7 @@ export const useCodeEditorDocument = ({
         throw new Error('Missing project identifier');
       }
 
-      const response = await api.saveFile(fileProjectName, filePath, content, file.workspaceId);
+      const response = await api.saveFile(fileProjectName, filePath, contentToSave, file.workspaceId);
 
       if (!response.ok) {
         const contentType = response.headers.get('content-type');

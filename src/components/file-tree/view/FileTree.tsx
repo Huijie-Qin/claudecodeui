@@ -34,6 +34,7 @@ type FileTreeProps = {
   presentation?: 'default' | 'data-agent';
   activePath?: string | null;
   beforeFileMutation?: (paths: string[]) => Promise<boolean>;
+  openImagesInEditor?: boolean;
 };
 
 export default function FileTree({
@@ -43,6 +44,7 @@ export default function FileTree({
   presentation = 'default',
   activePath,
   beforeFileMutation,
+  openImagesInEditor = false,
 }: FileTreeProps) {
   const { t } = useTranslation();
   const [selectedImage, setSelectedImage] = useState<FileTreeImageSelection | null>(null);
@@ -180,7 +182,7 @@ export default function FileTree({
         return;
       }
 
-      if (presentation !== 'data-agent' && isImageFile(item.name) && selectedProject) {
+      if (!openImagesInEditor && presentation !== 'data-agent' && isImageFile(item.name) && selectedProject) {
         setSelectedImage({
           name: item.name,
           path: item.path,
@@ -193,7 +195,7 @@ export default function FileTree({
 
       onFileOpen?.(item.path);
     },
-    [onFileOpen, presentation, selectedProject, toggleDirectory],
+    [onFileOpen, openImagesInEditor, presentation, selectedProject, toggleDirectory],
   );
 
   const handleSelectionChange = useCallback((item: FileTreeNode) => {

@@ -10,6 +10,7 @@ import { useEditorKeyboardShortcuts } from '../hooks/useEditorKeyboardShortcuts'
 import type { CodeEditorFile } from '../types/types';
 import { createMinimapExtension, createScrollToFirstChunkExtension, getLanguageExtensions } from '../utils/editorExtensions';
 import { getEditorStyles } from '../utils/editorStyles';
+import { createSerialFileSave } from '../utils/serialFileSave';
 import { createEditorToolbarPanelExtension } from '../utils/editorToolbarPanel';
 import { resolveWorkspaceSkillFileLink } from '../../../utils/skillMarkdownLinks';
 import { getFilePreviewKind } from '../../file-preview/filePreviewKind';
@@ -95,27 +96,32 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
 
   contentRef.current = content;
   hasUnsavedChangesRef.current = hasUnsavedChanges;
+  const saveHandlerRef = useRef(handleSave);
+  saveHandlerRef.current = handleSave;
+  const serialSaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  if (!serialSaveRef.current) {
+    serialSaveRef.current = createSerialFileSave({
+      getContent: () => contentRef.current,
+      isDirty: () => hasUnsavedChangesRef.current,
+      persist: (snapshot) => saveHandlerRef.current(snapshot),
+      markClean: () => {
+        hasUnsavedChangesRef.current = false;
+        setHasUnsavedChanges(false);
+      },
+    });
+  }
 
   const handleContentChange = useCallback((value: string) => {
+    contentRef.current = value;
+    hasUnsavedChangesRef.current = true;
     setContent(value);
     setHasUnsavedChanges(true);
   }, [setContent]);
 
   const saveLatestContent = useCallback(async () => {
-    if (isReadOnly || !hasUnsavedChangesRef.current) {
-      return true;
-    }
-
-    const contentBeingSaved = contentRef.current;
-    const saved = await handleSave();
-
-    if (saved && contentRef.current === contentBeingSaved) {
-      hasUnsavedChangesRef.current = false;
-      setHasUnsavedChanges(false);
-    }
-
-    return saved;
-  }, [handleSave, isReadOnly]);
+    if (isReadOnly) return true;
+    return serialSaveRef.current!();
+  }, [isReadOnly]);
 
   saveLatestRef.current = saveLatestContent;
 

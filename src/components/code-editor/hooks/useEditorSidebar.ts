@@ -10,12 +10,14 @@ type UseEditorSidebarOptions = {
   selectedProject: Project | null;
   isMobile: boolean;
   initialWidth?: number;
+  trackEditingFile?: boolean;
 };
 
 export const useEditorSidebar = ({
   selectedProject,
   isMobile,
   initialWidth = 600,
+  trackEditingFile = true,
 }: UseEditorSidebarOptions) => {
   const [editingFile, setEditingFile] = useState<CodeEditorFile | null>(null);
   const [editorWidth, setEditorWidth] = useState(initialWidth);
@@ -26,7 +28,7 @@ export const useEditorSidebar = ({
   const activeResizePointerIdRef = useRef<number | null>(null);
 
   const handleFileOpen = useCallback(
-    (filePath: string, diffInfo: CodeEditorDiffInfo | null = null, source: FileOpenSource = 'chat') => {
+    (filePath: string, diffInfo: CodeEditorDiffInfo | null = null, _source: FileOpenSource = 'chat') => {
       const workspacePath = (
         selectedProject?.fullPath || selectedProject?.path || ''
       ).replace(/\\/g, '/');
@@ -184,16 +186,18 @@ export const useEditorSidebar = ({
       const resolvedPathWithoutTrailingSlash = resolvedPath.replace(/\/+$/g, '');
       const fileName = resolvedPathWithoutTrailingSlash.split('/').pop() || resolvedPathWithoutTrailingSlash;
 
-      setEditingFile({
+      const file: CodeEditorFile = {
         name: fileName,
         path: resolvedPath,
         displayPath,
         projectName: selectedProject?.name,
         workspaceId: selectedProject?.workspaceId,
         diffInfo,
-      });
+      };
+      if (trackEditingFile) setEditingFile(file);
+      return file;
     },
-    [selectedProject?.fullPath, selectedProject?.name, selectedProject?.path, selectedProject?.workspaceId],
+    [selectedProject?.fullPath, selectedProject?.name, selectedProject?.path, selectedProject?.workspaceId, trackEditingFile],
   );
 
   const handleCloseEditor = useCallback(() => {
