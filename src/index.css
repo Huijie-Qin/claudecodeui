@@ -335,6 +335,30 @@
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
     background-color: hsl(var(--muted-foreground) / 0.8);
   }
+
+  @supports (-moz-appearance: none) {
+    .file-tab-scrollbar {
+      scrollbar-width: thin;
+      scrollbar-color: hsl(var(--muted-foreground) / 0.45) transparent;
+    }
+  }
+
+  .file-tab-scrollbar::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .file-tab-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .file-tab-scrollbar::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.45);
+    border-radius: 999px;
+  }
+
+  .file-tab-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.7);
+  }
   
   /* Dark mode scrollbar styles */
   .dark .scrollbar-thin {

@@ -99,8 +99,8 @@ export default function MainTabbedEditorSidebar({
     if (manager.activeTab) void manager.closeTabs([manager.activeTab.id]);
   };
   const tabBar = (
-    <div className="relative flex h-9 shrink-0 border-b border-border bg-muted/40">
-      <div ref={tabStripRef} className="flex min-w-0 flex-1 overflow-x-auto overflow-y-hidden" role="tablist" aria-label={t('tabs.list')}>
+    <div className="relative flex h-10 shrink-0 border-b border-border bg-muted/40">
+      <div ref={tabStripRef} className="file-tab-scrollbar flex min-w-0 flex-1 overflow-x-auto overflow-y-hidden" role="tablist" aria-label={t('tabs.list')}>
         {manager.tabs.map((tab) => {
           const active = tab.id === manager.activeTab?.id;
           const { icon: Icon, color } = getFileIconData(tab.file.name);
@@ -148,7 +148,7 @@ export default function MainTabbedEditorSidebar({
         <MoreHorizontal className="h-4 w-4" />
       </button>
       {menuOpen && manager.activeTab && (
-        <div className="absolute right-1 top-9 z-30 min-w-32 rounded-md border border-border bg-popover p-1 shadow-lg">
+        <div className="absolute right-1 top-10 z-30 min-w-32 rounded-md border border-border bg-popover p-1 shadow-lg">
           <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-accent" onClick={() => { setMenuOpen(false); closeActive(); }}>{t('tabs.closeCurrent')}</button>
           <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-accent" onClick={() => { setMenuOpen(false); void manager.closeTabs(manager.tabs.filter((tab) => tab.id !== manager.activeTab?.id).map((tab) => tab.id)); }}>{t('tabs.closeOthers')}</button>
           <button type="button" className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-accent" onClick={() => { setMenuOpen(false); void manager.closeTabs(manager.tabs.map((tab) => tab.id)); }}>{t('tabs.closeAll')}</button>
