@@ -99,14 +99,23 @@ import {
 import { createNormalizedMessage } from './shared/utils.js';
 import { aiUsageTurnRecorder, createClaudeUsageTurnCapture, wrapClaudeUsageStopHooks } from './services/ai-usage-turns.js';
 import { createClaudeSkillContextCapture } from './services/ai-usage-skill-context.js';
+import { createSessionLimitExceededMessage, isSessionLimitExceededError } from './services/session-concurrency-limit.js';
 
 const activeSessions = new Map();
+const preparingSessionWriters = new Map();
 const abortedSessions = new Set();
 const mcpLoopSuspensionsBySession = new Map();
 const mcpLoopContextsByJob = new Map();
 const inlineSubagentMcpLoopJobs = new Set();
 const pendingToolApprovals = new Map();
 const sessionExecutionQueue = createClaudeSessionExecutionQueue();
+const MCP_LOOP_QUERY_RESUME_GATE = Symbol('mcpLoopQueryResumeGate');
+const ACTIVE_CLAUDE_SESSION_STATUSES = new Set([
+  'processing', 'transitioning', 'waiting_external', 'aborting',
+]);
+const PROCESSING_CLAUDE_SESSION_STATUSES = new Set([
+  'processing', 'transitioning', 'waiting_external', 'aborting',
+]);
 
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 const INTERACTIVE_TOOL_APPROVAL_TIMEOUT_MS =
@@ -122,6 +131,7 @@ const DISABLED_CLAUDE_CODE_TOOLS = Object.freeze(['WebSearch', 'WebFetch']);
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode', 'exit_plan_mode']);
 const CLAUDE_NATIVE_SCHEDULING_TOOLS = new Set(CLAUDE_NATIVE_SCHEDULING_TOOL_NAMES);
 const HOOK_ACTIVITY_TERMINAL_STATUSES = new Set(['succeeded', 'failed']);
+const MCP_LOOP_WAIT_TEXT = 'Processing';
 
 function resolveConfiguredHookUserId(runtimeOptions = {}, writerUserId = null) {
   const hookUserId = Number(runtimeOptions.userId ?? writerUserId);
@@ -861,26 +871,41 @@ function markSessionProcessing(sessionId) {
   return true;
 }
 
-/**
- * Gets all active session IDs
- * @returns {Array<string>} Array of active session IDs
- */
-function getAllSessions() {
-  return Array.from(activeSessions.entries())
-    .filter(([, session]) => session.status === 'processing')
+// A suspended external MCP loop remains one processing session until its
+// result is delivered and the Agent finishes or the user stops it.
+function getProcessingClaudeSessionIds(sessions) {
+  return Array.from(sessions.entries())
+    .filter(([, session]) => PROCESSING_CLAUDE_SESSION_STATUSES.has(session.status))
     .map(([sessionId]) => sessionId);
 }
 
-function countActiveSessionsForRuntime(runtimeId, { excludingSessionId = null } = {}) {
+function getAllSessions() {
+  return getProcessingClaudeSessionIds(activeSessions);
+}
+
+function countActiveSessionsForRuntime(runtimeId, {
+  excludingSessionId = null,
+  sessions = activeSessions,
+  suspensions = mcpLoopSuspensionsBySession,
+} = {}) {
   if (!runtimeId) return 0;
-  let count = 0;
-  for (const [activeSessionId, session] of activeSessions.entries()) {
+  const countedSessions = new Set();
+  for (const [activeSessionId, session] of sessions.entries()) {
     if (activeSessionId === excludingSessionId) continue;
-    if (session.runtimeMode === 'docker' && session.runtimeId === runtimeId && session.status === 'processing') {
-      count += 1;
+    if (session.runtimeMode === 'docker' && session.runtimeId === runtimeId
+        && (session.status === 'processing' || session.status === 'transitioning'
+          || session.status === 'waiting_external' || session.status === 'aborting')) {
+      countedSessions.add(activeSessionId);
     }
   }
-  return count;
+  for (const [suspendedSessionId, suspension] of suspensions.entries()) {
+    if (suspendedSessionId === excludingSessionId) continue;
+    if (!suspension.skipResume && suspension.runtimeOptions?.runtimeMode === 'docker'
+        && suspension.runtimeOptions.runtimeId === runtimeId) {
+      countedSessions.add(suspendedSessionId);
+    }
+  }
+  return countedSessions.size;
 }
 
 /**
@@ -1640,6 +1665,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
 
   try {
     runtimeContext = await agentSessionRuntimeManager.prepareClaudeRuntime(options);
+    assertMcpLoopResumeNotStopped(options);
     runtimeOptions = {
       ...options,
       aiUsageTurn: usageTurn.identity,
@@ -1677,6 +1703,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
     await reconcileWorkspaceSkillsForAgentTurn({
       workspacePath: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
     });
+    assertMcpLoopResumeNotStopped(options);
 
     // CLAUDE.md is the project memory loaded natively by Claude Code. Migrate
     // the former platform-managed Agent.md only for managed workspaces.
@@ -2501,6 +2528,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
 
     let queryInstance;
     try {
+      assertMcpLoopResumeNotStopped(options);
       queryInstance = createClaudeQueryWithHookFallback({
         query,
         prompt: inputQueue,
@@ -2581,6 +2609,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
       if (message.session_id && !capturedSessionId) {
 
         capturedSessionId = message.session_id;
+        runtimeOptions.onConcurrencySessionId?.(capturedSessionId);
         await persistInitialDisplayCommand(capturedSessionId);
         addSession(
           capturedSessionId,
@@ -2739,9 +2768,11 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
 
     turnCompletionScheduler.cancel();
     const finalSessionId = capturedSessionId || sessionId || null;
-    const wasAborted = finalSessionId ? abortedSessions.has(finalSessionId) : false;
+    const wasAborted = Boolean(runtimeOptions.mcpLoopResumeControl?.skipResume)
+      || (finalSessionId ? abortedSessions.has(finalSessionId) : false);
     const loopSuspension = finalSessionId ? getPendingMcpLoopSuspension(finalSessionId) : null;
     if (wasAborted) usageTurn.terminal('aborted');
+    if (loopSuspension && !loopSuspension.skipResume) runtimeOptions.onMcpLoopSuspended?.();
 
     if (!wasAborted && !loopSuspension) {
       turnLifecycle.flush();
@@ -2756,6 +2787,9 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
 
     // Keep the lightweight session entry while transitioning so Hook-generated
     // follow-ups can remain queued behind the next independent turn.
+    if (!queuedFollowupTurn || wasAborted) {
+      runtimeOptions.onConcurrencyIdle?.();
+    }
     if (finalSessionId && (!queuedFollowupTurn || wasAborted)) {
       removeSession(finalSessionId);
     }
@@ -2764,24 +2798,33 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
     await cleanupTempFiles(tempImagePaths, tempDir);
 
     if (loopSuspension) {
+      const loopStopped = loopSuspension.skipResume;
       agentSessionRuntimeManager.markIdle(runtimeOptions.runtimeId);
       recordProviderSession({
         options: runtimeOptions,
         provider: 'claude',
         providerSessionId: finalSessionId,
-        status: 'completed',
+        status: loopStopped ? 'aborted' : 'active',
       });
-      runtimeOptions.onConcurrencyIdle?.();
-      ws.send(createNormalizedMessage({
-        kind: 'complete',
-        exitCode: 0,
-        sessionId: finalSessionId,
-        provider: 'claude',
-        suspended: true,
-        waitJobId: [...loopSuspension.jobIds][0] || null,
-        waitJobIds: [...loopSuspension.jobIds],
-        success: true,
-      }));
+      if (loopStopped) {
+        runtimeOptions.onConcurrencyIdle?.();
+        ws.send(createNormalizedMessage({
+          kind: 'complete',
+          exitCode: 0,
+          sessionId: finalSessionId,
+          provider: 'claude',
+          aborted: true,
+          success: true,
+        }));
+      } else {
+        ws.send(createNormalizedMessage({
+          kind: 'status',
+          text: MCP_LOOP_WAIT_TEXT,
+          sessionId: finalSessionId,
+          provider: 'claude',
+          canInterrupt: true,
+        }));
+      }
       return;
     }
 
@@ -2847,8 +2890,10 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
     turnCompletionScheduler?.cancel();
     console.error('SDK query error:', error);
     const finalSessionId = capturedSessionId || sessionId || null;
-    const wasAborted = finalSessionId ? abortedSessions.delete(finalSessionId) : false;
+    const wasMarkedAborted = finalSessionId ? abortedSessions.delete(finalSessionId) : false;
+    const wasAborted = Boolean(runtimeOptions.mcpLoopResumeControl?.skipResume) || wasMarkedAborted;
     const loopSuspension = finalSessionId ? getPendingMcpLoopSuspension(finalSessionId) : null;
+    if (loopSuspension && !loopSuspension.skipResume) runtimeOptions.onMcpLoopSuspended?.();
     if (!loopSuspension) usageTurn.terminal(wasAborted ? 'aborted' : 'failed');
     if (!loopSuspension) {
       updateHookActivity(
@@ -2858,6 +2903,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
     }
 
     // Clean up session on error
+    runtimeOptions.onConcurrencyIdle?.();
     if (finalSessionId) {
       removeSession(finalSessionId);
     }
@@ -2866,24 +2912,33 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
     await cleanupTempFiles(tempImagePaths, tempDir);
 
     if (loopSuspension) {
+      const loopStopped = loopSuspension.skipResume;
       agentSessionRuntimeManager.markIdle(runtimeOptions.runtimeId);
       recordProviderSession({
         options: runtimeOptions,
         provider: 'claude',
         providerSessionId: finalSessionId,
-        status: 'completed',
+        status: loopStopped ? 'aborted' : 'active',
       });
-      runtimeOptions.onConcurrencyIdle?.();
-      ws.send(createNormalizedMessage({
-        kind: 'complete',
-        exitCode: 0,
-        sessionId: finalSessionId,
-        provider: 'claude',
-        suspended: true,
-        waitJobId: [...loopSuspension.jobIds][0] || null,
-        waitJobIds: [...loopSuspension.jobIds],
-        success: true,
-      }));
+      if (loopStopped) {
+        runtimeOptions.onConcurrencyIdle?.();
+        ws.send(createNormalizedMessage({
+          kind: 'complete',
+          exitCode: 0,
+          sessionId: finalSessionId,
+          provider: 'claude',
+          aborted: true,
+          success: true,
+        }));
+      } else {
+        ws.send(createNormalizedMessage({
+          kind: 'status',
+          text: MCP_LOOP_WAIT_TEXT,
+          sessionId: finalSessionId,
+          provider: 'claude',
+          canInterrupt: true,
+        }));
+      }
       return;
     }
 
@@ -2996,6 +3051,41 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
   }
 }
 
+function createMcpLoopResumeGate(scheduleResume = (suspension) => {
+  setImmediate(() => {
+    void resumeClaudeSessionAfterMcpLoopBatch(suspension);
+  });
+}) {
+  const suspensions = new Set();
+  let settled = false;
+
+  return {
+    track(suspension) {
+      if (!suspension || suspensions.has(suspension)) return;
+      suspension.originalQuerySettled = settled;
+      if (settled) scheduleResume(suspension);
+      else suspensions.add(suspension);
+    },
+    settle() {
+      if (settled) return;
+      settled = true;
+      for (const suspension of suspensions) {
+        suspension.originalQuerySettled = true;
+        scheduleResume(suspension);
+      }
+      suspensions.clear();
+    },
+  };
+}
+
+function assertMcpLoopResumeNotStopped(options) {
+  if (options.mcpLoopResumeControl?.skipResume) {
+    const error = new Error('MCP loop resume was stopped with the Claude session');
+    error.code = 'MCP_LOOP_RESUME_STOPPED';
+    throw error;
+  }
+}
+
 async function queryClaudeSDK(command, options = {}, ws) {
   const suspendedLoop = options.sessionId
     ? mcpLoopSuspensionsBySession.get(options.sessionId)
@@ -3006,13 +3096,35 @@ async function queryClaudeSDK(command, options = {}, ws) {
     throw error;
   }
   const executionKey = buildClaudeSessionExecutionKey(options);
-  return sessionExecutionQueue.run(
-    executionKey,
-    () => {
-      options.onSessionExecutionStart?.();
-      return queryClaudeSDKInternal(command, options, ws);
-    },
-  );
+  const resumeGate = createMcpLoopResumeGate();
+  const queryOptions = { ...options, [MCP_LOOP_QUERY_RESUME_GATE]: resumeGate };
+  let started = false;
+  try {
+    return await sessionExecutionQueue.run(
+      executionKey,
+      async () => {
+        started = true;
+        assertMcpLoopResumeNotStopped(queryOptions);
+        await queryOptions.onSessionExecutionStart?.();
+        assertMcpLoopResumeNotStopped(queryOptions);
+        if (queryOptions.sessionId) preparingSessionWriters.set(queryOptions.sessionId, ws);
+        return queryClaudeSDKInternal(command, queryOptions, ws);
+      },
+    );
+  } finally {
+    // Covers SDK failures that do not emit a normal completion boundary,
+    // including background resumes after an MCP loop.
+    try {
+      if (started) queryOptions.onConcurrencyIdle?.();
+    } finally {
+      if (queryOptions.sessionId && preparingSessionWriters.get(queryOptions.sessionId) === ws) {
+        preparingSessionWriters.delete(queryOptions.sessionId);
+      }
+      // A new conversation has no session execution key until its first SDK
+      // event. Hold any MCP resume until this entire original query exits.
+      resumeGate.settle();
+    }
+  }
 }
 
 // Serialize snapshot creation with sends on the same session. Reject an active
@@ -3079,6 +3191,7 @@ function registerMcpLoopSessionJob(sessionId, job, context) {
     };
     mcpLoopSuspensionsBySession.set(sessionId, suspension);
   }
+  context.runtimeOptions?.[MCP_LOOP_QUERY_RESUME_GATE]?.track(suspension);
   suspension.jobIds.add(job.id);
   return suspension;
 }
@@ -3126,48 +3239,121 @@ function emitMcpLoopTerminalResult(context, job) {
   emitMcpLoopActivity(context, job, activityStatus, job.error);
 }
 
-async function resumeClaudeSessionAfterMcpLoopBatch(suspension) {
-  if (!suspension || suspension.resuming || !suspension.suspended) return false;
-  if (!isMcpLoopSessionBatchTerminal(suspension)) return false;
+function sendMcpLoopResumeFailure(suspension, error) {
+  const limitExceeded = isSessionLimitExceededError(error);
+  const errorContent = limitExceeded
+    ? createSessionLimitExceededMessage(error)
+    : `MCP loop Agent resume failed: ${error?.message || error}`;
+  sendWriterMessage(suspension.writer, createNormalizedMessage({
+    kind: 'error',
+    content: errorContent,
+    code: error?.code || 'MCP_LOOP_RESUME_FAILED',
+    sessionId: suspension.sessionId,
+    provider: 'claude',
+    ...(limitExceeded ? {
+      currentConcurrentRequests: error.activeCount,
+      sessionLimit: error.limit,
+    } : {}),
+  }));
+  sendWriterMessage(suspension.writer, createNormalizedMessage({
+    kind: 'complete',
+    exitCode: 1,
+    success: false,
+    sessionId: suspension.sessionId,
+    provider: 'claude',
+  }));
+}
 
-  suspension.resuming = true;
+function sendMcpLoopAbortCompletion(suspension) {
+  if (suspension.abortCompletionSent) return;
+  suspension.abortCompletionSent = true;
+  sendWriterMessage(suspension.writer, createNormalizedMessage({
+    kind: 'complete',
+    exitCode: 0,
+    aborted: true,
+    success: true,
+    sessionId: suspension.sessionId,
+    provider: 'claude',
+  }));
+}
+
+function releaseMcpLoopSessionLease(suspension) {
+  if (!suspension || mcpLoopSuspensionsBySession.get(suspension.sessionId) !== suspension) return;
+  // A resumed turn may have registered another loop. Its new suspension owns
+  // the same lease, so the old batch must not release it.
+  suspension.runtimeOptions.onMcpLoopResuming?.();
+  suspension.runtimeOptions.onConcurrencyIdle?.();
+}
+
+function continueMcpLoopWithHeldLease(suspension) {
+  assertMcpLoopResumeNotStopped({ mcpLoopResumeControl: suspension });
+  suspension.runtimeOptions.onMcpLoopResuming?.();
+  // The loop has held this lease throughout polling, so acquire is idempotent.
+  suspension.runtimeOptions.onConcurrencyResume?.();
+  assertMcpLoopResumeNotStopped({ mcpLoopResumeControl: suspension });
+
+  sendWriterMessage(suspension.writer, createNormalizedMessage({
+    kind: 'status',
+    text: 'Processing',
+    sessionId: suspension.sessionId,
+    provider: 'claude',
+    canInterrupt: true,
+  }));
+}
+
+async function resumeClaudeSessionAfterMcpLoopBatch(suspension) {
+  if (!suspension || suspension.resuming || !suspension.suspended || !suspension.originalQuerySettled) return false;
   if (suspension.skipResume) {
+    sendMcpLoopAbortCompletion(suspension);
+    releaseMcpLoopSessionLease(suspension);
     cleanupMcpLoopSessionSuspension(suspension);
     return false;
   }
+  if (!isMcpLoopSessionBatchTerminal(suspension)) return false;
+
+  suspension.resuming = true;
 
   const jobs = [...suspension.jobIds].map((jobId) => suspension.terminalJobs.get(jobId));
   const modelContent = buildMcpLoopBatchModelContent(jobs);
   const jobIds = jobs.map((job) => job.id);
 
   try {
-    sendWriterMessage(suspension.writer, createNormalizedMessage({
-      kind: 'status',
-      text: 'Processing',
-      sessionId: suspension.sessionId,
-      provider: 'claude',
-      canInterrupt: true,
-    }));
     await queryClaudeSDK(modelContent, {
       ...suspension.runtimeOptions,
       sessionId: suspension.sessionId,
       resume: true,
       backgroundTask: true,
       mcpLoopResume: true,
-      onSessionExecutionStart: () => suspension.runtimeOptions.onConcurrencyResume?.(),
+      mcpLoopResumeControl: suspension,
+      onSessionExecutionStart: () => continueMcpLoopWithHeldLease(suspension),
       hookRecovery: null,
       displayCommand: `<ccui-mcp-loop-results job-ids="${jobIds.join(',')}"></ccui-mcp-loop-results>`,
       images: [],
     }, suspension.writer);
   } catch (error) {
-    console.error(`[McpLoop] Failed to resume Claude session ${suspension.sessionId}:`, error);
-    for (const job of jobs) {
-      const context = mcpLoopContextsByJob.get(job.id);
-      if (context) {
-        emitMcpLoopActivity(context, job, 'failed', `Agent resume failed: ${error?.message || error}`);
+    if (!suspension.skipResume) {
+      console.error(`[McpLoop] Failed to resume Claude session ${suspension.sessionId}:`, error);
+      try {
+        recordProviderSession({
+          options: suspension.runtimeOptions,
+          provider: 'claude',
+          providerSessionId: suspension.sessionId,
+          status: 'failed',
+        });
+      } catch (recordError) {
+        console.warn(`[McpLoop] Failed to record failed session ${suspension.sessionId}:`, recordError);
+      }
+      sendMcpLoopResumeFailure(suspension, error);
+      for (const job of jobs) {
+        const context = mcpLoopContextsByJob.get(job.id);
+        if (context) {
+          emitMcpLoopActivity(context, job, 'failed', `Agent resume failed: ${error?.message || error}`);
+        }
       }
     }
   } finally {
+    if (suspension.skipResume) sendMcpLoopAbortCompletion(suspension);
+    releaseMcpLoopSessionLease(suspension);
     cleanupMcpLoopSessionSuspension(suspension);
   }
   return true;
@@ -3184,7 +3370,6 @@ async function suspendClaudeSDKSessionForMcpLoopBatch(sessionId) {
   session.inputQueue?.close();
   try {
     await Promise.resolve(session.instance.interrupt());
-    void resumeClaudeSessionAfterMcpLoopBatch(suspension);
     return true;
   } catch (error) {
     console.warn(`[McpLoop] Failed to suspend Claude session ${sessionId}:`, error?.message || error);
@@ -3205,7 +3390,10 @@ async function handleMcpLoopTerminalJob(job) {
   suspension.terminalJobs.set(job.id, job);
   if (suspension.skipResume) {
     emitMcpLoopActivity(context, job, 'failed', 'MCP loop was stopped with the Agent session');
-    if (isMcpLoopSessionBatchTerminal(suspension)) {
+    if (isMcpLoopSessionBatchTerminal(suspension)
+      && suspension.originalQuerySettled && !suspension.resuming) {
+      sendMcpLoopAbortCompletion(suspension);
+      releaseMcpLoopSessionLease(suspension);
       cleanupMcpLoopSessionSuspension(suspension);
     }
     return;
@@ -3299,6 +3487,84 @@ async function stopActiveClaudeSubagentTasks(
   return stoppedMessages;
 }
 
+function requestClaudeSDKAbortSignal(sessionId, session) {
+  let signalSent = false;
+  try {
+    session.inputQueue?.close();
+  } catch (error) {
+    console.warn(`Failed to close Claude input queue for ${sessionId}:`, error?.message || error);
+  }
+  try {
+    if (session.abortController?.abort) {
+      session.abortController.abort(new Error('Session stopped by user'));
+      signalSent = true;
+    }
+  } catch (error) {
+    console.warn(`Failed to abort Claude query controller for ${sessionId}:`, error?.message || error);
+  }
+
+  let interruptPromise = Promise.resolve(false);
+  try {
+    if (session.instance?.interrupt) {
+      interruptPromise = Promise.resolve(session.instance.interrupt())
+        .then(() => true, (error) => {
+          console.warn(`SDK interrupt failed for session ${sessionId}:`, error?.message || error);
+          return false;
+        });
+    }
+  } catch (error) {
+    console.warn(`SDK interrupt failed for session ${sessionId}:`, error?.message || error);
+  }
+  return { signalSent, interruptPromise };
+}
+
+async function finishClaudeSDKAbort(sessionId, session, {
+  listActiveLoopJobs = (id) => mcpLoopService.listActiveForSession(id),
+  cancelLoopJob = (input) => mcpLoopService.cancel(input),
+  stopSubagents = stopActiveClaudeSubagentTasks,
+  countOtherSessions = countActiveSessionsForRuntime,
+  stopRuntime = (runtimeId) => agentSessionRuntimeManager.stopRuntime(runtimeId),
+} = {}) {
+  // Send every available stop signal before awaiting Hook, MCP, or Docker
+  // cleanup. Those operations can fail or stall independently of the query.
+  const { signalSent, interruptPromise } = requestClaudeSDKAbortSignal(sessionId, session);
+  const loopCleanup = Promise.resolve().then(async () => {
+    const loopUserId = session.runtimeOptions?.userId ?? session.writer?.userId;
+    const activeLoopJobs = listActiveLoopJobs(sessionId);
+    await Promise.all(activeLoopJobs.map((job) => cancelLoopJob({
+      jobId: job.id,
+      userId: loopUserId,
+    })));
+  });
+  const subagentCleanup = Promise.resolve().then(() => stopSubagents(sessionId, session));
+
+  let stopDockerRuntime = false;
+  try {
+    stopDockerRuntime = Boolean(session.runtimeMode === 'docker' && session.runtimeId
+      && countOtherSessions(session.runtimeId, { excludingSessionId: sessionId }) === 0);
+  } catch (error) {
+    console.warn(`Failed to count other Claude sessions while aborting ${sessionId}:`, error?.message || error);
+  }
+  const cleanupResults = await Promise.allSettled([
+    loopCleanup,
+    subagentCleanup,
+    stopDockerRuntime
+      ? Promise.resolve().then(() => stopRuntime(session.runtimeId))
+      : interruptPromise,
+  ]);
+  for (const [index, result] of cleanupResults.entries()) {
+    if (result.status === 'rejected') {
+      console.warn(`Claude abort cleanup ${index + 1} failed for ${sessionId}:`, result.reason?.message || result.reason);
+    }
+  }
+
+  // The query's own completion path removes the session and releases its
+  // lease. An interrupt may resolve before the SDK stream actually exits.
+  return signalSent || (stopDockerRuntime
+    ? cleanupResults[2].status === 'fulfilled'
+    : cleanupResults[2].status === 'fulfilled' && cleanupResults[2].value === true);
+}
+
 /**
  * Aborts an active SDK session
  * @param {string} sessionId - Session identifier
@@ -3310,20 +3576,37 @@ async function abortClaudeSDKSession(sessionId) {
   if (!session) {
     const waitingBatch = mcpLoopSuspensionsBySession.get(sessionId);
     if (waitingBatch) {
+      const wasResuming = waitingBatch.resuming;
       waitingBatch.skipResume = true;
       if (waitingBatch.runtimeOptions?.aiUsageTurn) {
         aiUsageTurnRecorder.terminal({ ...waitingBatch.runtimeOptions.aiUsageTurn, status: 'aborted' });
       }
       const userId = waitingBatch.runtimeOptions?.userId ?? waitingBatch.writer?.userId;
       const activeJobs = mcpLoopService.listActiveForSession(sessionId);
-      const results = await Promise.all(activeJobs.map((job) => mcpLoopService.cancel({
+      await Promise.allSettled(activeJobs.map((job) => mcpLoopService.cancel({
         jobId: job.id,
         userId,
       })));
-      if (activeJobs.length === 0) {
+      try {
+        recordProviderSession({
+          options: waitingBatch.runtimeOptions,
+          provider: 'claude',
+          providerSessionId: sessionId,
+          status: 'aborted',
+        });
+      } catch (recordError) {
+        console.warn(`[McpLoop] Failed to record stopped session ${sessionId}:`, recordError);
+      }
+      // An in-flight resume may still be preparing its SDK query. Keep its
+      // suspension visible until that query observes skipResume and exits.
+      if (waitingBatch.originalQuerySettled && !wasResuming) {
+        sendMcpLoopAbortCompletion(waitingBatch);
+        releaseMcpLoopSessionLease(waitingBatch);
+      }
+      if (activeJobs.length === 0 && !wasResuming && waitingBatch.originalQuerySettled) {
         cleanupMcpLoopSessionSuspension(waitingBatch);
       }
-      return results.some((result) => result.success);
+      return true;
     }
     console.log(`Session ${sessionId} not found`);
     return false;
@@ -3335,56 +3618,17 @@ async function abortClaudeSDKSession(sessionId) {
     // Docker-backed Claude runs inside a reusable user/workspace container. If this
     // is the last active session for that runtime, stop the container as a hard
     // cleanup because SDK interrupt can leave docker exec alive.
-    session.status = 'aborted';
+    session.status = 'aborting';
     abortedSessions.add(sessionId);
     const waitingBatch = mcpLoopSuspensionsBySession.get(sessionId);
-    if (waitingBatch) waitingBatch.skipResume = true;
-    const loopUserId = session.runtimeOptions?.userId ?? session.writer?.userId;
-    const activeLoopJobs = mcpLoopService.listActiveForSession(sessionId);
-    await Promise.all(activeLoopJobs.map((job) => mcpLoopService.cancel({
-      jobId: job.id,
-      userId: loopUserId,
-    })));
+    if (waitingBatch) {
+      waitingBatch.skipResume = true;
+    }
     if (session.idleCloseTimer) {
       clearTimeout(session.idleCloseTimer);
       session.idleCloseTimer = null;
     }
-    await stopActiveClaudeSubagentTasks(sessionId, session);
-    session.inputQueue?.close();
-
-    const interruptPromise = Promise.resolve()
-      .then(() => session.instance.interrupt())
-      .catch((error) => {
-        console.warn(`SDK interrupt failed for session ${sessionId}:`, error?.message || error);
-      });
-    session.abortController?.abort(new Error('Session stopped by user'));
-
-    if (
-      session.runtimeMode === 'docker' &&
-      session.runtimeId &&
-      countActiveSessionsForRuntime(session.runtimeId, { excludingSessionId: sessionId }) === 0
-    ) {
-      await agentSessionRuntimeManager.stopRuntime(session.runtimeId);
-    } else {
-      await interruptPromise;
-    }
-
-    if (session.runtimeOptions) {
-      recordProviderSession({
-        options: session.runtimeOptions,
-        provider: 'claude',
-        providerSessionId: sessionId,
-        status: 'aborted',
-      });
-    }
-
-    // Clean up temporary image files
-    await cleanupTempFiles(session.tempImagePaths, session.tempDir);
-
-    // Clean up session
-    removeSession(sessionId);
-
-    return true;
+    return await finishClaudeSDKAbort(sessionId, session);
   } catch (error) {
     console.error(`Error aborting session ${sessionId}:`, error);
     return false;
@@ -3398,15 +3642,26 @@ async function abortClaudeSDKSession(sessionId) {
  */
 function isClaudeSDKSessionActive(sessionId) {
   const session = getSession(sessionId);
-  return Boolean((session && session.status === 'processing') || mcpLoopSuspensionsBySession.has(sessionId));
+  return Boolean((session && ACTIVE_CLAUDE_SESSION_STATUSES.has(session.status))
+    || mcpLoopSuspensionsBySession.has(sessionId));
 }
 
-/**
- * Gets all active SDK session IDs
- * @returns {Array<string>} Array of active session IDs
- */
+/** Gets turns that are processing, including root MCP loops between SDK queries. */
 function getActiveClaudeSDKSessions() {
-  return [...new Set([...getAllSessions(), ...mcpLoopSuspensionsBySession.keys()])];
+  return [...new Set([...getAllSessions(), ...getPendingMcpLoopSessionIds(mcpLoopSuspensionsBySession)])];
+}
+
+function getPendingMcpLoopSessionIds(suspensions) {
+  return [...suspensions.values()]
+    .filter((suspension) => !suspension.skipResume)
+    .map((suspension) => suspension.sessionId);
+}
+
+function getClaudeSDKSessionWaitStatus(sessionId) {
+  const suspension = mcpLoopSuspensionsBySession.get(sessionId);
+  return suspension && !suspension.skipResume
+    ? { text: MCP_LOOP_WAIT_TEXT, can_interrupt: true }
+    : null;
 }
 
 /**
@@ -3441,7 +3696,7 @@ function getPendingApprovalsForSession(sessionId) {
 function reconnectSessionWriter(sessionId, newRawWs) {
   const session = getSession(sessionId);
   const waitingLoop = mcpLoopSuspensionsBySession.get(sessionId);
-  const writer = session?.writer || waitingLoop?.writer;
+  const writer = session?.writer || preparingSessionWriters.get(sessionId) || waitingLoop?.writer;
   if (!writer?.updateWebSocket) return false;
   writer.updateWebSocket(newRawWs);
   console.log(`[RECONNECT] Writer swapped for session ${sessionId}`);
@@ -3630,6 +3885,10 @@ export {
   abortClaudeSDKSession,
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,
+  getPendingMcpLoopSessionIds,
+  getClaudeSDKSessionWaitStatus,
+  getProcessingClaudeSessionIds,
+  countActiveSessionsForRuntime,
   mapCliOptionsToSDK,
   resolveToolApproval,
   resolveClaudeModel,
