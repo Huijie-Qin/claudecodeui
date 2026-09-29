@@ -33,6 +33,7 @@ import {
 import {
     abortClaudeSDKSession,
     getActiveClaudeSDKSessions,
+    getClaudeSDKSessionWaitStatus,
     getPendingApprovalsForSession,
     isClaudeSDKSessionActive,
     pushClaudeSupplement,
@@ -104,7 +105,9 @@ import {
 } from './services/workspace-storage-quota.js';
 import {
     createSessionLimitExceededMessage,
+    createSessionConcurrencyLease,
     isSessionLimitExceededError,
+    resolveSessionLimit,
     sessionConcurrencyLimiter
 } from './services/session-concurrency-limit.js';
 import {IS_PLATFORM} from './constants/config.js';
@@ -2572,6 +2575,38 @@ function createChatSessionLogContext({ data, provider, request }) {
     };
 }
 
+function isOwnedChatSession({ request, provider, sessionId }) {
+    const tenantId = Number(request?.tenant?.id);
+    const userId = Number(request?.user?.id ?? request?.user?.userId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0 ||
+        !Number.isInteger(userId) || userId <= 0 ||
+        !['claude', 'cursor', 'codex', 'gemini'].includes(provider) ||
+        typeof sessionId !== 'string' || !sessionId.trim()) {
+        return false;
+    }
+
+    // A newly created session may be executing before its ownership row has
+    // been written. Its lease already carries the authenticated user/tenant.
+    if (sessionConcurrencyLimiter.getActiveLeases(userId).some((lease) =>
+        Number(lease.tenantId) === tenantId &&
+        lease.provider === provider &&
+        lease.sessionId === sessionId)) {
+        return true;
+    }
+
+    try {
+        return Boolean(multitenancyDb.sessions.findOwnedSession({
+            tenantId,
+            userId,
+            provider,
+            providerSessionId: sessionId,
+        }));
+    } catch (error) {
+        console.warn('[chat-session] Failed to check session ownership:', error?.message || error);
+        return false;
+    }
+}
+
 function logChatSessionEvent(event, context, extra = {}) {
     if (!context) return;
     console.log('[chat-session]', JSON.stringify({
@@ -2607,7 +2642,6 @@ function resolveSessionLimitLogUser({ userId, username, request, writer }) {
 }
 
 async function runLimitedProviderCommand({ data, provider, writer, run, logContext = null }) {
-    let lease;
     let activeCommandId = null;
     const startedAt = Date.now();
     if (logContext?.requestId) {
@@ -2617,70 +2651,41 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         };
     }
     logChatSessionEvent('received', logContext);
-    try {
-        lease = sessionConcurrencyLimiter.acquire({
-            userId: data.options?.userId ?? writer.userId,
-        });
-    } catch (error) {
-        if (!isSessionLimitExceededError(error)) {
-            throw error;
-        }
-
-        const rejectedUser = resolveSessionLimitLogUser({
-            userId: error.userId ?? data.options?.userId ?? writer.userId,
-            username: logContext?.username,
-            writer,
-        });
-        console.warn('[SessionLimit] User concurrency limit reached', JSON.stringify({
-            username: rejectedUser.username,
-            userId: rejectedUser.userId,
-            provider,
-            activeCount: error.activeCount,
-            limit: error.limit,
-            source: error.source,
-            requestId: logContext?.requestId || null,
-        }));
-
-        writer.send(createNormalizedMessage({
-            kind: 'error',
-            content: createSessionLimitExceededMessage(error),
-            code: error.code,
-            provider,
-            sessionId: data.options?.sessionId || null,
-            clientSessionId: data.options?.clientSessionId || null,
-            currentConcurrentRequests: error.activeCount,
-            sessionLimit: error.limit,
-        }));
-        logChatSessionEvent('rejected', logContext, {
-            reason: error.code || 'session_limit_exceeded',
-            currentConcurrentRequests: error.activeCount,
-            sessionLimit: error.limit,
-            durationMs: Date.now() - startedAt,
-        });
-        return;
-    }
-
-    // Claude supplemental turns and queued Hook follow-ups stay inside this
-    // command chain. Release the lease only after the final turn completes.
-    const acquireConcurrencyLease = () => {
-        if (lease) return;
-        lease = sessionConcurrencyLimiter.acquire({
-            userId: data.options?.userId ?? writer.userId,
-        });
-    };
+    const concurrencyLease = createSessionConcurrencyLease({
+        limiter: sessionConcurrencyLimiter,
+        userId: data.options?.userId ?? writer.userId,
+        provider,
+        sessionId: data.options?.sessionId || null,
+        clientSessionId: typeof data.options?.clientSessionId === 'string' ? data.options.clientSessionId.slice(0, 128) : null,
+        requestId: logContext?.requestId || null,
+        workspaceId: data.options?.workspaceId || null,
+        tenantId: data.options?.tenantId || null,
+    });
+    let waitingForMcpLoop = false;
     const releaseConcurrencyLease = () => {
-        lease?.release();
-        lease = null;
+        if (!waitingForMcpLoop) concurrencyLease.release();
+    };
+    data.options = {
+        ...(data.options || {}),
+        onConcurrencySessionId: concurrencyLease.updateSessionId,
     };
     if (provider === 'claude') {
         data.options = {
             ...(data.options || {}),
-            onConcurrencyResume: acquireConcurrencyLease,
+            // The Claude session queue can wait behind another turn. Count this
+            // command only when its execution actually starts.
+            onSessionExecutionStart: concurrencyLease.acquire,
+            onConcurrencyResume: concurrencyLease.acquire,
+            // The root MCP loop remains part of this processing session while
+            // its SDK query is suspended. Keep the same slot through resume.
+            onMcpLoopSuspended: () => { waitingForMcpLoop = true; },
+            onMcpLoopResuming: () => { waitingForMcpLoop = false; },
             onConcurrencyIdle: releaseConcurrencyLease,
         };
     }
 
     try {
+        if (provider !== 'claude') concurrencyLease.acquire();
         activeCommandId = `${provider}:${Date.now()}:${++activeProviderCommandCounter}`;
         activeProviderCommands.set(activeCommandId, {
             provider,
@@ -2691,10 +2696,48 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         });
         logChatSessionEvent('dispatch', logContext);
         await run();
-        logChatSessionEvent('completed', logContext, {
+        logChatSessionEvent(waitingForMcpLoop ? 'suspended' : 'completed', logContext, {
             durationMs: Date.now() - startedAt,
         });
     } catch (error) {
+        if (isSessionLimitExceededError(error)) {
+            const rejectedUser = resolveSessionLimitLogUser({
+                userId: error.userId ?? data.options?.userId ?? writer.userId,
+                username: logContext?.username,
+                writer,
+            });
+            const activeLeases = error.activeLeases || sessionConcurrencyLimiter.getActiveLeases(error.userId);
+            console.warn('[SessionLimit] User concurrency limit reached', JSON.stringify({
+                username: rejectedUser.username,
+                userId: rejectedUser.userId,
+                provider,
+                activeCount: error.activeCount,
+                limit: error.limit,
+                source: error.source,
+                requestId: logContext?.requestId || null,
+                activeLeases: activeLeases.map((lease) => ({
+                    ...lease,
+                    ageMs: Date.now() - lease.startedAt,
+                })),
+            }));
+            writer.send(createNormalizedMessage({
+                kind: 'error',
+                content: createSessionLimitExceededMessage(error, activeLeases),
+                code: error.code,
+                provider,
+                sessionId: data.options?.sessionId || null,
+                clientSessionId: data.options?.clientSessionId || null,
+                currentConcurrentRequests: error.activeCount,
+                sessionLimit: error.limit,
+            }));
+            logChatSessionEvent('rejected', logContext, {
+                reason: error.code || 'session_limit_exceeded',
+                currentConcurrentRequests: error.activeCount,
+                sessionLimit: error.limit,
+                durationMs: Date.now() - startedAt,
+            });
+            return;
+        }
         logChatSessionEvent('failed', logContext, {
             durationMs: Date.now() - startedAt,
             error: error?.message || String(error),
@@ -2855,6 +2898,10 @@ function handleChatConnection(ws, request) {
             } else if (data.type === 'abort-session') {
                 console.log('[DEBUG] Abort session request:', data.sessionId);
                 const provider = data.provider || 'claude';
+                if (!isOwnedChatSession({ request, provider, sessionId: data.sessionId })) {
+                    writer.send({ type: 'abort-session-result', success: false, sessionId: data.sessionId, provider });
+                    return;
+                }
                 let success;
 
                 if (provider === 'cursor') {
@@ -2868,7 +2915,17 @@ function handleChatConnection(ws, request) {
                     success = await abortClaudeSDKSession(data.sessionId);
                 }
 
-                writer.send(createNormalizedMessage({ kind: 'complete', exitCode: success ? 0 : 1, aborted: true, success, sessionId: data.sessionId, provider }));
+                if (success && provider === 'claude') {
+                    // Claude abort is asynchronous; its original query or MCP
+                    // suspension sends the terminal event when it settles.
+                    writer.send({ type: 'abort-session-result', success: true, sessionId: data.sessionId, provider });
+                } else if (success) {
+                    // The stop request is only an acknowledgement. Each provider
+                    // emits its terminal event after its running request settles.
+                    writer.send(createNormalizedMessage({ kind: 'status', text: 'Stopping', canInterrupt: false, sessionId: data.sessionId, provider }));
+                } else {
+                    writer.send({ type: 'abort-session-result', success: false, sessionId: data.sessionId, provider });
+                }
             } else if (data.type === 'claude-permission-response') {
                 // Relay UI approval decisions back into the SDK control flow.
                 // This does not persist permissions; it only resolves the in-flight request,
@@ -2903,7 +2960,9 @@ function handleChatConnection(ws, request) {
                 const sessionId = data.sessionId;
                 let isActive;
 
-                if (provider === 'cursor') {
+                if (!isOwnedChatSession({ request, provider, sessionId })) {
+                    isActive = false;
+                } else if (provider === 'cursor') {
                     isActive = isCursorSessionActive(sessionId);
                 } else if (provider === 'codex') {
                     isActive = isCodexSessionActive(sessionId);
@@ -2911,24 +2970,30 @@ function handleChatConnection(ws, request) {
                     isActive = isGeminiSessionActive(sessionId);
                 } else {
                     // Use Claude Agents SDK
-                    isActive = isClaudeSDKSessionActive(sessionId);
-                    if (isActive) {
+                    const activeLease = sessionConcurrencyLimiter.getActiveLeases(writer.userId)
+                        .some((lease) => lease.provider === 'claude' && lease.sessionId === sessionId);
+                    isActive = getActiveClaudeSDKSessions().includes(sessionId) || activeLease;
+                    if (isClaudeSDKSessionActive(sessionId) || activeLease) {
                         // Reconnect the session's writer to the new WebSocket so
                         // subsequent SDK output flows to the refreshed client.
                         reconnectSessionWriter(sessionId, ws);
                     }
                 }
 
+                const waitStatus = provider === 'claude' && isActive
+                    ? getClaudeSDKSessionWaitStatus(sessionId)
+                    : null;
                 writer.send({
                     type: 'session-status',
                     sessionId,
                     provider,
-                    isProcessing: isActive
+                    isProcessing: isActive,
+                    ...(waitStatus ? { status: waitStatus } : {}),
                 });
             } else if (data.type === 'get-pending-permissions') {
                 // Return pending permission requests for a session
                 const sessionId = data.sessionId;
-                if (sessionId && isClaudeSDKSessionActive(sessionId)) {
+                if (isOwnedChatSession({ request, provider: 'claude', sessionId }) && isClaudeSDKSessionActive(sessionId)) {
                     const pending = getPendingApprovalsForSession(sessionId);
                     writer.send({
                         type: 'pending-permissions-response',
@@ -2939,14 +3004,22 @@ function handleChatConnection(ws, request) {
             } else if (data.type === 'get-active-sessions') {
                 // Get all currently active sessions
                 const activeSessions = {
-                    claude: getActiveClaudeSDKSessions(),
-                    cursor: getActiveCursorSessions(),
-                    codex: getActiveCodexSessions(),
-                    gemini: getActiveGeminiSessions()
+                    claude: getActiveClaudeSDKSessions().filter((sessionId) => isOwnedChatSession({ request, provider: 'claude', sessionId })),
+                    cursor: getActiveCursorSessions().filter((sessionId) => isOwnedChatSession({ request, provider: 'cursor', sessionId })),
+                    codex: getActiveCodexSessions().filter((session) => isOwnedChatSession({ request, provider: 'codex', sessionId: session.id })),
+                    gemini: getActiveGeminiSessions().filter((sessionId) => isOwnedChatSession({ request, provider: 'gemini', sessionId }))
                 };
+                const limitConfig = resolveSessionLimit({ userId: writer.userId });
                 writer.send({
                     type: 'active-sessions',
-                    sessions: activeSessions
+                    requestId: typeof data.requestId === 'string' ? data.requestId : null,
+                    sessions: activeSessions,
+                    concurrency: {
+                        activeCount: sessionConcurrencyLimiter.getActiveCount(writer.userId),
+                        limit: limitConfig?.limit ?? null,
+                        source: limitConfig?.source ?? null,
+                        activeLeases: sessionConcurrencyLimiter.getActiveLeases(writer.userId),
+                    }
                 });
             }
         } catch (error) {

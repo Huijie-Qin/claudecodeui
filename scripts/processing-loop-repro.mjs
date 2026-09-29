@@ -29,7 +29,6 @@ const ui = `http://127.0.0.1:${uiPort}`;
 const username = 'processing-repro';
 const password = 'Hook-demo-20260920!';
 const tenantCode = 'processing-repro';
-const runtimeHome = path.join(root, 'runtimes', 'claude', tenantCode, username, tenantCode, 'home', '.claude');
 const fixture = await startProcessingLoopModelFixture();
 const taskServer = createMcpLoopDemoTaskServer({ durationMs: 8_000 });
 await new Promise(resolve => taskServer.listen(0, '127.0.0.1', resolve));
@@ -52,7 +51,7 @@ WebSocketServer.prototype.emit = function(event, ...args) {
   return emit.call(this, event, ...args);
 };
 for (const name of ['ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'HTTP_PROXY', 'HTTPS_PROXY',
-  'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'CLAUDECODE']) delete process.env[name];
+  'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'CLAUDECODE', 'CLAUDE_CONFIG_DIR']) delete process.env[name];
 Object.assign(process.env, {
   DATABASE_PATH: path.join(root, 'auth.db'),
   WORKSPACES_ROOT: path.join(root, 'workspaces'),
@@ -61,7 +60,7 @@ Object.assign(process.env, {
   CLOUDCLI_MCP_HELPER_ROOT: path.join(root, 'mcp-helpers'),
   CLOUDCLI_HOOK_SKILLS_ROOT: path.join(root, 'hook-skills'),
   CLOUDCLI_AGENT_TEMPLATE_ASSETS_ROOT: path.join(root, 'template-assets'),
-  CLAUDE_CONFIG_DIR: runtimeHome, CLAUDE_EXECUTION_MODE: 'local',
+  CLAUDE_EXECUTION_MODE: 'local',
   ANTHROPIC_BASE_URL: fixture.url, ANTHROPIC_API_KEY: 'local-mainloop-ccui-fixture',
   ANTHROPIC_MODEL: 'claude-sonnet-4-6', ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-4-6',
   ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-sonnet-4-6', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-sonnet-4-6',
@@ -76,7 +75,6 @@ const sdkRequire = createRequire(require.resolve('@anthropic-ai/claude-agent-sdk
 process.env.CLAUDE_CLI_PATH = sdkRequire.resolve(`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude`);
 process.env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH}`;
 await fs.writeFile(process.env.DATABASE_PATH, '');
-await fs.mkdir(runtimeHome, { recursive: true });
 await fs.mkdir(process.env.WORKSPACES_ROOT, { recursive: true });
 
 // Work around the bundled Node 24/native SQLite statement-finalizer crash only
@@ -97,9 +95,8 @@ const { multitenancyDb } = await import('../server/database/multitenancy-db.js')
 const { generateToken } = await import('../server/middleware/auth.js');
 const user = userDb.createUser(username, await bcrypt.hash(password, 4), { isSystemAdmin: true,
   env: { ANTHROPIC_BASE_URL: fixture.url, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-    ANTHROPIC_MODEL: 'claude-sonnet-4-6' } });
+    ANTHROPIC_MODEL: 'claude-sonnet-4-6', session_limit: '1' } });
 userDb.completeOnboarding(user.id);
-userDb.updateClaudeEnvForUsers({ userIds: [user.id], env: { CLAUDE_CONFIG_DIR: runtimeHome } });
 const tenant = multitenancyDb.tenants.createTenant({ code: tenantCode, name: 'Processing 循环复现' });
 multitenancyDb.memberships.upsertMembership({ tenantId: tenant.id, userId: user.id,
   role: 'admin', permission: 'edit', status: 'active' });
@@ -126,6 +123,11 @@ const workspace = (await request(`/projects/create-workspace?tenantId=${tenant.i
   method: 'POST', body: { workspaceType: 'new', path: 'Processing 循环复现' },
 })).project;
 assert.ok(workspace.path.startsWith(root + path.sep));
+// Local Claude must write its JSONL transcript in the workspace runtime home,
+// which is also where CCUI reads session history after a page refresh.
+const runtimeHome = path.join(root, 'runtimes', 'claude', tenantCode, username, workspace.name, 'home');
+await fs.mkdir(path.join(runtimeHome, '.claude'), { recursive: true });
+userDb.updateClaudeEnvForUsers({ userIds: [user.id], env: { CLAUDE_CONFIG_DIR: path.join(runtimeHome, '.claude') } });
 await fs.writeFile(path.join(workspace.path, '演示说明.md'), '# Processing 循环复现\n\n模型响应由本地测试服务提供；CCUI、原生 SDK、MCP 轮询和 Python Hook 实际执行。\n\n模拟任务 8 秒完成，观察最终汇总后 Processing 是否消失。\n');
 const presetInput = { tenantId: tenant.id, name: 'processing_repro', displayName: 'Processing repro MCP', config: { type: 'http', url: mcpUrl, alwaysLoad: true } };
 const preset = (await request('/admin/mcp-presets', { method: 'POST', body: presetInput })).preset;
