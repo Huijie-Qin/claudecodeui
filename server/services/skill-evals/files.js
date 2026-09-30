@@ -77,7 +77,7 @@ export async function managedCopyHash(context, workspacePath) {
   try { return treeHash(await readTree(other)); } catch (e) { if (e.code === 'ENOENT') return 'missing'; throw e; }
 }
 export function createEvalFiles({ repository }) {
-  async function load(scope) {
+  async function load(scope, { allowInvalidDocument = false } = {}) {
     const context = await resolveWorkspaceSkillContext(scope);
     const workspaceReal = await fs.realpath(scope.workspacePath), skillReal = await fs.realpath(context.rootPath);
     if (!skillReal.startsWith(`${workspaceReal}${path.sep}`)) throw fail('Skill path escapes the workspace', 'EVAL_UNSAFE_PATH', 403);
@@ -85,10 +85,29 @@ export function createEvalFiles({ repository }) {
     const name = manifestName(files);
     const raw = files['evals/evals.json'];
     // Keep legacy oversized collections readable so users can reduce them without losing data.
-    const document = raw ? parseEvals(Buffer.from(raw, 'base64').toString('utf8'), name, { maxCases: Infinity }) : { skill_name: name, evals: [] };
+    let document = { skill_name: name, evals: [] };
+    let repairingInvalidDocument = false;
+    if (raw) {
+      const content = Buffer.from(raw, 'base64').toString('utf8');
+      try {
+        document = parseEvals(content, name, { maxCases: Infinity });
+      } catch (error) {
+        if (!allowInvalidDocument || error.code !== 'EVAL_SCHEMA_INVALID') throw error;
+        repairingInvalidDocument = true;
+        // Keep valid existing identities while allowing the file editor to repair legacy cases.
+        let previous;
+        try { previous = JSON.parse(content); } catch { previous = null; }
+        document = {
+          skill_name: name,
+          evals: Array.isArray(previous?.evals)
+            ? previous.evals.filter((item) => Number.isSafeInteger(item?.id) && item.id > 0).map((item) => ({ id: item.id }))
+            : [],
+        };
+      }
+    }
     const meta = repository.meta(scope.workspacePath, context.name);
     const missing = meta.protectedIds.filter((id) => !document.evals.some((c) => c.id === id));
-    if (missing.length) throw fail(`Published cases are missing: ${missing.join(', ')}`, 'EVAL_PROTECTED_CASE', 409);
+    if (missing.length && !repairingInvalidDocument) throw fail(`Published cases are missing: ${missing.join(', ')}`, 'EVAL_PROTECTED_CASE', 409);
     return { context, files, document, meta, managedHash: await managedCopyHash(context, scope.workspacePath), revision: hash(raw ? Buffer.from(raw, 'base64') : ''), contentHash: treeHash(files) };
   }
   async function mutate(scope, revision, change, source = 'manual') {
@@ -143,7 +162,7 @@ export function createEvalFiles({ repository }) {
       if (current.document.evals.some((c) => c.files?.some((file) => file === affected || file.startsWith(`${affected}/`)))) throw fail('Input is still referenced by a case', 'EVAL_INPUT_IN_USE', 409);
     }
     if (affected === 'evals/evals.json' && ['updateWorkspaceSkillFile', 'createWorkspaceSkillEntry'].includes(operation)) {
-      const current = await load(options);
+      const current = await load(options, { allowInvalidDocument: true });
       const doc = parseEvals(String(content ?? ''), current.document.skill_name);
       for (const id of meta.protectedIds) if (!doc.evals.some((c) => c.id === id)) throw fail('Published cases cannot be deleted', 'EVAL_PROTECTED_CASE', 409);
       for (const item of doc.evals) for (const file of item.files || []) if (!current.files[file]) throw fail(`Missing input: ${file}`);

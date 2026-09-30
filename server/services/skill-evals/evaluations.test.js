@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
 import { createSkillEvaluationDb } from '../../database/skill-evaluation-db.js';
+import { readWorkspaceSkillFile, updateWorkspaceSkillFile } from '../workspace-skills.js';
 
 import { createSkillEvaluationService } from './service.js';
 import { applyChanges, commitCandidate, recoverCommit } from './commit.js';
@@ -327,6 +328,26 @@ test('published case IDs cannot be removed by market replacement or generic edit
   assert.deepEqual(f.repository.meta(f.scope.workspacePath, 'weekly').protectedIds, [1]);
   await assert.rejects(f.service.files.guard({ ...f.scope, operation: 'market-replace', incomingFiles: { 'SKILL.md': skill } }), (e) => e.code === 'EVAL_PROTECTED_CASE');
   await assert.rejects(f.service.files.guard({ ...f.scope, operation: 'updateWorkspaceSkillFile', filePath: 'evals/evals.json', content: JSON.stringify({ skill_name: 'weekly', evals: [] }) }), (e) => e.code === 'EVAL_PROTECTED_CASE');
+});
+test('file editor can repair a legacy id=0 without bypassing case identity checks', async (t) => {
+  const f = await fixture(t);
+  const oldCases = [{ ...document.evals[0], id: 0 }, { ...document.evals[0], id: 3 }];
+  await atomicJson(path.join(f.root, 'evals/evals.json'), { skill_name: 'weekly', evals: oldCases });
+  const meta = f.repository.meta(f.scope.workspacePath, 'weekly');
+  meta.protectedIds = [3];
+  meta.nextId = 4;
+  f.repository.saveMeta(f.scope.workspacePath, 'weekly', meta);
+  const edit = (evals) => ({ ...f.scope, operation: 'updateWorkspaceSkillFile', filePath: 'evals/evals.json', content: JSON.stringify({ skill_name: 'weekly', evals }) });
+  await assert.rejects(f.service.listCases(f.scope), { code: 'EVAL_SCHEMA_INVALID' });
+  await assert.rejects(f.service.files.guard(edit([{ ...oldCases[0], id: 2 }, oldCases[1]])), { code: 'EVAL_CASE_ID_REUSED' });
+  await assert.rejects(f.service.files.guard(edit([{ ...oldCases[0], id: 4 }])), { code: 'EVAL_PROTECTED_CASE' });
+  await assert.rejects(f.service.files.guard(edit(oldCases)), { code: 'EVAL_SCHEMA_INVALID' });
+
+  const repaired = edit([{ ...oldCases[0], id: 4 }, oldCases[1]]);
+  await f.service.files.guard(repaired);
+  const original = await readWorkspaceSkillFile({ ...f.scope, filePath: repaired.filePath });
+  await updateWorkspaceSkillFile({ ...repaired, revision: original.revision });
+  assert.deepEqual((await f.service.listCases(f.scope)).document.evals.map((item) => item.id), [4, 3]);
 });
 test('cleanup failure keeps the skill locked until the worker recovers it', async (t) => {
   const f = await fixture(t, { runCase: async () => { throw Object.assign(new Error('cleanup failed'), { cleanupRequired: true }); } });
