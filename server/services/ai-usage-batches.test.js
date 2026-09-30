@@ -71,6 +71,57 @@ test('cross-midnight windows and DST gap/fold are scheduled once per local day',
   assert.equal(localInstant('2026-11-01', '01:30', 'America/New_York'), '2026-11-01T05:30:00.000Z');
 });
 
+test('data lag defaults to T-1 and validates a configurable local-day cutoff', () => {
+  assert.equal(readAiUsageConfig({}).dataLagDays, 1);
+  for (const [value, through] of [['0', '2026-09-12T16:00:00.000Z'], ['1', '2026-09-11T16:00:00.000Z'], ['2', '2026-09-10T16:00:00.000Z']]) {
+    const configured = readAiUsageConfig({ AI_USAGE_DATA_LAG_DAYS: value });
+    assert.equal(getAiUsageSchedule(configured, night()).targetThrough, through);
+  }
+  for (const value of ['', ' ', '-1', '1.5', 'abc', '1e2', '3651', 'Infinity']) {
+    assert.throws(() => readAiUsageConfig({ AI_USAGE_DATA_LAG_DAYS: value }), /AI_USAGE_DATA_LAG_DAYS/);
+  }
+  assert.equal(readAiUsageConfig({ AI_USAGE_DATA_LAG_DAYS: '3650' }).dataLagDays, 3650);
+  const crossing = readAiUsageConfig({ AI_USAGE_RUN_AT: '23:00', AI_USAGE_WINDOW_END: '03:00', AI_USAGE_DATA_LAG_DAYS: '0' });
+  const beforeMidnight = getAiUsageSchedule(crossing, new Date('2026-09-11T15:30:00Z'));
+  const afterMidnight = getAiUsageSchedule(crossing, new Date('2026-09-11T17:30:00Z'));
+  assert.equal(beforeMidnight.targetThrough, '2026-09-11T16:00:00.000Z');
+  assert.equal(afterMidnight.targetThrough, beforeMidnight.targetThrough);
+  assert.equal(afterMidnight.scheduledFor, beforeMidnight.scheduledFor);
+  const leap = getAiUsageSchedule(readAiUsageConfig({ AI_USAGE_DATA_LAG_DAYS: '2' }), new Date('2024-03-01T18:00:00Z'));
+  assert.equal(leap.targetThrough, '2024-02-29T16:00:00.000Z');
+});
+
+test('changing lag on a paused batch restarts its candidate while keeping the logical window', t => {
+  const db = fixture(t);
+  const store = createAiUsageStore(db, { clock: night });
+  const old = store.claim(1, getAiUsageSchedule(config, night()), config, night());
+  store.checkpoint(old, { stage: 'integration', sourceCursor: ['message', '99'] }, config, night());
+  store.finish(old, 'paused');
+  const todayConfig = { ...config, dataLagDays: 0 };
+  const resumed = store.claim(1, getAiUsageSchedule(todayConfig, night()), todayConfig, night());
+  assert.equal(resumed.id, old.id);
+  assert.equal(resumed.scheduled_for, old.scheduled_for);
+  assert.equal(resumed.target_through, '2026-09-12T16:00:00.000Z');
+  assert.equal(JSON.parse(resumed.coverage_json).dataLagDays, 0);
+  assert.equal(resumed.progress_json, '{}');
+  store.finish(resumed, 'paused');
+  const restored = store.claim(1, getAiUsageSchedule(config, night()), config, night());
+  assert.equal(restored.target_through, old.target_through);
+});
+
+test('scheduler exposes the configured lag and disables invalid settings without reading data', () => {
+  const database = { prepare() { throw new Error('Unexpected query'); } };
+  const today = createAiUsageService({ database, databasePath: '/tmp/unused.db', env: { AI_USAGE_DATA_LAG_DAYS: '0' } });
+  assert.equal(today.getStatus().dataLagDays, 0);
+  const messages = [];
+  const invalid = createAiUsageService({ database, databasePath: '/tmp/unused.db',
+    env: { AI_USAGE_ENABLED: 'true', AI_USAGE_DATA_LAG_DAYS: '-1' }, logger: { error: message => messages.push(message) } });
+  assert.equal(invalid.getStatus().enabled, false);
+  assert.match(invalid.getStatus().configurationError, /AI_USAGE_DATA_LAG_DAYS/);
+  invalid.tick();
+  assert.equal(messages.length, 1);
+});
+
 test('per-request duration is 2+3=5 minutes, and actual midnight crossing is 2+3', () => {
   const sum = (start, end) => [...splitTurnByDate(start, end, config.timeZone)].reduce((total, row) => total + row.durationMs, 0);
   assert.equal(sum('2026-09-11T02:00:00Z', '2026-09-11T02:02:00Z')

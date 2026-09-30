@@ -73,9 +73,13 @@ export function readAiUsageConfig(env = process.env) {
   if (runAt === windowEnd) throw new Error('AI usage window must be shorter than 24 hours');
   const timeZone = env.AI_USAGE_TIMEZONE ?? 'Asia/Shanghai';
   formatter(timeZone).format(new Date(0));
+  const dataLagDays = env.AI_USAGE_DATA_LAG_DAYS ?? '1';
+  if (!/^(?:0|[1-9]\d*)$/.test(String(dataLagDays)) || Number(dataLagDays) > 3650) {
+    throw new Error('AI_USAGE_DATA_LAG_DAYS must be an integer between 0 and 3650');
+  }
   const concurrency = Number(env.AI_USAGE_MAX_CONCURRENCY ?? '1');
   if (concurrency !== 1) throw new Error('AI_USAGE_MAX_CONCURRENCY currently supports only 1');
-  return Object.freeze({ enabled: boolean === 'true', runAt, windowEnd, timeZone, concurrency,
+  return Object.freeze({ enabled: boolean === 'true', runAt, windowEnd, timeZone, concurrency, dataLagDays: Number(dataLagDays),
     tickMs: 30_000, batchSize: 200, leaseMs: 120_000, calculationVersion: 'request_response_interval_v1_skill_sources_v2_activity_v3_hook_executions_v4_hook_numbers_v5_skill_publishers_v6_merged_mr_v7_integration_v1_session_report_v8_fork_lineage_v9_publish_events_v10_session_sql_v11' });
 }
 
@@ -86,7 +90,9 @@ export function getAiUsageSchedule(config, now = new Date()) {
   const windowFor = (day) => ({
     scheduledFor: localInstant(day, config.runAt, config.timeZone),
     windowEndsAt: localInstant(shiftDate(day, spansMidnight ? 1 : 0), config.windowEnd, config.timeZone),
-    targetThrough: localInstant(day, '00:00', config.timeZone),
+    // Exclusive day boundary: 1 = yesterday, 0 = today's available data.
+    // Anchor to the window's start date, also when it spans midnight.
+    targetThrough: localInstant(shiftDate(day, 1 - (config.dataLagDays ?? 1)), '00:00', config.timeZone),
   });
   let window = windowFor(today);
   if (spansMidnight && epoch < Date.parse(window.scheduledFor)) {

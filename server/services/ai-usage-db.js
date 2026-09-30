@@ -6,7 +6,7 @@ import { SPLIT_SCHEMA_VERSION } from '../database/ai-dashboard-split-schema.js';
 import { SESSION_SUMMARY_VERSION } from '../database/ai-session-summary-schema.js';
 
 import { integrationCoverage, shanghaiReportTime } from './ai-dashboard-integration.js';
-import { localInstant, localParts } from './ai-usage-config.js';
+import { localInstant, localParts, shiftDate } from './ai-usage-config.js';
 import { clearSplitStaging, publishSplitCandidate } from './ai-dashboard-split.js';
 import { publishSessionSummaryCandidate } from './ai-session-summary.js';
 import { SESSION_REPORT_VERSION } from './ai-usage-session-report.js';
@@ -75,12 +75,14 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
         if (database.prepare('SELECT 1 FROM ai_usage_batches WHERE tenant_id=? AND scheduled_for=?')
           .get(tenantId, schedule.scheduledFor)) return null;
         const id = randomUUID();
-        database.prepare(`INSERT INTO ai_usage_batches(id,tenant_id,scheduled_for,target_through,time_zone,calculation_version,source_read_at)
-          VALUES(?,?,?,?,?,?,?)`).run(id, tenantId, schedule.scheduledFor, schedule.targetThrough,
-          config.timeZone, config.calculationVersion, nowIso);
+        database.prepare(`INSERT INTO ai_usage_batches(id,tenant_id,scheduled_for,target_through,time_zone,calculation_version,source_read_at,coverage_json)
+          VALUES(?,?,?,?,?,?,?,?)`).run(id, tenantId, schedule.scheduledFor, schedule.targetThrough,
+          config.timeZone, config.calculationVersion, nowIso, JSON.stringify({ dataLagDays: config.dataLagDays ?? 1 }));
         batch = database.prepare('SELECT * FROM ai_usage_batches WHERE id=?').get(id);
       }
-      if (batch.calculation_version !== config.calculationVersion || batch.time_zone !== config.timeZone) {
+      const oldLagDays = JSON.parse(batch.coverage_json || '{}').dataLagDays ?? 1;
+      const newLagDays = config.dataLagDays ?? 1;
+      if (batch.calculation_version !== config.calculationVersion || batch.time_zone !== config.timeZone || oldLagDays !== newLagDays) {
         // A paused old-definition batch must not resume half way through new
         // parser code. Keep the published snapshot and restart only staging.
         requeueAiUsageReport(database, tenantId);
@@ -90,12 +92,13 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
         database.prepare('DELETE FROM ai_session_summary_staging WHERE batch_id=?').run(batch.id);
         database.prepare('DELETE FROM ai_usage_batch_files WHERE batch_id=?').run(batch.id);
         database.prepare('DELETE FROM ai_usage_skill_work_items WHERE batch_id=?').run(batch.id);
-        const targetThrough = batch.time_zone === config.timeZone ? batch.target_through
-          : localInstant(localParts(batch.target_through, batch.time_zone).date, '00:00', config.timeZone);
-        database.prepare(`UPDATE ai_usage_batches SET progress_json='{}',calculation_version=?,time_zone=?,target_through=? WHERE id=?`)
-          .run(config.calculationVersion, config.timeZone, targetThrough, batch.id);
+        const targetThrough = localInstant(shiftDate(localParts(batch.target_through, batch.time_zone).date,
+          oldLagDays - newLagDays), '00:00', config.timeZone);
+        const coverageJson = JSON.stringify({ dataLagDays: newLagDays });
+        database.prepare(`UPDATE ai_usage_batches SET progress_json='{}',calculation_version=?,time_zone=?,target_through=?,coverage_json=? WHERE id=?`)
+          .run(config.calculationVersion, config.timeZone, targetThrough, coverageJson, batch.id);
         batch = { ...batch, progress_json: '{}', calculation_version: config.calculationVersion,
-          time_zone: config.timeZone, target_through: targetThrough };
+          time_zone: config.timeZone, target_through: targetThrough, coverage_json: coverageJson };
       }
       const leaseToken = randomUUID();
       database.prepare(`UPDATE ai_usage_batches SET status='running',lease_token=?,lease_until=?,error=NULL WHERE id=?`)
@@ -121,9 +124,17 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
     if (progress.stagingInitialized) return;
     database.transaction(() => {
       assertLease(batch);
+      const throughDate = localParts(batch.target_through, batch.time_zone).date;
+      if (database.prepare('SELECT 1 FROM ai_usage_report_rows WHERE tenant_id=? AND stat_date>=? LIMIT 1')
+        .get(batch.tenant_id, throughDate)) {
+        // A test may move the cutoff backwards. Hide later rows in this
+        // candidate, but requeue them so increasing the range restores them
+        // even if the original source has not changed.
+        requeueAiUsageReport(database, batch.tenant_id);
+      }
       database.prepare('DELETE FROM ai_usage_report_staging WHERE batch_id=?').run(batch.id);
       database.prepare(`INSERT INTO ai_usage_report_staging(batch_id,${REPORT_COLUMNS})
-        SELECT ?,${REPORT_COLUMNS} FROM ai_usage_report_rows WHERE tenant_id=?`).run(batch.id, batch.tenant_id);
+        SELECT ?,${REPORT_COLUMNS} FROM ai_usage_report_rows WHERE tenant_id=? AND stat_date<?`).run(batch.id, batch.tenant_id, throughDate);
       progress.stagingInitialized = true;
       checkpoint(batch, progress, config);
     }).immediate();
@@ -158,7 +169,9 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
       if (progress.sessionSummary?.ready) publishSessionSummaryCandidate(database, batch);
       assertLease(batch);
       database.prepare(`UPDATE ai_usage_batches SET status='published',completed_at=?,coverage_json=?,lease_until=NULL WHERE id=?`)
-        .run(now.toISOString(), JSON.stringify(integrationCoverage(coverage)), batch.id);
+        .run(now.toISOString(), JSON.stringify(integrationCoverage({ ...coverage,
+          dataLagDays: JSON.parse(batch.coverage_json || '{}').dataLagDays ?? 1,
+          partialDay: batch.target_through > now.toISOString() })), batch.id);
       database.prepare('UPDATE ai_usage_tenant_state SET active_batch_id=? WHERE tenant_id=?').run(batch.id, batch.tenant_id);
       database.prepare('DELETE FROM ai_usage_report_staging WHERE batch_id=?').run(batch.id);
       database.prepare('DELETE FROM ai_dashboard_integration_staging WHERE batch_id=?').run(batch.id);

@@ -112,6 +112,30 @@ test('nightly bootstrap, multi-round append, amendments/deletes, filters and pro
   assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM ai_usage_report_rows WHERE dataset='sql_generations'").get().n, 3);
 });
 
+test('configurable cutoff includes today for testing, rolls back safely and restores unchanged SQL facts', async t => {
+  const f = messagesFixture(t);
+  f.save(1, reply('yesterday', fence('SELECT 1;'), '2026-09-11T02:00:00Z'));
+  f.save(2, reply('today', fence('SELECT 2;\nSELECT 3;')));
+  f.save(3, reply('tomorrow', fence('SELECT 4;\nSELECT 5;\nSELECT 6;\nSELECT 7;'), '2026-09-12T16:01:00Z'));
+  await f.run(11); f.parity(1); // Shanghai Sep 12, default T-1.
+  const todayConfig = readAiUsageConfig({ AI_USAGE_ENABLED: 'true', AI_USAGE_DATA_LAG_DAYS: '0' });
+  // Changing only the range does not unexpectedly rerun an already-published window.
+  assert.equal((await f.run(11, { config: todayConfig })).published, 0);
+  f.parity(1);
+  await f.run(11, { config: { ...todayConfig, runAt: '02:01' } }); f.parity(3);
+  const meta = f.queryService.status(f.access);
+  assert.equal(meta.dataThroughDate, '2026-09-12');
+  assert.equal(meta.coverage.dataLagDays, 0);
+  assert.equal(meta.coverage.partialDay, true);
+  await f.run(11, { config: { ...todayConfig, dataLagDays: 2, runAt: '02:02' } }); f.parity(0);
+  assert.equal(f.queryService.status(f.access).dataThroughDate, '2026-09-10');
+  assert.equal(f.db.prepare("SELECT COUNT(*) n FROM ai_usage_fact_rows WHERE dataset='sql_generations'").get().n, 3);
+  await f.run(11, { config: { ...todayConfig, runAt: '02:03' } }); f.parity(3);
+  assert.equal(f.queryService.status(f.access).coverage.partialDay, true);
+  await f.run(13); f.parity(7);
+  assert.equal(f.queryService.status(f.access).coverage.partialDay, false);
+});
+
 test('native transcripts take precedence, survive append/replay/partial tails and are rescanned on definition upgrades', async t => {
   const f = messagesFixture(t);
   const home = await mkdtemp('/private/tmp/ccui-session-sql-');
