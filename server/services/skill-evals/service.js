@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import { ACTIVE, fail, hash, outcome, redact, validateStart, relativePath } from './contracts.js';
+import { ACTIVE, MAX_CASES, fail, hash, outcome, redact, validateStart, relativePath } from './contracts.js';
 import { atomicJson, createEvalFiles, treeHash, validateSnapshot } from './files.js';
 import { applyChanges, commitCandidate, recoverCommit } from './commit.js';
 import { gradeCase, parseModelJson } from './grading.js';
@@ -268,6 +268,7 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
     if (duplicate) return publicJob(duplicate);
     const snapshot = await files.snapshot(scope);
     if (snapshot.revision !== expectedRevision) throw fail('Cases changed', 'EVAL_REVISION_CONFLICT', 409);
+    if (snapshot.document.evals.length >= MAX_CASES) throw fail(`每个技能最多支持 ${MAX_CASES} 条测试用例，请先删除多余用例。`, 'EVAL_CASE_LIMIT');
     const workspaceRoot = path.resolve(scope.workspacePath);
     if (root === workspaceRoot || root.startsWith(`${workspaceRoot}${path.sep}`)) throw fail('Evaluation storage must be outside the workspace', 'EVAL_STORAGE_CONFIGURATION', 503);
     const job = { id: randomUUID(), ...scope, requestId, requestHash, expectedRevision, mode: 'generate-cases',
@@ -279,11 +280,14 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
   }
   async function executeGenerateCases(job, signal) {
     const snapshot = await readJson(path.join(jobDir(job.id), 'snapshot.json'));
+    const caseCount = Math.min(3, MAX_CASES - snapshot.document.evals.length);
+    if (caseCount <= 0) throw fail(`每个技能最多支持 ${MAX_CASES} 条测试用例，请先删除多余用例。`, 'EVAL_CASE_LIMIT');
     const response = await runtime.modelCall({ scope: job, signal, budget: job.budget,
       systemPrompt: GENERATE_CASES_PROMPT,
-      prompt: JSON.stringify({ skill: Buffer.from(snapshot.files['SKILL.md'], 'base64').toString('utf8'), existing: snapshot.document.evals }) });
+      prompt: JSON.stringify({ skill: Buffer.from(snapshot.files['SKILL.md'], 'base64').toString('utf8'), existing: snapshot.document.evals, caseCount }) });
     const value = parseModelJson(response);
-    if (!Array.isArray(value.cases) || !value.cases.length || value.cases.length > 5) throw fail('AI returned invalid cases');
+    if (!Array.isArray(value.cases) || !value.cases.length) throw fail('AI returned invalid cases');
+    if (value.cases.length > caseCount) throw fail(`本次最多可生成 ${caseCount} 条测试用例，AI 返回数量超出要求，请重试。`, 'EVAL_CASE_LIMIT');
     authorized(job, true);
     if (signal.aborted || repository.get(job, job.id).cancelRequested || !repository.isLeader(owner)) throw fail('Generation was interrupted', 'EVAL_CANCELLED');
     return files.mutate(job, job.expectedRevision, (doc, next) => { doc.evals.push(...value.cases.map((c, i) => ({ ...c, id: next + i }))); }, 'ai');

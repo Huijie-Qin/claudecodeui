@@ -9,7 +9,7 @@ import { workspaceAccess } from '../workspace-access.js';
 
 import { createInvocationCapture } from './invocation-capture.js';
 import { isCreatedSkillInvocation } from './invocation-eligibility.js';
-import { fail, hash, redact } from './contracts.js';
+import { fail, hash, redact, MAX_CASES } from './contracts.js';
 import { withSkillLock } from './coordination.js';
 
 import { skillEvaluationService } from './index.js';
@@ -61,6 +61,7 @@ export async function saveInvocation(scope, invocationId, expectedRevision) {
     const saved = Object.entries(current.meta.sources).find(([id, value]) => value === source && current.document.evals.some((c) => c.id === Number(id)));
     if (saved) return { saved: true, caseId: Number(saved[0]) };
     if (current.revision !== expectedRevision) throw fail('Cases changed', 'EVAL_REVISION_CONFLICT', 409);
+    if (current.document.evals.length >= MAX_CASES) throw fail(`每个技能最多支持 ${MAX_CASES} 条测试用例，请先删除多余用例。`, 'EVAL_CASE_LIMIT');
     const inputs = [];
     if (stored.history) {
       const relative = `evals/files/context-${hash(row.id).slice(0, 20)}.txt`;

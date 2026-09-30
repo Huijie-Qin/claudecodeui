@@ -6,6 +6,14 @@ import { parseEvals } from './contracts.js';
 const entry = { id: 1, prompt: '整理本周工作', expected_output: '不编造数据' };
 const parse = evals => parseEvals(JSON.stringify({ skill_name: 'weekly', evals }), 'weekly');
 
+test('ten cases are valid but eleven are rejected without truncating data', () => {
+  const cases = Array.from({ length: 10 }, (_, i) => ({ ...entry, id: i + 1 }));
+  assert.equal(parse(cases).evals.length, 10);
+  cases.push({ ...entry, id: 11 });
+  assert.throws(() => parse(cases), error => error.code === 'EVAL_CASE_LIMIT' && /10 条/.test(error.message));
+  assert.equal(cases.length, 11);
+});
+
 test('schema errors identify the offending case and distinguish invalid IDs from duplicates and extra fields', () => {
   for (const id of [undefined, null, '2', 0, -1, 1.5]) {
     assert.throws(() => parse([entry, { ...entry, id }]), error => error.code === 'EVAL_SCHEMA_INVALID' && /第 2 条.*id 必须是正整数/.test(error.message));

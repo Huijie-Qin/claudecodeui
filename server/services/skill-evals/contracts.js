@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 
-export const MAX_CASES = 50;
+import { MAX_SKILL_EVAL_CASES } from '../../../shared/skillEvaluationConstants.js';
+
+export const MAX_CASES = MAX_SKILL_EVAL_CASES;
 export const MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_TOTAL_BYTES = 50 * 1024 * 1024;
 export const ACTIVE = new Set(['queued', 'running', 'cancelling']);
@@ -23,12 +25,13 @@ export function inputFileName(value) {
   while (Buffer.byteLength(stem.join('') + suffix) > 180) stem.pop();
   return (stem.join('') || 'input') + suffix;
 }
-export function validateEvals(value, name) {
+export function validateEvals(value, name, { maxCases = MAX_CASES } = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
     || Object.keys(value).some((k) => !['skill_name', 'evals'].includes(k))
-    || value.skill_name !== name || !Array.isArray(value.evals) || value.evals.length > MAX_CASES) {
+    || value.skill_name !== name || !Array.isArray(value.evals)) {
     throw fail(`Expected { skill_name: "${name}", evals: [...] } (maximum ${MAX_CASES} cases)`);
   }
+  if (value.evals.length > maxCases) throw fail(`每个技能最多支持 ${MAX_CASES} 条测试用例，请先删除多余用例。`, 'EVAL_CASE_LIMIT');
   const ids = new Set();
   for (const [index, item] of value.evals.entries()) {
     const label = `evals/evals.json 中第 ${index + 1} 条测试用例`;
@@ -51,10 +54,10 @@ export function validateEvals(value, name) {
   }
   return value;
 }
-export function parseEvals(content, name) {
+export function parseEvals(content, name, options) {
   let value;
   try { value = JSON.parse(content); } catch { throw fail('evals/evals.json is not valid JSON'); }
-  return validateEvals(value, name);
+  return validateEvals(value, name, options);
 }
 export function validateStart(input) {
   if (!input || !['run-all', 'optimize'].includes(input.mode)) throw fail('mode must be run-all or optimize');

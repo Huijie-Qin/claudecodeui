@@ -613,6 +613,9 @@
     }
   },
   "skillEvaluation": {
+    "caseCount": "Test cases: {{count}} / {{max}}",
+    "caseLimitReached": "Limit reached. Delete a case to add another.",
+    "caseLimitExceeded": "Existing cases are preserved. Remove excess cases before adding or running.",
     "runtimeNotice": "Evaluations use a separate test directory and can call this workspace’s MCP tools. External write operations have real effects.",
     "comparison": {"swipe": "Swipe horizontally to compare before and after", "title": "Before and after optimization", "after": "After optimization", "pending": "Retesting has not started. Results from this run will appear here after optimization."},
     "title": "Skill evaluation",

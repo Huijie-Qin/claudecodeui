@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, Play, Square, Wand2, X } from 'lucide-react';
 
+import { MAX_SKILL_EVAL_CASES } from '../../../../shared/skillEvaluationConstants.js';
 import { api } from '../../../utils/api';
 import { createClientMessageId as createRequestId } from '../../../utils/clientMessageId';
 
@@ -115,17 +116,21 @@ export default function SkillEvaluationPanel({ workspaceId, name, canManage, onF
     if (!job) return;
     setDetail({ jobId: job.id, caseId, round: job.rounds.at(-1)?.round ?? 0 });
   }
+  const caseCount = data?.document.evals.length || 0;
+  const atCaseLimit = caseCount >= MAX_SKILL_EVAL_CASES;
+  const overCaseLimit = caseCount > MAX_SKILL_EVAL_CASES;
   const generating = !!data?.generationJob;
   const active = isActive(job), latestRound = job?.rounds.at(-1);
   return <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-6">
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
       <div><h2 className="text-lg font-semibold">{tr('title')}</h2><p className="mt-1 text-xs text-muted-foreground">{tr('latestOnly')}</p><p className="mt-1 text-xs text-muted-foreground">{tr('runtimeNotice')}</p></div>
       <div className="flex flex-wrap gap-2">
-        <AddCaseMenu disabled={!editable || busy || !data} aiDisabled={active || generating} onManual={() => edit()} onAi={() => void act(async () => { const accepted = await payload(await api.skillEvaluations.generate(workspaceId, name, data?.revision)); let task = accepted.job; await refreshCases(); while (live.current && ['queued', 'running', 'cancelling'].includes(task.status)) { await new Promise((resolve) => setTimeout(resolve, 1500)); if (!live.current) return; task = (await payload(await api.skillEvaluations.job(workspaceId, task.id))).job; } if (task.status !== 'completed') throw new Error(task.error || task.stopReason); await refreshCases(); onFilesChanged(); })} />
-        <button type="button" className={button} disabled={!editable || busy || active || generating || !data?.document.evals.length} onClick={() => void start('run-all')}><Play className="h-4 w-4" />{tr('run')}</button>
-        <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`} disabled={!editable || busy || active || generating || !data?.document.evals.length} onClick={() => setOptimizeOpen(true)}><Wand2 className="h-4 w-4" />{tr('optimize')}</button>
+        <AddCaseMenu disabled={!editable || busy || !data || atCaseLimit} aiDisabled={active || generating} onManual={() => edit()} onAi={() => void act(async () => { const accepted = await payload(await api.skillEvaluations.generate(workspaceId, name, data?.revision)); let task = accepted.job; await refreshCases(); while (live.current && ['queued', 'running', 'cancelling'].includes(task.status)) { await new Promise((resolve) => setTimeout(resolve, 1500)); if (!live.current) return; task = (await payload(await api.skillEvaluations.job(workspaceId, task.id))).job; } if (task.status !== 'completed') throw new Error(task.error || task.stopReason); await refreshCases(); onFilesChanged(); })} />
+        <button type="button" className={button} disabled={!editable || busy || active || generating || !caseCount || overCaseLimit} onClick={() => void start('run-all')}><Play className="h-4 w-4" />{tr('run')}</button>
+        <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`} disabled={!editable || busy || active || generating || !caseCount || overCaseLimit} onClick={() => setOptimizeOpen(true)}><Wand2 className="h-4 w-4" />{tr('optimize')}</button>
       </div>
     </div>
+    {data && <p role="status" className="mb-3 text-xs text-muted-foreground">{tr('caseCount', { count: caseCount, max: MAX_SKILL_EVAL_CASES })}{atCaseLimit && ` · ${tr(overCaseLimit ? 'caseLimitExceeded' : 'caseLimitReached')}`}</p>}
     {error && <div role="alert" className="mb-4 flex items-start justify-between gap-3 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950 dark:text-red-200">{error}<button type="button" aria-label={tr('close')} onClick={() => setError('')}><X className="h-4 w-4" /></button></div>}
     {busy && <div role="status" className="mb-3 flex items-center gap-2 text-sm"><Loader2 className="h-4 w-4 animate-spin" />{tr('working')}</div>}
     {generating && <div role="status" className="mb-4 flex items-center justify-between rounded border border-border p-3 text-sm"><span>{tr('generating')}</span>{editable && <button type="button" className={button} onClick={() => void (async () => { try { await payload(await api.skillEvaluations.cancel(workspaceId, data!.generationJob!.id)); await refreshCases(); } catch (e) { setError((e as Error).message); } })()}>{tr('stop')}</button>}</div>}
@@ -167,7 +172,7 @@ export default function SkillEvaluationPanel({ workspaceId, name, canManage, onF
           onUpload={(files) => void uploadInputs(files)} onError={setError}
           onRemove={(file) => setEditor((current) => current ? { ...current, files: current.files?.filter((path) => path !== file) } : null)} />
         </div>
-        <footer className="flex shrink-0 justify-end gap-2 border-t border-border px-6 py-4"><button type="button" className={button} disabled={busy} onClick={() => setEditor(null)}>{tr('cancel')}</button><button type="submit" className={`${button} bg-primary text-primary-foreground`} disabled={busy || !editor.prompt.trim() || !editor.expected_output.trim()}>{tr('save')}</button></footer>
+        <footer className="flex shrink-0 justify-end gap-2 border-t border-border px-6 py-4"><button type="button" className={button} disabled={busy} onClick={() => setEditor(null)}>{tr('cancel')}</button><button type="submit" className={`${button} bg-primary text-primary-foreground`} disabled={busy || (!editor.id && atCaseLimit) || !editor.prompt.trim() || !editor.expected_output.trim()}>{tr('save')}</button></footer>
       </form>
     </div>}
     {optimizeOpen && <div role="dialog" aria-modal="true" aria-label={tr('optimize')} className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">

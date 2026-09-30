@@ -7,7 +7,7 @@ import matter from 'gray-matter';
 import { resolveWorkspaceSkillContext, syncManagedSkillAfterMutation } from '../workspace-skills.js';
 
 import { withSkillLock } from './coordination.js';
-import { fail, hash, MAX_FILE_BYTES, MAX_TOTAL_BYTES, parseEvals, relativePath, validateEvals } from './contracts.js';
+import { fail, hash, MAX_CASES, MAX_FILE_BYTES, MAX_TOTAL_BYTES, parseEvals, relativePath, validateEvals } from './contracts.js';
 
 export async function atomicJson(file, value) {
   await fs.mkdir(path.dirname(file), { recursive: true });
@@ -84,7 +84,8 @@ export function createEvalFiles({ repository }) {
     const files = await readTree(context.rootPath);
     const name = manifestName(files);
     const raw = files['evals/evals.json'];
-    const document = raw ? parseEvals(Buffer.from(raw, 'base64').toString('utf8'), name) : { skill_name: name, evals: [] };
+    // Keep legacy oversized collections readable so users can reduce them without losing data.
+    const document = raw ? parseEvals(Buffer.from(raw, 'base64').toString('utf8'), name, { maxCases: Infinity }) : { skill_name: name, evals: [] };
     const meta = repository.meta(scope.workspacePath, context.name);
     const missing = meta.protectedIds.filter((id) => !document.evals.some((c) => c.id === id));
     if (missing.length) throw fail(`Published cases are missing: ${missing.join(', ')}`, 'EVAL_PROTECTED_CASE', 409);
@@ -97,7 +98,7 @@ export function createEvalFiles({ repository }) {
       const doc = structuredClone(current.document);
       const nextId = Math.max(current.meta.nextId, ...doc.evals.map((c) => c.id + 1), 1);
       await change(doc, nextId);
-      validateEvals(doc, current.document.skill_name);
+      validateEvals(doc, current.document.skill_name, { maxCases: Math.max(MAX_CASES, current.document.evals.length) });
       for (const id of current.meta.protectedIds) if (!doc.evals.some((c) => c.id === id)) throw fail('Published cases cannot be deleted', 'EVAL_PROTECTED_CASE', 409);
       for (const item of doc.evals) for (const file of item.files || []) if (!current.files[file]) throw fail(`Missing input: ${file}`);
       // Validate parent paths before writing; readTree rejected symlinks throughout the skill.

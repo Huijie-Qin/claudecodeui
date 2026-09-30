@@ -232,7 +232,7 @@ test('AI generation is durable, mutually exclusive and leaves the latest evaluat
   f.runtime.modelCall = async ({ systemPrompt, prompt }) => {
     generationCalls++;
     assert.equal(systemPrompt, GENERATE_CASES_PROMPT);
-    assert.deepEqual(JSON.parse(prompt), { skill, existing: document.evals });
+    assert.deepEqual(JSON.parse(prompt), { skill, existing: document.evals, caseCount: 3 });
     return { structured: { cases: [{ prompt: 'Report missing data', expected_output: 'Ask for data', files: [] }] } };
   };
   const current = await f.service.listCases(f.scope), id = randomUUID();
@@ -254,6 +254,72 @@ test('AI generation rejects a concurrent edit without deleting user cases', asyn
   f.runtime.modelCall = async () => ({ structured: { cases: [{ prompt: 'Generated', expected_output: 'Expected', files: [] }] } });
   await f.service.runPendingForTest();
   assert.equal((await f.service.listCases(f.scope)).document.evals.length, 2);
+});
+async function fillCases(f, count) {
+  const current = await f.service.listCases(f.scope);
+  await f.service.mutateCases(f.scope, current.revision, doc => {
+    doc.evals = Array.from({ length: count }, (_, i) => ({ ...document.evals[0], id: i + 1 }));
+  });
+  return f.service.listCases(f.scope);
+}
+test('full collections reject manual additions and AI generation before calling the model', async t => {
+  const f = await fixture(t, { modelCall: async () => assert.fail('Must not spend a model call') });
+  const full = await fillCases(f, 10);
+  await assert.rejects(f.service.mutateCases(f.scope, full.revision, (doc, next) => doc.evals.push({ ...document.evals[0], id: next })), { code: 'EVAL_CASE_LIMIT' });
+  await assert.rejects(f.service.generateCases(f.scope, full.revision, randomUUID()), { code: 'EVAL_CASE_LIMIT' });
+  assert.equal((await f.service.listCases(f.scope)).revision, full.revision);
+  assert.equal((await f.service.listCases(f.scope)).generationJob, null);
+  await f.service.mutateCases(f.scope, full.revision, doc => { doc.evals[0].prompt = 'Edited'; });
+  assert.equal((await f.service.listCases(f.scope)).document.evals[0].prompt, 'Edited');
+});
+test('AI fills only the remaining one or two slots', async t => {
+  for (const existingCount of [8, 9]) {
+    const f = await fixture(t, { modelCall: async ({ prompt }) => {
+      const input = JSON.parse(prompt);
+      assert.equal(input.caseCount, 10 - existingCount);
+      return { structured: { cases: Array.from({ length: input.caseCount }, () => ({ prompt: 'New task', expected_output: 'Expected' })) } };
+    } });
+    const before = await fillCases(f, existingCount);
+    const job = await f.service.generateCases(f.scope, before.revision, randomUUID());
+    await f.service.runPendingForTest();
+    assert.equal(f.service.get(f.scope, job.id).status, 'completed');
+    const after = await f.service.listCases(f.scope);
+    assert.equal(after.document.evals.length, 10);
+    assert.deepEqual(after.document.evals.slice(0, existingCount), before.document.evals);
+  }
+});
+test('AI returning too many cases fails without partial writes', async t => {
+  const f = await fixture(t, { modelCall: async () => ({ structured: { cases: Array.from({ length: 3 }, () => ({ prompt: 'New task', expected_output: 'Expected' })) } }) });
+  const before = await fillCases(f, 9);
+  const job = await f.service.generateCases(f.scope, before.revision, randomUUID());
+  await f.service.runPendingForTest();
+  assert.equal(f.service.get(f.scope, job.id).stopReason, 'EVAL_CASE_LIMIT');
+  assert.equal((await f.service.listCases(f.scope)).revision, before.revision);
+});
+test('concurrent manual addition cannot make a queued AI generation exceed ten', async t => {
+  const f = await fixture(t, { modelCall: async () => ({ structured: { cases: [{ prompt: 'AI task', expected_output: 'Expected' }] } }) });
+  const before = await fillCases(f, 9);
+  const job = await f.service.generateCases(f.scope, before.revision, randomUUID());
+  await f.service.mutateCases(f.scope, before.revision, (doc, next) => doc.evals.push({ ...document.evals[0], id: next, prompt: 'Manual task' }));
+  await f.service.runPendingForTest();
+  assert.equal(f.service.get(f.scope, job.id).stopReason, 'EVAL_REVISION_CONFLICT');
+  const after = await f.service.listCases(f.scope);
+  assert.equal(after.document.evals.length, 10);
+  assert.equal(after.document.evals.at(-1).prompt, 'Manual task');
+});
+test('legacy oversized collections stay readable and can be reduced one case at a time', async t => {
+  const f = await fixture(t);
+  await atomicJson(path.join(f.root, 'evals/evals.json'), { skill_name: 'weekly', evals: Array.from({ length: 12 }, (_, i) => ({ ...document.evals[0], id: i + 1 })) });
+  let current = await f.service.listCases(f.scope);
+  assert.equal(current.document.evals.length, 12);
+  await assert.rejects(f.start(), { code: 'EVAL_CASE_LIMIT' });
+  await assert.rejects(f.service.mutateCases(f.scope, current.revision, (doc, next) => doc.evals.push({ ...document.evals[0], id: next })), { code: 'EVAL_CASE_LIMIT' });
+  for (const count of [11, 10]) {
+    await f.service.mutateCases(f.scope, current.revision, doc => { doc.evals.pop(); });
+    current = await f.service.listCases(f.scope);
+    assert.equal(current.document.evals.length, count);
+  }
+  await f.start();
 });
 test('published case IDs cannot be removed by market replacement or generic edits', async (t) => {
   const f = await fixture(t), incomingFiles = { 'SKILL.md': skill, 'evals/evals.json': JSON.stringify(document) };
