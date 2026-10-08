@@ -15,7 +15,7 @@ const db = new Database(':memory:');
 const service = createSkillCreationService({ db, authorize: () => {}, own: async () => {}, registerConversation: job => `skill-creation:${job.id}`, listSnippets: () => [],
   creator: async ({ description, signal, onPhase }) => {
     for (const phase of ['selecting', 'generating']) {
-      onPhase(phase); await new Promise((resolve, reject) => { const timer = setTimeout(resolve, 700); signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('Cancelled')); }, { once: true }); });
+      onPhase(phase); await new Promise((resolve, reject) => { const timer = setTimeout(resolve, Number(process.env.SKILL_CREATION_FIXTURE_DELAY_MS) || 700); signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('Cancelled')); }, { once: true }); });
     }
     if (description.includes('FAIL')) throw new Error('模拟生成失败');
     return { markdown: '---\nname: weekly-report\ndescription: Weekly report\n---\n# Weekly report\nAsk for missing inputs.', snippets: [{ title: '不编造数据', reason: '任务需要真实数据' }] };

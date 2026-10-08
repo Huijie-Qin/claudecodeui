@@ -12,10 +12,10 @@ import type { ChatMessage } from '../types/types';
 
 import { scheduleProjectsRefresh } from './chatRealtimeRefresh';
 import { isSkillCreationActive as active, startSkillCreationPolling } from './skillCreationPolling';
+import { acceptSkillCreationDraft, finishSkillCreationDraft, type SkillCreationDraft as Draft } from './skillCreationDraft';
 
 type Job = { sessionId?: string; conversationKey?: string; id: string; requestId: string; description: string; status: string; createdAt: string; completedAt?: string; error?: string;
   result?: { name: string; path: string; snippets: Array<{ title: string; reason: string }>; note: string } };
-type Draft = { mode: boolean; description: string; requestId?: string; sent?: string };
 const empty: Draft = { mode: false, description: '' };
 const emptyJobs: Job[] = [];
 // Persist only opaque conversation identifiers, never descriptions or generated content.
@@ -62,18 +62,17 @@ export function useSkillCreation({ project, sessionId, provider, input, setInput
   receive.current = (incoming) => {
     setView((current) => current.key === key && JSON.stringify(current.jobs) === JSON.stringify(incoming) ? current : { key, jobs: incoming });
     for (const job of incoming) {
-      if (active(job)) { pending.current.add(job.id); patch({ mode: true, description: job.description, requestId: job.requestId, sent: job.description }); }
+      if (active(job)) { pending.current.add(job.id); patch({ mode: true, requestId: job.requestId, sent: job.description }); }
       else if (!handled.current.has(job.id) && (pending.current.has(job.id) || draft.requestId === job.requestId)) {
         handled.current.add(job.id);
+        setDrafts(current => ({ ...current, [key]: finishSkillCreationDraft(current[key] || empty, job) }));
         if (job.status === 'completed') {
-          patch({ mode: false, description: '', requestId: undefined, sent: undefined });
-          setInput('');
           if (job.result) {
             const event = { projectName: project?.name, workspaceId: project?.workspaceId, reason: 'skill-created' };
             dispatchProjectFilesChanged({ ...event, changedPath: job.result.path });
             dispatchSlashCommandsChangedForPath(job.result.path, event);
           }
-        } else patch({ mode: true, description: job.description, requestId: undefined, sent: undefined });
+        }
       }
     }
   };
@@ -112,6 +111,14 @@ export function useSkillCreation({ project, sessionId, provider, input, setInput
       const { job } = await payload(await api.skillCreation.start(project.workspaceId, { intent: 'create-skill', description, requestId, conversationKey, sessionId: concreteSession, provider }));
       pending.current.add(job.id);
       if (currentKey.current === key) {
+        const nextKey = !concreteSession && job.sessionId
+          ? `${user?.id}:${currentTenant?.id}:${project.workspaceId}:${provider}:${job.sessionId}` : key;
+        setDrafts(current => {
+          const cleared = acceptSkillCreationDraft(current[key] || empty, description);
+          const next = active(job) ? cleared : finishSkillCreationDraft(cleared, job);
+          return { ...current, [key]: next, [nextKey]: next };
+        });
+        setInput('');
         stopPolling.current();
         receive.current([...jobs.filter((item) => item.id !== job.id), job]);
         setPollRequest({ key });

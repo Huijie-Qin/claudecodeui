@@ -314,7 +314,6 @@ export default function ChatComposer({
 
             <PromptInputTextarea
               ref={textareaRef}
-              readOnly={skillCreation?.busy}
               value={input}
               onChange={onInputChange}
               onClick={onTextareaClick}
