@@ -36,12 +36,12 @@ export function MessageHeader({ type = 'assistant', provider, label }: { type?: 
   </div>;
 }
 
-export function MessageFooter({ role = 'assistant', content, time, children, actions, trailingAction }: {
-  role?: 'user' | 'assistant'; content?: string; time?: string; children?: ReactNode; actions?: ReactNode; trailingAction?: ReactNode;
+export function MessageFooter({ role = 'assistant', content, time, children, actions, beforeTimeAction }: {
+  role?: 'user' | 'assistant'; content?: string; time?: string; children?: ReactNode; actions?: ReactNode; beforeTimeAction?: ReactNode;
 }) {
   return <div className={role === 'user' ? 'mt-1 flex items-center justify-end gap-1 text-xs text-blue-100'
     : 'mt-1 flex w-full items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500'}>
-    {children}{content && <MessageCopyControl content={content} messageType={role} />}{actions}{time && <span className="shrink-0 whitespace-nowrap">{time}</span>}{trailingAction}
+    {children}{content && <MessageCopyControl content={content} messageType={role} />}{actions}{beforeTimeAction}{time && <span className="shrink-0 whitespace-nowrap">{time}</span>}
   </div>;
 }
 

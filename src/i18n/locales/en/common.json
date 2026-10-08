@@ -718,8 +718,8 @@
       "EVAL_CANCELLED": "Stopped by user",
       "server_restarted": "Server restarted; execution was not replayed"
     },
-    "saveInvocation": "Save as evaluation case",
-    "invocationSaved": "Saved as evaluation case",
+    "saveInvocation": "Save as test case",
+    "invocationSaved": "Saved as test case",
     "snapshotCase": "Run snapshot case #{{id}}",
     "round": "Iteration",
     "generating": "AI is preparing cases. You can leave this page and return later.",

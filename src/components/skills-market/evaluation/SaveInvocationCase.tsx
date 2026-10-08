@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Check, Loader2, Save } from 'lucide-react';
 
 import { api } from '../../../utils/api';
 
@@ -23,8 +24,8 @@ export default function SaveInvocationCase({ workspaceId, messageId }: { workspa
     return () => { live = false; clearTimeout(timer); };
   }, [workspaceId, messageId]);
   if (!invocation) return null;
-  return <div className="text-xs">
-    <button type="button" className="whitespace-nowrap rounded-md border border-border px-3 py-1.5 text-muted-foreground hover:bg-accent disabled:opacity-60" disabled={state !== 'idle'} onClick={() => void (async () => {
+  return <div className="inline-flex shrink-0 flex-col items-start">
+    <button type="button" className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-1 hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50" disabled={state !== 'idle'} onClick={() => void (async () => {
       setState('saving'); setError('');
       try {
         const current = await api.skillEvaluations.cases(workspaceId, invocation.name);
@@ -35,7 +36,9 @@ export default function SaveInvocationCase({ workspaceId, messageId }: { workspa
         if (!response.ok) throw new Error(result.error);
         setState('saved');
       } catch (e) { setState('idle'); setError((e as Error).message); }
-    })()}>{t(`skillEvaluation.${state === 'saved' ? 'invocationSaved' : state === 'saving' ? 'working' : 'saveInvocation'}`)}</button>
+    })()}>
+      {state === 'saving' ? <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden="true" /> : state === 'saved' ? <Check className="h-3 w-3 shrink-0" aria-hidden="true" /> : <Save className="h-3 w-3 shrink-0" aria-hidden="true" />}
+      {t(`skillEvaluation.${state === 'saved' ? 'invocationSaved' : state === 'saving' ? 'working' : 'saveInvocation'}`)}</button>
     {error && <p role="alert" className="mt-1 text-red-600">{error}</p>}
   </div>;
 }
