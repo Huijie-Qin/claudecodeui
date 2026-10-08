@@ -14,6 +14,10 @@ test('snippet selection, generation and format correction have no cost cap and r
     runQuery: ({ prompt, options }) => (async function* () {
       assert.equal(Object.hasOwn(options, 'maxBudgetUsd'), false);
       const request = JSON.parse(prompt);
+      if (request.catalog) {
+        assert.equal(options.outputFormat.type, 'json_schema');
+        assert.deepEqual(options.outputFormat.schema.properties.selected.items.properties.id.enum, ['public-1']);
+      } else assert.equal(options.outputFormat, undefined);
       calls++;
       const result = request.catalog
         ? JSON.stringify({ selected: [{ id: 'public-1', reason: '相关' }], note: '' })

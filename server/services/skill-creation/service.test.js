@@ -94,12 +94,37 @@ test('creator considers every catalog batch and only reads frozen selected snipp
   assert.equal(visited.length, 30); assert.deepEqual(generation.references.map((s) => s.markdown), ['Frozen body 29']); assert.equal(result.snippets[0].id, 's29');
 });
 
-test('creator refuses invented snippet IDs and model failures', async () => {
+test('creator skips persistently invented snippet IDs but propagates model failures', async () => {
   const args = { scope: {}, description: '周报', snippets: [{ id: 'real', title: 'x', description: 'y', markdown: 'z' }], signal: new AbortController().signal, onPhase: () => {} };
-  const creator = createSkillCreator({ instructions: async () => '', modelCall: async () => ({ structured: { selected: [{ id: 'fake', reason: 'x' }], note: '' } }) });
-  await assert.rejects(creator(args), /不存在/);
+  const creator = createSkillCreator({ instructions: async () => '', onSelectionDiagnostic: () => {}, modelCall: async ({ prompt }) => {
+    if (JSON.parse(prompt).catalog) return { structured: { selected: [{ id: 'fake', reason: 'x' }], note: '' } };
+    assert.deepEqual(JSON.parse(prompt).references, []);
+    return { text: markdown };
+  } });
+  const result = await creator(args);
+  assert.deepEqual(result.snippets, []);
+  assert.match(result.note, /参考片段未能采用/);
   const failing = createSkillCreator({ instructions: async () => '', modelCall: async () => { throw new Error('No credentials'); } });
   await assert.rejects(failing({ ...args, snippets: [] }), /No credentials/);
+});
+
+test('selection fallback completes file saving and persists its explanation across service restart', async (t) => {
+  let selections = 0;
+  const creator = createSkillCreator({ instructions: async () => '', onSelectionDiagnostic: () => {}, modelCall: async ({ prompt }) => {
+    if (JSON.parse(prompt).catalog) { selections++; return { text: 'not JSON' }; }
+    return { text: markdown };
+  } });
+  const f = await fixture(t, { creator, listSnippets: () => [{ id: 'real', title: '周报', description: '周报要求', markdown: '真实数据' }] });
+  const job = await f.finish((await f.service.start(f.scope, input())).id);
+  assert.equal(job.status, 'completed');
+  assert.equal(selections, 2);
+  assert.deepEqual(job.result.snippets, []);
+  assert.match(job.result.note, /公共参考片段未能采用/);
+  assert.match(await fs.readFile(path.join(f.scope.workspacePath, job.result.path), 'utf8'), /weekly-report/);
+  const recovered = createSkillCreationService(f.config); await recovered.ready();
+  assert.deepEqual(recovered.get(f.scope, job.id).result, job.result);
+  assert.equal(selections, 2);
+  await recovered.stop();
 });
 
 test('model output cannot choose executable frontmatter engines', () => {
