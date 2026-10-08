@@ -1029,10 +1029,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
               </div>
             )}
 
-            {shouldShowAssistantCopyControl && !message.isStreaming && selectedProject?.workspaceId && provider === 'claude' && (
-              <SaveInvocationCase workspaceId={selectedProject.workspaceId} messageId={String(message.id)} />
-            )}
-            {shouldShowAssistantFooter && <MessageFooter content={shouldShowAssistantCopyControl ? assistantCopyContent : undefined} time={shouldShowFooterTimestamp ? formattedTime : undefined} actions={<>
+            {shouldShowAssistantFooter && <MessageFooter content={shouldShowAssistantCopyControl ? assistantCopyContent : undefined} time={shouldShowFooterTimestamp ? formattedTime : undefined}
+              trailingAction={shouldShowAssistantCopyControl && !message.isStreaming && selectedProject?.workspaceId && provider === 'claude' ? (
+                <SaveInvocationCase workspaceId={selectedProject.workspaceId} messageId={String(message.id)} />
+              ) : undefined} actions={<>
                 {onForkMessage && canForkMessage(message, provider) && (
                   <button
                     type="button"

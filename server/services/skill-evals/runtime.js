@@ -46,6 +46,11 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
   if (!Number.isSafeInteger(maxToolCalls) || maxToolCalls <= 0) {
     throw fail('SKILL_EVAL_MAX_TOOL_CALLS 必须是正整数（每条用例的工具调用上限）。', 'EVAL_RUNTIME_CONFIGURATION', 503);
   }
+  const configuredTurnLimit = env.SKILL_EVAL_MAX_TURNS;
+  const maxTurns = configuredTurnLimit == null || String(configuredTurnLimit).trim() === '' ? 100 : Number(configuredTurnLimit);
+  if (!Number.isSafeInteger(maxTurns) || maxTurns <= 0) {
+    throw fail('SKILL_EVAL_MAX_TURNS 必须是正整数（单次模型执行的轮次上限）。', 'EVAL_RUNTIME_CONFIGURATION', 503);
+  }
   async function profile(scope) {
     const resolved = await resolveEnvironment(scope);
     const auth = Object.fromEntries(AUTH_KEYS.filter((k) => typeof resolved[k] === 'string').map((k) => [k, resolved[k]]));
@@ -71,7 +76,7 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
     if (signal?.aborted) abort();
     const timeoutMs = execution ? caseTimeoutMs : modelTimeoutMs;
     const timer = setTimeout(() => controller.abort(timeoutError(timeoutMs, Boolean(execution))), timeoutMs);
-    let query, failure;
+    let query, failure, result = null;
     try {
       const sdk = await import('@anthropic-ai/claude-agent-sdk');
       const queryFn = runQuery || sdk.query;
@@ -89,7 +94,7 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
           || (Object.keys(execution.mcpServers).some(server => name.startsWith(`mcp__${server}__`)) && execution.access.isAllowed(name))))
           ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'Tool unavailable in evaluations' },
         mcpServers: { ...execution?.mcpServers, ...(tools.length ? { [brokerName]: sdk.createSdkMcpServer({ name: brokerName, version: '1.0.0', tools }) } : {}) },
-        model: model || defaultModel, systemPrompt, maxTurns: 24,
+        model: model || defaultModel, systemPrompt, maxTurns,
         abortController: controller, includePartialMessages: false,
         ...(outputSchema ? { outputFormat: { type: 'json_schema', schema: outputSchema } } : {}),
         ...(execution ? { pathToClaudeCodeExecutable: 'claude' } : {}),
@@ -97,7 +102,7 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
           cwd: home, env, stdio: ['pipe', 'pipe', 'pipe'], signal: options.signal,
         })),
       } });
-      let text = '', result = null;
+      let text = '';
       for await (const event of query) {
         if (controller.signal.aborted) throw interruptionError(controller.signal);
         if (execution && ['assistant', 'user'].includes(event.type)) {
@@ -121,7 +126,11 @@ export function createEvaluationRuntime({ resolveEnvironment, resolveSessionEnvi
       if (!result || result.is_error || result.subtype !== 'success') throw fail('Model execution did not complete successfully', 'EVAL_MODEL_ERROR');
       return { text: result.result || text, structured: result.structured_output, model: model || defaultModel };
     } catch (error) {
-      failure = interruptionError(controller.signal, error);
+      const reachedTurnLimit = result?.subtype === 'error_max_turns'
+        || /^(?:Claude Code returned an error result:\s*)?Reached max(?:imum|inum) number of turns\b/i.test(error.message || '');
+      failure = interruptionError(controller.signal, reachedTurnLimit
+        ? fail(`模型执行已达到轮次上限（${maxTurns} 轮），已停止。可通过 SKILL_EVAL_MAX_TURNS 调整；此限制与工具调用次数和自动优化迭代次数分别计算。`, 'EVAL_MAX_TURNS')
+        : error);
       throw failure;
     } finally {
       clearTimeout(timer); signal?.removeEventListener('abort', abort);

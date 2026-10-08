@@ -23,8 +23,8 @@ export default function SaveInvocationCase({ workspaceId, messageId }: { workspa
     return () => { live = false; clearTimeout(timer); };
   }, [workspaceId, messageId]);
   if (!invocation) return null;
-  return <div className="mt-2 text-xs">
-    <button type="button" className="rounded-md border border-border px-3 py-1.5 text-muted-foreground hover:bg-accent disabled:opacity-60" disabled={state !== 'idle'} onClick={() => void (async () => {
+  return <div className="text-xs">
+    <button type="button" className="whitespace-nowrap rounded-md border border-border px-3 py-1.5 text-muted-foreground hover:bg-accent disabled:opacity-60" disabled={state !== 'idle'} onClick={() => void (async () => {
       setState('saving'); setError('');
       try {
         const current = await api.skillEvaluations.cases(workspaceId, invocation.name);
