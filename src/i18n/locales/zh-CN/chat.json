@@ -551,12 +551,27 @@
     "identifiers": "任务标识",
     "taskId": "任务 ID",
     "toolId": "工具调用 ID",
-    "activityNotice": "这里显示运行时已上报的执行记录。如有输出文件，可打开查看更详细的日志。",
+    "activityNotice": "顶部状态表示任务当前状态，这里的记录展示任务执行过程。",
     "noEvents": "尚无此任务的执行记录。",
     "eventOutput": "查看上报输出",
     "reportedResult": "任务结果",
     "noResult": "尚未收到结果正文，可查看执行记录或已提供的输出文件。",
     "outputOutsideWorkspace": "此文件位于执行环境的临时目录，当前无法直接预览。已回传的输出可在「结果」中查看。",
-    "sourceUnavailable": "来源消息尚未包含在已加载的记录中。"
+    "sourceUnavailable": "来源消息尚未包含在已加载的记录中。",
+    "activity": {
+      "started": "已启动",
+      "progress": "执行进展",
+      "waiting": "等待记录",
+      "completed": "执行完成",
+      "failed": "执行失败",
+      "stopped": "执行停止",
+      "unknown": "执行记录",
+      "result": "查询结果",
+      "output": "输出记录"
+    },
+    "completionSummary": "结束摘要",
+    "emptyResult": "运行时已上报空结果正文，可查看执行记录或已提供的输出文件。",
+    "noResultCompleted": "任务已完成，但运行时未提供结果正文。可查看执行记录或已提供的输出文件。",
+    "noResultEnded": "任务已结束，但运行时未提供结果正文。可查看执行记录或已提供的输出文件。"
   }
 }

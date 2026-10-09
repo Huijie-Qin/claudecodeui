@@ -122,6 +122,61 @@ test('a real Bash backgroundTaskId creates inspectable running work even without
   assert.equal(tasks[0].events.length, 2);
 });
 
+test('fetch completion without a body does not promote the empty background launch receipt to final output', () => {
+  const { chat, tasks } = execution([
+    normalized('fetch', 14, { kind: 'tool_use', toolName: 'Bash', toolId: 'fetch-call',
+      toolInput: { command: 'git -c http.sslVerify=false -c http.sslCertRevoke=false fetch origin 2>&1',
+        description: 'Fetch origin with SSL verification disabled', run_in_background: true },
+      toolResult: { content: 'Command running in background with ID: fetch-job.', isError: false,
+        toolUseResult: { backgroundTaskId: 'fetch-job', stdout: '', stderr: '' } } }),
+    normalized('fetch-started', 14, { taskId: 'fetch-job', toolUseId: 'fetch-call', status: 'running',
+      summary: 'Fetch origin with SSL verification disabled' }),
+    normalized('fetch-completed', 15, { taskId: 'fetch-job', toolUseId: 'fetch-call', status: 'completed',
+      summary: 'Background command "Fetch origin with SSL verification disabled" completed (exit code 0)',
+      outputFile: '/tmp/fetch-job.output' }),
+  ]);
+  assert.equal(tasks.length, 1);
+  const task = tasks[0];
+  assert.equal(task.status, 'completed');
+  assert.equal(task.exitCode, 0);
+  assert.equal(task.result, undefined, 'The launch receipt is not evidence of the final command output');
+  assert.equal(task.completedAt?.toISOString(), time(15));
+  assert.equal(task.events.find((event) => event.id === 'fetch-started')?.status, 'running');
+  assert.equal(task.events.find((event) => event.id === 'fetch-completed')?.status, 'completed');
+  assert.equal(chat.filter((message) => message.isTaskNotification).length, 1);
+  const restored = JSON.parse(JSON.stringify(chat));
+  assert.deepEqual(buildExecutionTasks(restored, buildSubagentTraces(restored)), tasks);
+});
+
+test('final empty TaskOutput is distinct from missing output and does not erase stderr', () => {
+  for (const stderr of ['', 'Fetch failed: remote unavailable']) {
+    const { tasks } = execution([
+      normalized('launch', 0, { kind: 'tool_use', toolName: 'Bash', toolId: 'launch',
+        toolInput: { command: 'git fetch origin', run_in_background: true },
+        toolResult: { content: 'Launched', isError: false, toolUseResult: { backgroundTaskId: 'fetch-job', stdout: '' } } }),
+      normalized('poll', 2, { kind: 'tool_use', toolName: 'TaskOutput', toolId: 'poll', toolInput: { task_id: 'fetch-job' },
+        toolResult: { content: JSON.stringify({ task: { status: 'completed', exit_code: stderr ? 1 : 0,
+          output: '', stderr } }), isError: false } }),
+    ]);
+    assert.equal(tasks[0].status, stderr ? 'failed' : 'completed');
+    assert.deepEqual(tasks[0].result, stderr ? { stdout: '', stderr } : '');
+  }
+});
+
+test('background launch partial stdout remains an activity record instead of a final result body', () => {
+  const { tasks } = execution([
+    normalized('launch', 0, { kind: 'tool_use', toolName: 'Bash', toolId: 'launch',
+      toolInput: { command: 'node check.mjs', run_in_background: true } }),
+    normalized('launch-result', 1, { kind: 'tool_result', toolId: 'launch', isError: false,
+      content: 'Command running in background with ID: partial-job.',
+      toolUseResult: { backgroundTaskId: 'partial-job', stdout: 'Starting fetch...' } }),
+    normalized('completed', 3, { taskId: 'partial-job', status: 'completed', summary: 'Command completed' }),
+  ]);
+  assert.equal(tasks[0].status, 'completed');
+  assert.equal(tasks[0].result, undefined);
+  assert.equal(tasks[0].events.find((event) => event.id === 'result:launch')?.result, 'Starting fetch...');
+});
+
 test('TaskOutput XML supplies real stdout and exit code when notification only has summary and output file', () => {
   const { tasks } = execution([
     normalized('launch', 0, { kind: 'tool_use', toolName: 'Bash', toolId: 'bash-launch',

@@ -574,12 +574,27 @@
     "identifiers": "Task identifiers",
     "taskId": "Task ID",
     "toolId": "Tool call ID",
-    "activityNotice": "These are events reported by the runtime. Open the output file, when available, to inspect additional logs.",
+    "activityNotice": "The status above shows the task’s current state. These records show its execution history.",
     "noEvents": "No execution events have been recorded for this task.",
     "eventOutput": "View reported output",
     "reportedResult": "Reported result",
     "noResult": "No result body has been reported. Check the activity records or output file for available details.",
     "outputOutsideWorkspace": "This file belongs to the execution runtime and cannot be previewed here. Reported output is available in Result.",
-    "sourceUnavailable": "The source message is not in the loaded history."
+    "sourceUnavailable": "The source message is not in the loaded history.",
+    "activity": {
+      "started": "Started",
+      "progress": "Progress reported",
+      "waiting": "Wait recorded",
+      "completed": "Execution completed",
+      "failed": "Execution failed",
+      "stopped": "Execution stopped",
+      "unknown": "Execution recorded",
+      "result": "Result queried",
+      "output": "Output reported"
+    },
+    "completionSummary": "Completion summary",
+    "emptyResult": "The runtime reported an empty result body. Check the activity records or output file for available details.",
+    "noResultCompleted": "The task completed, but the runtime did not provide a result body. Check the activity records or output file for available details.",
+    "noResultEnded": "The task ended, but the runtime did not provide a result body. Check the activity records or output file for available details."
   }
 }

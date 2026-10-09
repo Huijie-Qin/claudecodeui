@@ -234,7 +234,9 @@ export function buildExecutionTasks(messages: ChatMessage[], traces: SubagentTra
       traceId: trace?.id, parentAgentId: trace?.agentId, parentToolUseId: trace?.sourceToolIds[0],
       startedAt, updatedAt: resultAt || startedAt, completedAt: terminal(status) ? resultAt : undefined,
       input: message.toolInput, command,
-      result: output.result ?? (terminal(status) ? message.toolResult?.content : undefined),
+      // A background launch receipt can contain empty or partial stdout. Keep
+      // that snapshot in its event; only a terminal tool result is a final body.
+      result: terminal(status) ? output.result ?? message.toolResult?.content : undefined,
       exitCode: output.exitCode, outputFile: output.outputFile,
       events: [
         ...(startedAt ? [{ id: `invocation:${identity}`, timestamp: startedAt, status: 'running',

@@ -1,14 +1,16 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import {
-  ArrowUpRight, Bot, Clock3, FileText, ListChecks, Terminal, X,
+  ArrowUpRight, Bot, Clock3, FileText, Terminal, X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../../lib/utils';
 
 import { ExecutionTaskStatusBadge } from './ExecutionTaskLink';
+import { ExecutionTaskActivity } from './ExecutionTaskActivity';
 import { formatExecutionValue, redactVisibleSecretText } from './display';
-import type { ExecutionTask, ExecutionTaskStatus } from './types';
+import { buildExecutionActivity } from './executionActivity';
+import type { ExecutionTask } from './types';
 
 export interface ExecutionTaskPanelProps {
   task: ExecutionTask;
@@ -26,12 +28,8 @@ const TAB_DEFAULTS = { overview: 'Overview', activity: 'Activity', result: 'Resu
 const FOCUSABLE = 'a[href], button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 const ACTION_CLASSES = 'inline-flex min-h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
-function isKnownStatus(status: string): status is ExecutionTaskStatus {
-  return ['running', 'waiting', 'completed', 'failed', 'stopped', 'unknown'].includes(status);
-}
-
 function initialTab(task: ExecutionTask): PanelTab {
-  return task.status === 'completed' && formatExecutionValue(task.result) ? 'result' : 'overview';
+  return task.status === 'completed' ? 'result' : 'overview';
 }
 
 function Payload({ value }: { value: unknown }) {
@@ -54,9 +52,21 @@ export function ExecutionTaskPanel({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const [tab, setTab] = useState<PanelTab>(() => initialTab(task));
+  const activity = buildExecutionActivity(task);
   const selectedTaskId = useRef(task.id);
   const result = formatExecutionValue(task.result);
   const summary = redactVisibleSecretText(task.summary || task.events[task.events.length - 1]?.summary);
+  const finished = ['completed', 'failed', 'stopped'].includes(task.status);
+  const completionSummary = finished ? redactVisibleSecretText(
+    task.summary || [...task.events].reverse().find((event) => event.status === task.status && event.summary.trim())?.summary,
+  ) : '';
+  const emptyResultMessage = task.result === ''
+    ? t('execution.emptyResult', { defaultValue: 'The runtime reported an empty result body. Check the activity records or output file for available details.' })
+    : task.status === 'completed'
+      ? t('execution.noResultCompleted', { defaultValue: 'The task completed, but the runtime did not provide a result body. Check the activity records or output file for available details.' })
+      : finished
+        ? t('execution.noResultEnded', { defaultValue: 'The task ended, but the runtime did not provide a result body. Check the activity records or output file for available details.' })
+        : t('execution.noResult', { defaultValue: 'No result body has been reported. Check the activity records or output file for available details.' });
   const hasParent = Boolean(task.parentAgentId || task.parentToolUseId);
   const dateLabel = (date?: Date) => date && Number.isFinite(date.getTime())
     ? date.toLocaleString(i18n.language, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -179,7 +189,7 @@ export function ExecutionTaskPanel({
               className={cn('flex min-h-10 flex-1 items-center justify-center gap-1.5 border-b-2 px-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring', tab === item ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-muted-foreground hover:text-foreground')}
             >
               {t(`execution.tabs.${item}`, { defaultValue: TAB_DEFAULTS[item] })}
-              {item === 'activity' && task.events.length > 0 && <span className="rounded bg-muted px-1 text-[10px] tabular-nums">{task.events.length}</span>}
+              {item === 'activity' && activity.length > 0 && <span className="rounded bg-muted px-1 text-[10px] tabular-nums">{activity.length}</span>}
             </button>
           ))}
         </div>
@@ -208,27 +218,17 @@ export function ExecutionTaskPanel({
 
           {tab === 'activity' && (
             <>
-              <p className="rounded-md bg-blue-50 px-3 py-2 text-[11px] leading-5 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">{t('execution.activityNotice', { defaultValue: 'These are events reported by the runtime. Open the output file, when available, to inspect additional logs.' })}</p>
-              {task.events.length === 0 ? <div className="py-8 text-center"><ListChecks aria-hidden="true" className="mx-auto mb-3 h-6 w-6 text-muted-foreground" /><p className="text-xs leading-6 text-muted-foreground">{t('execution.noEvents', { defaultValue: 'No execution events have been recorded for this task.' })}</p></div> : (
-                <ol className="space-y-3">
-                  {task.events.map((event) => (
-                    <li key={event.id} className="rounded-lg border border-border p-3">
-                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><ExecutionTaskStatusBadge status={isKnownStatus(event.status) ? event.status : 'unknown'} /><time dateTime={Number.isFinite(event.timestamp.getTime()) ? event.timestamp.toISOString() : undefined} className="text-[10px] tabular-nums text-muted-foreground">{dateLabel(event.timestamp)}</time></div>
-                      <p className="whitespace-pre-wrap break-words text-xs leading-6">{redactVisibleSecretText(event.summary)}</p>
-                      {event.result !== undefined && event.result !== null && <details className="mt-2"><summary className="cursor-pointer text-[11px] font-medium text-blue-600 dark:text-blue-400">{t('execution.eventOutput', { defaultValue: 'View reported output' })}</summary><div className="mt-2"><Payload value={event.result} /></div></details>}
-                    </li>
-                  ))}
-                </ol>
-              )}
+              <ExecutionTaskActivity items={activity} />
               {outputFile}
             </>
           )}
 
           {tab === 'result' && (
             <>
+              {!result && completionSummary && <section data-execution-completion-summary><h3 className="mb-2 text-xs font-medium">{t('execution.completionSummary', { defaultValue: 'Completion summary' })}</h3><p className="whitespace-pre-wrap break-words text-xs leading-6 text-muted-foreground">{completionSummary}</p></section>}
               <section>
                 <h3 className="mb-2 text-xs font-medium">{t('execution.reportedResult', { defaultValue: 'Reported result' })}</h3>
-                {result ? <Payload value={task.result} /> : <p className="rounded-lg border border-dashed border-border px-3 py-5 text-xs leading-6 text-muted-foreground">{t('execution.noResult', { defaultValue: 'No result body has been reported. Check the activity records or output file for available details.' })}</p>}
+                {result ? <Payload value={task.result} /> : <p className="rounded-lg border border-dashed border-border px-3 py-5 text-xs leading-6 text-muted-foreground">{emptyResultMessage}</p>}
               </section>
               {outputFile}
             </>
