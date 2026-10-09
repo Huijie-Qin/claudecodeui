@@ -226,6 +226,21 @@ function recoveryKeyFor(hook, action, event) {
   return JSON.stringify([hook.id, action.id, event?.agent_id || null]);
 }
 
+function hasCurrentRecovery(recoveryKeys, key) {
+  const isCurrent = recoveryKeys.get(key);
+  if (!isCurrent) return false;
+  if (isCurrent()) return true;
+  recoveryKeys.delete(key);
+  return false;
+}
+
+function invocationScopeFor(hook, environment, event, stopBoundary) {
+  return JSON.stringify([
+    hook.id, hook.eventName, environment.sessionId, event.agent_id || null,
+    stopBoundary?.inputRevision ?? null,
+  ]);
+}
+
 function isSubagentStop(event) {
   return event?.hook_event_name === 'SubagentStop' && Boolean(event.agent_id);
 }
@@ -393,6 +408,12 @@ async function executePostActions({
   onLog,
 }) {
   for (const action of hook.postActions || []) {
+    if (!context.isExecutionCurrent()) {
+      references.actions[action.id] = {
+        output: { skipped: true, scheduled: false, reason: 'superseded_user_input' },
+      };
+      continue;
+    }
     if (action.type === 'request_confirmation') {
       if (hook.eventName !== 'PreToolUse') throw new Error('Confirmation requires PreToolUse');
       if (typeof event?.tool_name !== 'string' || !event.tool_name.trim()) {
@@ -454,8 +475,13 @@ async function executePostActions({
       if (hook.bindingController === 'sql_check' && !Object.hasOwn(input, 'rule_ids')) {
         input.rule_ids = Array.isArray(context.sqlCheckRuleIds) ? [...context.sqlCheckRuleIds] : [];
       }
+      const resolvedMcpAction = await context.resolveMcpAction({ hook, action });
+      if (!context.isExecutionCurrent()) {
+        references.actions[action.id] = { output: { called: false, reason: 'superseded_user_input' } };
+        continue;
+      }
       const output = await context.mcpCaller({
-        ...await context.resolveMcpAction({ hook, action }),
+        ...resolvedMcpAction,
         input,
         cwd: context.workspaceRoot,
         signal,
@@ -637,7 +663,7 @@ async function executePostActions({
         references.actions[action.id] = { output: { scheduled: false, reason: 'subagent_recovery_turn' } };
         continue;
       }
-      if (recoveryKeys.has(recoveryKey)) {
+      if (hasCurrentRecovery(recoveryKeys, recoveryKey)) {
         references.actions[action.id] = { output: { scheduled: false, reason: 'already_scheduled' } };
         continue;
       }
@@ -657,9 +683,14 @@ async function executePostActions({
         executionId,
         messageText,
         displayMessage: context.redact(messageText),
+        isExecutionCurrent: context.isExecutionCurrent,
       });
+      if (!context.isExecutionCurrent() || schedulingResult?.scheduled === false || schedulingResult?.queued === false) {
+        references.actions[action.id] = { output: { scheduled: false, reason: 'superseded_user_input' } };
+        continue;
+      }
       if (isSubagentStop(event)) subagentFeedback.push(messageText);
-      recoveryKeys.add(recoveryKey);
+      recoveryKeys.set(recoveryKey, context.isExecutionCurrent);
       references.actions[action.id] = {
         output: {
           scheduled: true,
@@ -693,7 +724,7 @@ async function executePostActions({
         references.actions[action.id] = { output: { scheduled: false, reason: 'subagent_recovery_turn' } };
         continue;
       }
-      if (recoveryKeys.has(recoveryKey)) {
+      if (hasCurrentRecovery(recoveryKeys, recoveryKey)) {
         references.actions[action.id] = { output: { scheduled: false, reason: 'already_scheduled' } };
         continue;
       }
@@ -705,13 +736,17 @@ async function executePostActions({
       const childRecovery = isSubagentStop(event);
       // Reserve before asynchronous content loading so duplicate callbacks for
       // the same child cannot both deliver the same recovery Skill.
-      if (childRecovery) recoveryKeys.add(recoveryKey);
+      if (childRecovery) recoveryKeys.set(recoveryKey, context.isExecutionCurrent);
       try {
         const modelContent = await context.skillContentLoader(
           action.config.skillId,
           action.config.skillName,
           argumentsText,
         );
+        if (!context.isExecutionCurrent()) {
+          references.actions[action.id] = { output: { scheduled: false, reason: 'superseded_user_input' } };
+          continue;
+        }
         const recoveryRequest = {
           hook,
           action,
@@ -719,6 +754,7 @@ async function executePostActions({
           executionId,
           argumentsText,
           modelContent,
+          isExecutionCurrent: context.isExecutionCurrent,
           displayCommand: context.redact(`/${action.config.skillName}${argumentsText ? ` ${argumentsText}` : ''}`),
         };
         if (childRecovery) {
@@ -735,7 +771,11 @@ async function executePostActions({
         if (childRecovery) recoveryKeys.delete(recoveryKey);
         throw error;
       }
-      recoveryKeys.add(recoveryKey);
+      if (!context.isExecutionCurrent() || schedulingResult?.scheduled === false || schedulingResult?.queued === false) {
+        references.actions[action.id] = { output: { scheduled: false, reason: 'superseded_user_input' } };
+        continue;
+      }
+      recoveryKeys.set(recoveryKey, context.isExecutionCurrent);
       references.actions[action.id] = {
         output: {
           scheduled: true,
@@ -766,6 +806,7 @@ export function createHookRuntimeSession({
   }),
   headersHelperRunner = null,
   suppressSkillRecovery = false,
+  captureStopHookBoundary = () => null,
   skillContentLoader = loadSkillContent,
   enqueueSkillRecovery = async () => {
     throw new Error('Skill recovery is not available in this runtime');
@@ -788,7 +829,7 @@ export function createHookRuntimeSession({
   scriptExecutor = executeHookScript,
   mcpCaller = callHookMcpTool,
 } = {}) {
-  const recoveryKeys = new Set();
+  const recoveryKeys = new Map();
   // General Hook invocation counts remain scoped to the SDK query. A query can
   // consume multiple user turns, so completion review needs its own turn count.
   const invocationCounts = new Map();
@@ -834,13 +875,14 @@ export function createHookRuntimeSession({
   const executeHookWithAudit = async (configuredHook, event, toolUseId, callbackOptions = {}, reviewEpoch) => {
     const hook = resolveEffectiveHook(configuredHook, event);
     if (!hook) return {};
+    const stopBoundary = callbackOptions.stopBoundary;
+    const isExecutionCurrent = () => !stopBoundary || stopBoundary.isCurrent();
+    if (!isExecutionCurrent()) return {};
     const environment = buildEnvironment(context, event);
-    const invocationScope = JSON.stringify([
-      hook.id, hook.eventName, environment.sessionId, event.agent_id || null,
-    ]);
+    const invocationScope = invocationScopeFor(hook, environment, event, stopBoundary);
     const completionReviewScope = hook.eventName === 'Stop'
       && hook.postActions?.some((action) => action.type === 'review_completion')
-      ? JSON.stringify([reviewEpoch, hook.id]) : null;
+      ? JSON.stringify([reviewEpoch, hook.id, stopBoundary?.inputRevision ?? null]) : null;
     const completionReviewNumber = completionReviewScope
       ? (completionReviewCounts.get(completionReviewScope) || 0) + 1 : null;
     if (completionReviewScope) completionReviewCounts.set(completionReviewScope, completionReviewNumber);
@@ -867,6 +909,7 @@ export function createHookRuntimeSession({
     } catch {
       variableError = new Error('无法读取 Hook 个人变量，请在辅助功能中重新配置');
     }
+    if (!isExecutionCurrent()) return {};
     const redact = createHookVariableRedactor(definitions, userVariables);
     const executionId = createExecutionRecord(database, hook, context, event, startedAt, toolUseId, redact);
     reportExecutionActivity({
@@ -942,7 +985,7 @@ export function createHookRuntimeSession({
         hook,
         executionId,
         references,
-        context: { ...context, redact, completionReviewNumber },
+        context: { ...context, redact, completionReviewNumber, isExecutionCurrent },
         event,
         signal: callbackOptions.signal,
         recoveryKeys,
@@ -961,10 +1004,11 @@ export function createHookRuntimeSession({
           provenance,
         ),
       });
-      const response = hook.eventName === 'StopFailure' ? {} : buildClaudeHookOutput(hook, references);
+      const allowResponse = isExecutionCurrent();
+      const response = hook.eventName === 'StopFailure' || !allowResponse ? {} : buildClaudeHookOutput(hook, references);
       const completionReview = hook.postActions?.find((action) => action.type === 'review_completion');
       const reviewOutput = completionReview && references.actions[completionReview.id]?.output;
-      if (reviewOutput) {
+      if (reviewOutput && allowResponse) {
         if (reviewOutput.complete) {
           if (response.decision !== 'block' && response.continue !== false) {
             response.decision = 'approve';
@@ -1008,7 +1052,7 @@ export function createHookRuntimeSession({
         response: redact(response),
         logs,
       });
-      if (reviewOutput?.complete && completionReviewScope
+      if (reviewOutput?.complete && allowResponse && completionReviewScope
           && completionReviewCounts.get(completionReviewScope) === completionReviewNumber) {
         completionReviewCounts.delete(completionReviewScope);
       }
@@ -1024,8 +1068,9 @@ export function createHookRuntimeSession({
       });
       return response;
     } catch (error) {
-      const response = completionReviewFailureResponse(hook, completionReviewNumber || 1)
-        || requiredHookFailureResponse(hook);
+      const response = isExecutionCurrent()
+        ? completionReviewFailureResponse(hook, completionReviewNumber || 1) || requiredHookFailureResponse(hook)
+        : {};
       completeExecution(database, executionId, {
         status: 'failed',
         startedAt,
@@ -1053,17 +1098,23 @@ export function createHookRuntimeSession({
 
   const executeHook = async (hook, event, toolUseId, callbackOptions = {}) => {
     const effectiveHook = resolveEffectiveHook(hook, event);
+    const stopBoundary = effectiveHook?.eventName === 'Stop' && !event.agent_id
+      ? captureStopHookBoundary(event)
+      : null;
+    if (stopBoundary && !stopBoundary.isCurrent()) return {};
+    const executionOptions = { ...callbackOptions, stopBoundary };
     const reviewEpoch = completionReviewEpoch;
     const completionReviewScope = effectiveHook?.eventName === 'Stop'
       && effectiveHook.postActions?.some((action) => action.type === 'review_completion')
-      ? JSON.stringify([reviewEpoch, effectiveHook.id]) : null;
+      ? JSON.stringify([reviewEpoch, effectiveHook.id, stopBoundary?.inputRevision ?? null]) : null;
     const waitId = effectiveHook && event.agent_id
       && effectiveHook.postActions?.some((action) => action.type === 'mcp_loop_run')
       ? `subagent-hook-${crypto.randomUUID()}` : null;
     if (waitId) onSubagentLoopWait({ id: waitId, waiting: true });
     try {
-      return await executeHookWithAudit(hook, event, toolUseId, callbackOptions, reviewEpoch);
+      return await executeHookWithAudit(hook, event, toolUseId, executionOptions, reviewEpoch);
     } catch (error) {
+      if (stopBoundary && !stopBoundary.isCurrent()) return {};
       if (effectiveHook?.eventName === 'Stop') {
         const reviewNumber = completionReviewCounts.get(completionReviewScope) || 1;
         const response = completionReviewFailureResponse(effectiveHook, reviewNumber, true);

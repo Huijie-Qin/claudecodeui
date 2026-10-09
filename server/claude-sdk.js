@@ -85,6 +85,7 @@ import {
   createMcpLoopToolBatchTracker,
 } from './services/mcp-loop-session-batch.js';
 import {
+  captureClaudeStopHookBoundary,
   completeClaudeTurnBoundary,
   enqueueClaudeFollowupTurn,
 } from './services/claude-turn-boundary.js';
@@ -1032,6 +1033,7 @@ class ClaudeInputQueue {
     this.waiters = [];
     this.closed = false;
     this.pendingQueryTurns = 0;
+    this.inputRevision = 0;
     this.onQueryPushed = typeof onQueryPushed === 'function' ? onQueryPushed : null;
     this.onQueryConsumed = typeof onQueryConsumed === 'function' ? onQueryConsumed : null;
     this.onConsumedByMessage = new WeakMap();
@@ -1044,6 +1046,7 @@ class ClaudeInputQueue {
     if (message && typeof message === 'object' && typeof onConsumed === 'function') {
       this.onConsumedByMessage.set(message, onConsumed);
     }
+    this.inputRevision += 1;
     if (message?.shouldQuery !== false) {
       this.pendingQueryTurns += 1;
       this.onQueryPushed?.(this.pendingQueryTurns);
@@ -2077,6 +2080,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
             workspaceRoot: runtimeContext.hostWorkspacePath || runtimeOptions.cwd || runtimeOptions.projectPath,
             sessionId: () => capturedSessionId || sessionId || null,
             suppressSkillRecovery: Boolean(runtimeOptions.hookRecovery),
+            captureStopHookBoundary: (event) => captureClaudeStopHookBoundary(inputQueue, event),
             reviewCompletion: ({ event, model, criteria, artifactPaths, validationResult, signal }) => {
               const transcriptPath = event?.transcript_path;
               const hostTranscriptPath = runtimeContext.mode === 'docker'
@@ -2139,11 +2143,14 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
               executionId,
               modelContent,
               displayCommand,
+              isExecutionCurrent = () => true,
             }) => {
+              if (!isExecutionCurrent()) return { queued: false, reason: 'superseded_user_input' };
               const recoverySessionId = event?.session_id || capturedSessionId || sessionId;
               const activeSession = recoverySessionId ? getSession(recoverySessionId) : null;
               if (!activeSession) throw new Error('Original Claude session is unavailable for Hook recovery');
               const recoveryContent = await prepareSkillRecoveryContent({ hook, action, event, executionId, modelContent });
+              if (!isExecutionCurrent()) return { queued: false, reason: 'superseded_user_input' };
               const queuedAt = new Date().toISOString();
               const activity = createHookActivityDescriptor({
                 hook,
@@ -2169,6 +2176,15 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
                 runtimeOptions: {
                   hookRecovery,
                 },
+                isCurrent: isExecutionCurrent,
+                onDiscard: () => emitHookActivity({
+                  hookRecovery,
+                  sessionId: recoverySessionId,
+                  status: 'failed',
+                  error: '收到追加对话，本次结束处理已取消，将在最终回复完成后重新执行。',
+                  runtimeOptions,
+                  writer: ws,
+                }),
               });
               hookRecovery.activity.queuePosition = queuePosition;
               emitHookActivity({
@@ -2187,7 +2203,9 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
               executionId,
               messageText,
               displayMessage,
+              isExecutionCurrent = () => true,
             }) => {
+              if (!isExecutionCurrent()) return { queued: false, reason: 'superseded_user_input' };
               const recoverySessionId = event?.session_id || capturedSessionId || sessionId;
               const activeSession = recoverySessionId ? getSession(recoverySessionId) : null;
               if (!activeSession) throw new Error('Original Claude session is unavailable for Hook Agent message');
@@ -2214,6 +2232,15 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
                 runtimeOptions: {
                   hookRecovery,
                 },
+                isCurrent: isExecutionCurrent,
+                onDiscard: () => emitHookActivity({
+                  hookRecovery,
+                  sessionId: recoverySessionId,
+                  status: 'failed',
+                  error: '收到追加对话，本次结束处理已取消，将在最终回复完成后重新执行。',
+                  runtimeOptions,
+                  writer: ws,
+                }),
               });
               hookRecovery.activity.queuePosition = queuePosition;
               emitHookActivity({
