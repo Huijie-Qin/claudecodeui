@@ -46,7 +46,8 @@ const DEFAULT_DOCKER_MEMORY = '2g';
 const DEFAULT_DOCKER_CPUS = '2';
 const DOCKER_WORKSPACE_CHECK_TIMEOUT_MS = 10_000;
 const DOCKER_PYTHON_PACKAGES_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_PACKAGES';
-const CLAUDE_CLEANUP_PERIOD_DAYS = 36_500;
+const DEFAULT_CLAUDE_CLEANUP_PERIOD_DAYS = 36_500;
+const CLAUDE_CLEANUP_PERIOD_DAYS_ENV_NAME = 'CLOUDCLI_CLAUDE_CLEANUP_PERIOD_DAYS';
 const DOCKER_SHARED_PYTHON_ENABLED_ENV_NAME = 'CLOUDCLI_DOCKER_SHARED_PYTHON';
 const DOCKER_SHARED_PYTHON_ROOT_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT';
 export const DOCKER_BIND_HOST_ROOT_ENV_NAME = 'CLOUDCLI_DOCKER_BIND_HOST_ROOT';
@@ -706,10 +707,22 @@ async function ensureRuntimeConfigPathPermissions(
   return { ownershipChanged, modeChanged };
 }
 
+export function resolveClaudeCleanupPeriodDays(env = process.env) {
+  const rawValue = env[CLAUDE_CLEANUP_PERIOD_DAYS_ENV_NAME];
+  if (rawValue == null || String(rawValue).trim() === '') return DEFAULT_CLAUDE_CLEANUP_PERIOD_DAYS;
+  const value = String(rawValue).trim();
+  const days = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(days) || days <= 0) {
+    throw new Error(`${CLAUDE_CLEANUP_PERIOD_DAYS_ENV_NAME} must be a positive integer`);
+  }
+  return days;
+}
+
 export async function ensureClaudeCleanupPeriod(
   fsImpl,
   runtimeHomePath,
   {
+    cleanupPeriodDays = DEFAULT_CLAUDE_CLEANUP_PERIOD_DAYS,
     uid,
     gid,
     logger = null,
@@ -735,10 +748,10 @@ export async function ensureClaudeCleanupPeriod(
     }
   }
 
-  if (settings.cleanupPeriodDays !== CLAUDE_CLEANUP_PERIOD_DAYS) {
+  if (settings.cleanupPeriodDays !== cleanupPeriodDays) {
     await fsImpl.writeFile(settingsPath, `${JSON.stringify({
       ...settings,
-      cleanupPeriodDays: CLAUDE_CLEANUP_PERIOD_DAYS,
+      cleanupPeriodDays,
     }, null, 2)}\n`, {
       encoding: 'utf8',
       mode: 0o600,
@@ -1757,6 +1770,7 @@ export function createAgentSessionRuntimeManager({
       containerPath: ca.containerPath || null,
     }));
     await ensureClaudeCleanupPeriod(fs, desiredRuntime.runtime_home_path, {
+      cleanupPeriodDays: resolveClaudeCleanupPeriodDays(env),
       ...containerUser,
       logger: console,
       context: createRuntimeLogDetails(desiredRuntime, {

@@ -30,6 +30,7 @@ import {
   inspectedContainerUsesSharedPython,
   migratePathOwnership,
   parseDockerPythonPackages,
+  resolveClaudeCleanupPeriodDays,
   resolveClaudeExecutionMode,
   resolveDockerBindSourcePath,
   resolveDockerCliExecutable,
@@ -823,6 +824,25 @@ test('runtime ownership migration recursively chowns entries without following s
   ]);
 });
 
+test('cleanup period is read from the environment and validates positive integer days', () => {
+  assert.equal(resolveClaudeCleanupPeriodDays({}), 36500);
+  assert.equal(resolveClaudeCleanupPeriodDays({ CLOUDCLI_CLAUDE_CLEANUP_PERIOD_DAYS: ' ' }), 36500);
+  assert.equal(resolveClaudeCleanupPeriodDays({ CLOUDCLI_CLAUDE_CLEANUP_PERIOD_DAYS: ' 42 ' }), 42);
+  for (const value of ['0', '-1', '1.5', 'abc', '9007199254740992']) {
+    assert.throws(
+      () => resolveClaudeCleanupPeriodDays({ CLOUDCLI_CLAUDE_CLEANUP_PERIOD_DAYS: value }),
+      /CLOUDCLI_CLAUDE_CLEANUP_PERIOD_DAYS must be a positive integer/,
+    );
+  }
+});
+
+test('claude runtime settings use the default cleanup period when none is configured', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-settings-test-'));
+  assert.equal(await ensureClaudeCleanupPeriod(fs, tempRoot), true);
+  const settingsPath = path.join(tempRoot, '.claude', 'settings.json');
+  assert.equal(JSON.parse(await fs.readFile(settingsPath, 'utf8')).cleanupPeriodDays, 36500);
+});
+
 test('claude runtime settings preserve existing values and set the cleanup period', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-runtime-settings-test-'));
   const claudeDir = path.join(tempRoot, '.claude');
@@ -830,10 +850,10 @@ test('claude runtime settings preserve existing values and set the cleanup perio
   await fs.mkdir(claudeDir, { recursive: true });
   await fs.writeFile(settingsPath, JSON.stringify({ theme: 'dark', cleanupPeriodDays: 30 }), 'utf8');
 
-  assert.equal(await ensureClaudeCleanupPeriod(fs, tempRoot), true);
+  assert.equal(await ensureClaudeCleanupPeriod(fs, tempRoot, { cleanupPeriodDays: 42 }), true);
   assert.deepEqual(JSON.parse(await fs.readFile(settingsPath, 'utf8')), {
     theme: 'dark',
-    cleanupPeriodDays: 36500,
+    cleanupPeriodDays: 42,
   });
 });
 
@@ -859,6 +879,7 @@ test('claude runtime settings permissions are corrected even when content is not
   };
 
   assert.equal(await ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home', {
+    cleanupPeriodDays: 36500,
     uid: 1000,
     gid: 1000,
     logger: {
@@ -920,6 +941,7 @@ test('new claude runtime settings use secure mode and target container ownership
   };
 
   assert.equal(await ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home', {
+    cleanupPeriodDays: 36500,
     uid: 1000,
     gid: 1000,
   }), true);
@@ -960,6 +982,7 @@ test('claude runtime settings permission handling is idempotent', async () => {
   };
 
   assert.equal(await ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home', {
+    cleanupPeriodDays: 36500,
     uid: 1000,
     gid: 1000,
     logger: {
@@ -996,6 +1019,7 @@ test('claude runtime settings reject a symbolic-link settings file before readin
 
   await assert.rejects(
     ensureClaudeCleanupPeriod(fsMock, '/tmp/runtime/home', {
+      cleanupPeriodDays: 36500,
       uid: 1000,
       gid: 1000,
     }),
@@ -1034,6 +1058,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
       CLOUDCLI_CLAUDE_DOCKER_IMAGE: 'cloudcli/test:claude',
       NODE_EXTRA_CA_CERTS: hostCaFile,
       CLOUDCLI_DOCKER_PYTHON_PACKAGES: 'requests, httpx',
+      CLOUDCLI_CLAUDE_CLEANUP_PERIOD_DAYS: '42',
       ANTHROPIC_API_KEY: 'key-1',
       HTTP_PROXY: 'http://proxy.example:8080',
       HTTPS_PROXY: 'http://secure-proxy.example:8443',
@@ -1125,6 +1150,7 @@ test('docker mode creates runtime home, wrapper, DB row, and container', async (
   assert.equal(envUserId, 4);
   assert.equal(createdRuntimes[0].workspaceHostPath, workspaceRealPath);
   assert.ok(runtime.runtimeHomePath.startsWith(runtimeRoot));
+  assert.equal(JSON.parse(await fs.readFile(path.join(runtime.runtimeHomePath, '.claude', 'settings.json'), 'utf8')).cleanupPeriodDays, 42);
   assert.equal(runtime.executionEnv.USER_KEY, encryptedUserKey);
   const guestCaFile = runtime.executionEnv.NODE_EXTRA_CA_CERTS;
   assert.match(guestCaFile, /^\/home\/cloudcli\/\.cloudcli-ca-[a-f0-9]+\.pem$/);
