@@ -634,7 +634,7 @@ test('administrator activation overrides historical chat-only and captured-off r
   }
 });
 
-test('administrator activation overrides template defaults only inside its scope and still requires a usable version', () => {
+test('administrator overwrite preserves template defaults and template Hooks still require a usable version', () => {
   const { database, service, hookId, alpha, beta } = createTenantScopedWorkspaceHookFixture();
   try {
     for (const context of [alpha, beta]) {
@@ -642,10 +642,10 @@ test('administrator activation overrides template defaults only inside its scope
         defaultEnabled: false, defaultShowInChat: true, installStatus: 'ready', createdBy: 1 });
     }
     service.replaceHookBindings({ overwriteUserPreferences: true, hookId, scope: 'tenants', tenantIds: [10], defaultEnabled: true, defaultShowInChat: false, boundBy: 1 });
-    assert.equal(service.listEffectiveHooksForContext(alpha)[0].enabled, true);
-    assert.equal(service.listEffectiveHooksForContext(alpha)[0].showInChat, false);
-    assert.equal(service.getWorkspaceUserHookChatVisibility({ ...alpha, hookId }), false);
-    assert.equal(service.getUserHookChatVisibility({ ...alpha, hookId }), false);
+    assert.deepEqual(service.listEffectiveHooksForContext(alpha), []);
+    assert.equal(service.listAvailableHooksForContext(alpha)[0].showInChat, true);
+    assert.equal(service.getWorkspaceUserHookChatVisibility({ ...alpha, hookId }), true);
+    assert.equal(service.getUserHookChatVisibility({ ...alpha, hookId }), true);
     assert.equal(service.getWorkspaceUserHookChatVisibility({ ...beta, hookId }), true);
     assert.equal(service.getUserHookChatVisibility({ ...beta, hookId }), true);
     service.setWorkspaceUserHookChatVisibility({ ...beta, hookId, showInChat: false });
@@ -654,6 +654,7 @@ test('administrator activation overrides template defaults only inside its scope
     assert.deepEqual(service.listEffectiveHooksForContext(beta), []);
     service.setWorkspaceUserHookEnabled({ ...beta, hookId, enabled: true });
     assert.equal(service.listEffectiveHooksForContext(beta)[0].id, hookId);
+    service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: true });
     for (const installStatus of ['pending', 'failed', 'ready']) {
       service.assignWorkspaceHook({ workspaceId: alpha.workspaceId, hookId, source: 'agent_template', sourceTemplateId: 88,
         defaultEnabled: false, installStatus, createdBy: 1 });
@@ -664,12 +665,12 @@ test('administrator activation overrides template defaults only inside its scope
   } finally { database.close(); }
 });
 
-test('admin saves cover shared assignments, skip deleted projects, and preserve users outside the selected scope', () => {
+test('admin saves cover shared manual assignments, skip deleted projects, and preserve users outside the selected scope', () => {
   const { database, service, hookId, alpha, alphaSecond } = createTenantScopedWorkspaceHookFixture();
   try {
     service.replaceHookBindings({ overwriteUserPreferences: true, hookId, scope: 'all_users', boundBy: 1 });
-    service.assignWorkspaceHook({ workspaceId: alpha.workspaceId, hookId, source: 'agent_template',
-      sourceTemplateId: 88, defaultEnabled: true, defaultShowInChat: true, createdBy: 1 });
+    service.assignWorkspaceHook({ workspaceId: alpha.workspaceId, hookId,
+      defaultEnabled: true, defaultShowInChat: true, createdBy: 1 });
     database.prepare('INSERT INTO workspace_acl (workspace_id, user_id, permission, created_by_user_id) VALUES (?, 1, ?, 1)')
       .run(alpha.workspaceId, 'view');
     service.setWorkspaceUserHookEnabled({ ...alphaSecond, hookId, enabled: true });
@@ -686,6 +687,57 @@ test('admin saves cover shared assignments, skip deleted projects, and preserve 
     assert.equal(service.listAvailableHooksForContext(alpha)[0].enabled, true);
     assert.equal(service.listAvailableHooksForContext(alpha)[0].showInChat, true);
   } finally { database.close(); }
+});
+
+test('admin overwrite skips template defaults and personal choices across all scopes while updating manual Hooks', () => {
+  for (const scope of [
+    { scope: 'users', userIds: [2] },
+    { scope: 'tenants', tenantIds: [10] },
+    { scope: 'all_users' },
+  ]) {
+    for (const [templateEnabled, allowUserDisable] of [[false, true], [true, true], [true, false]]) {
+      const { database, service, hookId, alpha, alphaSecond, beta } = createTenantScopedWorkspaceHookFixture();
+      try {
+        const template = { hookId, source: 'agent_template', sourceTemplateId: 88,
+          defaultEnabled: templateEnabled, defaultShowInChat: templateEnabled, allowUserDisable, createdBy: 1 };
+        service.assignWorkspaceHook({ ...template, workspaceId: alpha.workspaceId });
+        service.assignWorkspaceHook({ hookId, workspaceId: alphaSecond.workspaceId, defaultEnabled: templateEnabled,
+          defaultShowInChat: templateEnabled, createdBy: 1 });
+        const originalAssignment = service.listAvailableHooksForContext(alpha)[0].workspaceAssignment;
+        const overwrite = { hookId, ...scope, overwriteUserPreferences: true,
+          defaultEnabled: !templateEnabled, defaultShowInChat: !templateEnabled, boundBy: 1 };
+        service.replaceHookBindings(overwrite);
+        const read = () => service.listAvailableHooksForContext(alpha)[0];
+        assert.equal(read().enabled, templateEnabled);
+        assert.equal(read().showInChat, templateEnabled);
+        assert.equal(service.getUserHookChatVisibility({ ...alpha, hookId }), templateEnabled);
+        assert.deepEqual(read().workspaceAssignment, originalAssignment);
+        assert.equal(database.prepare('SELECT COUNT(*) AS n FROM user_workspace_hook_preferences WHERE workspace_id = ? AND hook_id = ?')
+          .get(alpha.workspaceId, hookId).n, 0);
+        assert.equal(service.listAvailableHooksForContext(alphaSecond)[0].enabled, !templateEnabled);
+        assert.equal(service.listAvailableHooksForContext(alphaSecond)[0].showInChat, !templateEnabled);
+
+        // A newly installed template must not inherit previous administrator defaults.
+        service.assignWorkspaceHook({ ...template, workspaceId: beta.workspaceId });
+        assert.equal(service.listAvailableHooksForContext(beta)[0].enabled, templateEnabled);
+        assert.equal(service.listAvailableHooksForContext(beta)[0].showInChat, templateEnabled);
+
+        if (allowUserDisable) {
+          service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: !templateEnabled });
+        } else {
+          assert.throws(() => service.setWorkspaceUserHookEnabled({ ...alpha, hookId, enabled: false }), { statusCode: 409 });
+        }
+        service.setWorkspaceUserHookChatVisibility({ ...alpha, hookId, showInChat: !templateEnabled });
+        const preference = database.prepare('SELECT * FROM user_workspace_hook_preferences WHERE workspace_id = ? AND user_id = ? AND hook_id = ?');
+        const personalChoice = preference.get(alpha.workspaceId, alpha.userId, hookId);
+        service.replaceHookBindings({ ...overwrite, defaultEnabled: templateEnabled, defaultShowInChat: templateEnabled });
+        assert.deepEqual(preference.get(alpha.workspaceId, alpha.userId, hookId), personalChoice);
+        assert.equal(read().enabled, allowUserDisable ? !templateEnabled : true);
+        assert.equal(read().showInChat, !templateEnabled);
+        assert.deepEqual(read().workspaceAssignment, originalAssignment);
+      } finally { database.close(); }
+    }
+  }
 });
 
 test('direct enablement waits for required personal variables', () => {
@@ -2082,6 +2134,46 @@ test('write_record is a publishable post action and validates its field referenc
   }
 });
 
+test('write_record report fields default to private and persist immutable published definitions', () => {
+  const { database, service } = createFixture();
+  const fields = { count: { source: 'literal', value: 3 }, title: { source: 'literal', value: 'Safe label' } };
+  const input = (reportFields) => publishableHook({ extensionLogic: null, postActions: [{ id: 'report', type: 'write_record', config: { recordType: 'metrics', fields, ...(reportFields === undefined ? {} : { reportFields }) } }] });
+  try {
+    const created = service.createHook({ userId: 1, input: input() });
+    assert.deepEqual(created.postActions[0].config.reportFields, []);
+    service.publishHook({ hookId: created.id, userId: 1 });
+    const definitions = [{ key: 'count', label: '记录数', type: 'number', aggregation: 'sum', unit: '条' }];
+    service.updateHook({ hookId: created.id, userId: 1, input: input(definitions) });
+    service.publishHook({ hookId: created.id, userId: 1 });
+    assert.deepEqual(service.getPublishedHookVersion({ hookId: created.id, version: 1 }).postActions[0].config.reportFields, []);
+    assert.deepEqual(service.getPublishedHookVersion({ hookId: created.id, version: 2 }).postActions[0].config.reportFields, definitions);
+    service.updateHook({ hookId: created.id, userId: 1, input: input([{ ...definitions[0], aggregation: 'avg' }]) });
+    assert.deepEqual(service.getPublishedHookVersion({ hookId: created.id, version: 2 }).postActions[0].config.reportFields, definitions);
+  } finally { database.close(); }
+});
+
+test('write_record report fields reject unknown keys, paths, unsafe types and oversized definitions', () => {
+  const { database, service } = createFixture();
+  const valid = { key: 'count', label: 'Count', type: 'number', aggregation: 'sum' };
+  const fields = Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`field${index}`, { source: 'literal', value: index }]));
+  fields.count = { source: 'literal', value: 1 };
+  fields['nested.value'] = { source: 'literal', value: 1 };
+  const invalidValues = [
+    {}, Array.from({ length: 21 }, (_, index) => ({ ...valid, key: `field${index}` })),
+    [{ ...valid, key: 'missing' }], [{ ...valid, key: 'nested.value' }], [{ ...valid, key: '__proto__' }],
+    [valid, valid], [{ ...valid, type: 'object' }], [{ ...valid, type: 'string' }],
+    [{ ...valid, aggregation: 'sql' }], [{ ...valid, expression: 'SUM(secret)' }],
+    [{ ...valid, label: 'x'.repeat(121) }], [{ ...valid, unit: 'x'.repeat(33) }],
+  ];
+  try {
+    for (const reportFields of invalidValues) {
+      assert.throws(() => service.createHook({ userId: 1, input: publishableHook({ extensionLogic: null, postActions: [{ id: 'record', type: 'write_record', config: { recordType: 'metrics', fields, reportFields } }] }) }), /reportFields/);
+    }
+    const created = service.createHook({ userId: 1, input: publishableHook({ extensionLogic: null, postActions: [{ id: 'record', type: 'write_record', config: { recordType: 'metrics', fields, reportFields: [{ key: 'count', type: 'boolean' }] } }] }) });
+    assert.deepEqual(created.postActions[0].config.reportFields, [{ key: 'count', label: 'count', type: 'boolean', aggregation: 'none' }]);
+  } finally { database.close(); }
+});
+
 test('execution audit and script data records can be queried for an Hook', () => {
   const { database, service } = createFixture();
   try {
@@ -2448,7 +2540,7 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
         .prepare('PRAGMA table_info(hooks)')
         .all()
         .map((column) => column.name),
-      ['id', 'include_subagents', 'user_variables_json', 'extension_logic_json', 'post_actions_json', 'claude_response_json', 'show_in_chat', 'default_enabled', 'default_show_in_chat'],
+      ['id', 'owner_tenant_id', 'include_subagents', 'user_variables_json', 'extension_logic_json', 'post_actions_json', 'claude_response_json', 'show_in_chat', 'default_enabled', 'default_show_in_chat'],
     );
     assert.equal(
       database
@@ -2759,6 +2851,7 @@ test('resource catalog exposes only runtime-backed environment fields', () => {
       { path: 'ccui.env.workspaceId', type: 'number' },
       { path: 'ccui.env.sessionId', type: 'string' },
       { path: 'ccui.env.sqlCheckRuleIds', type: 'array' },
+      { path: 'ccui.env.hookInvocationCount', type: 'number' },
     ]);
   } finally {
     database.close();

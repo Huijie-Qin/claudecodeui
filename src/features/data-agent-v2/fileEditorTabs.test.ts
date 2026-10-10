@@ -88,6 +88,16 @@ test('persistence keys isolate workspaces', () => {
   assert.notEqual(getFileTabsStorageKey(project), getFileTabsStorageKey({ ...project, workspaceId: 43 }));
 });
 
+test('image and xlsx files open as read-only preview tabs with the workspace identity', () => {
+  for (const [path, kind] of [['chart.PNG', 'image'], ['report.XLSX', 'spreadsheet'], ['report.xlsx.txt', 'editor'], ['legacy.xls', 'editor']]) {
+    const tab = createFileEditorTab(project, path);
+    assert.equal(tab.kind, kind);
+    assert.equal(tab.file.workspaceId, 42);
+    assert.equal(tab.file.projectName, 'demo');
+    assert.equal(tab.dirty, false);
+  }
+});
+
 test('persisted tabs reject damaged data and normalize duplicate paths', () => {
   assert.equal(parsePersistedFileEditorTabs('{broken'), null);
   assert.equal(parsePersistedFileEditorTabs(JSON.stringify({ version: 2, paths: [] })), null);

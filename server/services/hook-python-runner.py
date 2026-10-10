@@ -167,6 +167,9 @@ def create_ccui(env):
         async def exists(self, path):
             return await rpc.call("workspace.exists", [path])
 
+        async def sha256(self, path):
+            return await rpc.call("workspace.sha256", [path])
+
     class Records:
         async def write(self, record_type, data):
             return await rpc.call("records.write", [record_type, data])

@@ -60,6 +60,29 @@ function findPresetForSkill(skill: MarketSkillSummary, presetBySkillRef: Map<str
     || presetBySkillRef.get(skill.name);
 }
 
+function SkillOwnership({ creator, tenant, tenantId }: {
+  creator?: string | number;
+  tenant?: AdminTenant | null;
+  tenantId?: number;
+}) {
+  const { t } = useTranslation('admin');
+  const creatorLabel = String(creator ?? '').trim() || t('skillPresets.unknownCreator');
+  const tenantLabel = tenant
+    ? `${tenant.name} (${tenant.code})`
+    : tenantId ? `#${tenantId}` : t('skillPresets.unknownTenant');
+
+  return (
+    <div className="mt-2 flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+      <span className="min-w-0 max-w-full break-words">
+        {t('skillPresets.creator', { name: creatorLabel })}
+      </span>
+      <span className="min-w-0 max-w-full break-words">
+        {t('skillPresets.tenant', { name: tenantLabel })}
+      </span>
+    </div>
+  );
+}
+
 export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPresetsTabProps) {
   const { t } = useTranslation('admin');
   const defaultTenantId = currentTenantId || tenants[0]?.id || 0;
@@ -284,6 +307,11 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
                     </Button>
                   </div>
                   <div className="mt-1 truncate text-xs text-muted-foreground">{preset.name}</div>
+                  <SkillOwnership
+                    creator={preset.source?.createUserId}
+                    tenant={tenants.find((tenant) => tenant.id === preset.tenantId)}
+                    tenantId={preset.tenantId}
+                  />
                   <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
                     <span className="rounded border border-border px-2 py-0.5">Skill Market</span>
                     <span className="rounded border border-border px-2 py-0.5">v{preset.version}</span>
@@ -433,6 +461,7 @@ export default function SkillPresetsTab({ tenants, currentTenantId }: SkillPrese
                         >
                           {skill.description || skill.skillId || skill.id}
                         </div>
+                        <SkillOwnership creator={skill.createUserId} tenant={selectedTenant} tenantId={tenantId} />
                       </div>
                     );
                   })}

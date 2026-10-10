@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import Database from 'better-sqlite3';
 
 import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
+import { configureAiUsageTurnDatabase } from '../services/ai-usage-turns.js';
 
 import {
   APP_CONFIG_TABLE_SQL,
@@ -42,7 +43,10 @@ import {
   migrateHookActivationModel,
   migrateHookConfigurationModel,
   migrateHookExecutionDiagnostics,
+  migrateHookRecordSources,
 } from './hook-config-schema.js';
+import { migrateAiUsageSchema } from './ai-usage-schema.js';
+import { migrateAiUsageExportSchema } from './ai-usage-export-schema.js';
 import { migrateExistingScheduledTasksToNew } from './scheduled-task-migrations.js';
 import { migrateAgentTemplateFolderStorage } from './agent-template-folder-migration.js';
 import { migrateAgentTemplateSkillIsolation } from './agent-template-skill-isolation.js';
@@ -208,6 +212,10 @@ const runMigrations = () => {
     migrateHookActivationModel(db);
     migrateHookExecutionDiagnostics(db);
     runMultitenancyMigrations();
+    migrateHookRecordSources(db);
+    migrateAiUsageSchema(db);
+    migrateAiUsageExportSchema(db);
+    configureAiUsageTurnDatabase(db);
 
     console.log('Database migrations completed successfully');
   } catch (error) {
@@ -221,6 +229,7 @@ function runMultitenancyMigrations() {
   ensureColumn('tenants', 'prod_code', 'TEXT');
   migrateSkillMarketImportBindingColumns(db);
   ensureColumn('agent_templates', 'category', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn('agent_templates', 'owner_tenant_id', 'INTEGER');
   ensureColumn('agent_templates', 'hook_refs_json', "TEXT NOT NULL DEFAULT '[]'");
   migrateAgentTemplateSkillIsolation(db);
   ensureColumn('agent_templates', 'claude_folders_json', "TEXT NOT NULL DEFAULT '[]'");

@@ -5,6 +5,7 @@ import { db as defaultDatabase } from '../database/db.js';
 
 import { isRequiredHook } from './claude-hook-policy.js';
 import { isBuiltinHookSkillId, loadBuiltinHookSkill } from './hook-builtin-skills.js';
+import { completionReviewFailure } from './hook-completion-review.js';
 import { allowedClaudeOutputs, hookConfigService } from './hook-configs.js';
 import { callHookMcpTool } from './hook-mcp-client.js';
 import { executeHookScript } from './hook-script-executor.js';
@@ -15,6 +16,7 @@ const UNRESOLVED = Symbol('unresolved');
 const MAX_AUDIT_JSON_BYTES = 128 * 1024;
 const MAX_CLAUDE_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_LOG_ENTRIES = 200;
+const MAX_COMPLETION_REVIEWS = 5;
 const SENSITIVE_KEY_PATTERN = /(?:authorization|cookie|credential|password|secret|token|api[_-]?key)/i;
 
 function isPlainObject(value) {
@@ -83,6 +85,30 @@ function resolveBinding(binding, references) {
   if (binding.source === 'reference') return readPath(references, binding.path);
   if (binding.source === 'template') return renderTemplate(binding.template, references);
   return UNRESOLVED;
+}
+
+function normalizeCompletionValidationResult(value) {
+  if (value?.isError === true) {
+    throw new Error('程序校验工具返回错误。');
+  }
+  if (!isPlainObject(value) || typeof value.passed !== 'boolean') {
+    throw new Error('程序校验结果必须包含布尔值 passed。');
+  }
+  const rawIssues = value.issues ?? [];
+  if (!Array.isArray(rawIssues) || rawIssues.length > 20
+      || rawIssues.some((issue) => typeof issue !== 'string' || issue.length > 600)) {
+    throw new Error('程序校验结果 issues 必须是最多 20 个短文本。');
+  }
+  const result = { passed: value.passed, issues: rawIssues.map((issue) => issue.trim()).filter(Boolean) };
+  if (Object.prototype.hasOwnProperty.call(value, 'evidence')) {
+    let serialized;
+    try { serialized = JSON.stringify(value.evidence); } catch { /* Report a bounded validation error below. */ }
+    if (!serialized || Buffer.byteLength(serialized, 'utf8') > 4_000) {
+      throw new Error('程序校验结果 evidence 必须是 4 KB 以内的 JSON。');
+    }
+    result.evidence = JSON.parse(serialized);
+  }
+  return result;
 }
 
 function setPath(target, dottedPath, value) {
@@ -200,6 +226,21 @@ function recoveryKeyFor(hook, action, event) {
   return JSON.stringify([hook.id, action.id, event?.agent_id || null]);
 }
 
+function hasCurrentRecovery(recoveryKeys, key) {
+  const isCurrent = recoveryKeys.get(key);
+  if (!isCurrent) return false;
+  if (isCurrent()) return true;
+  recoveryKeys.delete(key);
+  return false;
+}
+
+function invocationScopeFor(hook, environment, event, stopBoundary) {
+  return JSON.stringify([
+    hook.id, hook.eventName, environment.sessionId, event.agent_id || null,
+    stopBoundary?.inputRevision ?? null,
+  ]);
+}
+
 function isSubagentStop(event) {
   return event?.hook_event_name === 'SubagentStop' && Boolean(event.agent_id);
 }
@@ -268,13 +309,13 @@ function completeExecution(database, executionId, { status, startedAt, scriptOut
   );
 }
 
-function writeDataRecord(database, executionId, hook, context, event, recordType, data) {
+function writeDataRecord(database, executionId, hook, context, event, recordType, data, provenance = {}) {
   const id = crypto.randomUUID();
   database.prepare(`
     INSERT INTO hook_data_records (
       id, execution_id, hook_id, user_id, tenant_id, workspace_id,
-      session_id, record_type, data_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      session_id, record_type, data_json, post_action_id, hook_version, record_source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     executionId,
@@ -285,6 +326,10 @@ function writeDataRecord(database, executionId, hook, context, event, recordType
     event?.session_id || context.sessionId?.() || null,
     recordType,
     serializeForAudit(data),
+    provenance.postActionId || null,
+    Number.isInteger(hook.version) && hook.version > 0 ? hook.version : null,
+    ['post_action', 'script', 'system'].includes(provenance.recordSource)
+      ? provenance.recordSource : 'unknown',
   );
   return { id, type: recordType, data: toAuditValue(data) };
 }
@@ -311,6 +356,19 @@ function requiredHookFailureResponse(hook, auditFailure = false) {
     } };
   }
   return {};
+}
+
+function completionReviewFailureResponse(hook, reviewNumber, auditFailure = false) {
+  if (hook?.eventName !== 'Stop') return null;
+  const reviewAction = hook.postActions?.find((action) => action.type === 'review_completion');
+  if (!reviewAction) return null;
+  const maxReviews = Math.min(reviewAction.config?.maxReviews ?? 3, MAX_COMPLETION_REVIEWS);
+  const reason = auditFailure
+    ? '模型验收无法保存执行记录，请检查 Hook 存储后继续任务。'
+    : '模型验收 Hook 执行失败，请检查 Hook 执行记录后继续任务。';
+  return reviewNumber >= maxReviews
+    ? { continue: false, stopReason: `${reason}已达到 ${maxReviews} 次复核上限。` }
+    : { decision: 'block', reason };
 }
 
 function expandSkillArguments(content, argumentsText) {
@@ -350,6 +408,12 @@ async function executePostActions({
   onLog,
 }) {
   for (const action of hook.postActions || []) {
+    if (!context.isExecutionCurrent()) {
+      references.actions[action.id] = {
+        output: { skipped: true, scheduled: false, reason: 'superseded_user_input' },
+      };
+      continue;
+    }
     if (action.type === 'request_confirmation') {
       if (hook.eventName !== 'PreToolUse') throw new Error('Confirmation requires PreToolUse');
       if (typeof event?.tool_name !== 'string' || !event.tool_name.trim()) {
@@ -382,15 +446,23 @@ async function executePostActions({
       continue;
     }
     if (action.type === 'call_mcp_tool') {
+      const sqlWriteGuard = hook.bindingController === 'sql_check'
+        && hook.eventName === 'PreToolUse' && event.tool_name === 'Write'
+        && /(?:^|__)check_sql_syntax$/.test(action.config?.toolName || '');
       const condition = action.config?.condition == null
         ? true
         : resolveBinding(action.config.condition, references);
       if (condition === UNRESOLVED) {
         throw new Error(`Post action ${action.id} condition is unresolved`);
       }
+      if (sqlWriteGuard && typeof condition !== 'boolean') {
+        throw new Error('SQL Check condition must resolve to a boolean');
+      }
       if (!condition) {
         references.actions[action.id] = {
-          output: { called: false, reason: 'condition_false' },
+          output: { called: false, reason: 'condition_false', ...(sqlWriteGuard ? {
+            permissionDecision: 'defer', permissionDecisionReason: '本次 Write 未包含 SQL。',
+          } : {}) },
         };
         continue;
       }
@@ -403,14 +475,35 @@ async function executePostActions({
       if (hook.bindingController === 'sql_check' && !Object.hasOwn(input, 'rule_ids')) {
         input.rule_ids = Array.isArray(context.sqlCheckRuleIds) ? [...context.sqlCheckRuleIds] : [];
       }
+      const resolvedMcpAction = await context.resolveMcpAction({ hook, action });
+      if (!context.isExecutionCurrent()) {
+        references.actions[action.id] = { output: { called: false, reason: 'superseded_user_input' } };
+        continue;
+      }
       const output = await context.mcpCaller({
-        ...await context.resolveMcpAction({ hook, action }),
+        ...resolvedMcpAction,
         input,
         cwd: context.workspaceRoot,
         signal,
         headersHelperRunner: context.headersHelperRunner,
       });
-      references.actions[action.id] = { output };
+      if (sqlWriteGuard) {
+        if (!isPlainObject(output) || output.isError === true || typeof output.valid !== 'boolean') {
+          throw new Error('SQL Check did not return a valid boolean verdict');
+        }
+        const issues = Array.isArray(output.issues)
+          ? output.issues.map((issue) => typeof issue === 'string' ? issue : issue?.message)
+            .filter((message) => typeof message === 'string').slice(0, 5).join('；').slice(0, 1500)
+          : '';
+        references.actions[action.id] = { output: { ...output,
+          // A successful check must not bypass other permission checks.
+          permissionDecision: output.valid ? 'defer' : 'deny',
+          permissionDecisionReason: output.valid ? 'SQL Check 校验通过。'
+            : `SQL Check 校验未通过，已拒绝写入。${issues || '请修正 SQL 后重试。'}`,
+        } };
+      } else {
+        references.actions[action.id] = { output };
+      }
       continue;
     }
     if (action.type === 'mcp_loop_run') {
@@ -436,6 +529,89 @@ async function executePostActions({
       };
       continue;
     }
+    if (action.type === 'review_completion') {
+      if (hook.eventName !== 'Stop' || event?.agent_id) {
+        throw new Error('Completion review only supports the main agent Stop event');
+      }
+      const reviewNumber = context.completionReviewNumber;
+      const maxReviews = Math.min(action.config?.maxReviews ?? 3, MAX_COMPLETION_REVIEWS);
+      let validationResult;
+      let validationError = '';
+      if (action.config?.validationResultPath) {
+        const rawValidation = readPath(references, action.config.validationResultPath);
+        try {
+          if (rawValidation === UNRESOLVED) {
+            throw new Error('配置的程序校验结果不存在。');
+          }
+          validationResult = normalizeCompletionValidationResult(rawValidation);
+        } catch (error) {
+          validationError = error?.message || '程序校验结果无效。';
+        }
+      }
+      let verdict;
+      if (validationError) {
+        verdict = {
+          complete: false,
+          reason: `程序校验未能执行：${validationError}`,
+          nextStep: '检查 Hook 的程序校验脚本或 MCP 输出后继续任务。',
+          failed: true,
+        };
+      } else {
+        try {
+          verdict = await context.reviewCompletion({
+            event,
+            workspaceRoot: context.workspaceRoot,
+            model: action.config?.model || undefined,
+            criteria: action.config?.criteria || '',
+            artifactPaths: action.config?.artifactPaths || [],
+            validationResult,
+            signal,
+          });
+          if (!isPlainObject(verdict) || typeof verdict.complete !== 'boolean'
+              || typeof verdict.reason !== 'string' || !verdict.reason.trim()
+              || typeof verdict.nextStep !== 'string') {
+            throw new Error('Completion reviewer returned an invalid verdict');
+          }
+        } catch (error) {
+          const failure = completionReviewFailure(error);
+          verdict = {
+            complete: false,
+            reason: failure.reason,
+            nextStep: failure.nextStep,
+            diagnostic: failure.diagnostic,
+            rawReviewOutput: failure.rawReviewOutput,
+            failed: true,
+          };
+        }
+      }
+      if (validationResult && !validationResult.passed) {
+        const issues = validationResult.issues.length > 0
+          ? validationResult.issues : ['程序校验未通过。'];
+        verdict = {
+          ...verdict,
+          complete: false,
+          reason: [`程序校验未通过：${issues.join('；')}`, verdict.complete ? '' : verdict.reason]
+            .filter(Boolean).join('\n'),
+          nextStep: [verdict.nextStep, '修复上述程序校验问题并重新生成交付物。']
+            .filter(Boolean).join('\n'),
+        };
+      }
+      references.actions[action.id] = { output: {
+        complete: verdict.complete,
+        reason: verdict.reason.trim().slice(0, 2000),
+        nextStep: verdict.nextStep.trim().slice(0, 2000),
+        reviewNumber,
+        maxReviews,
+        failed: verdict.failed === true,
+        ...(verdict.diagnostic ? { diagnostic: verdict.diagnostic } : {}),
+        ...(verdict.rawReviewOutput ? { rawReviewOutput: verdict.rawReviewOutput } : {}),
+        ...(action.config?.validationResultPath ? {
+          validationResult: validationResult || null,
+          ...(validationError ? { validationError } : {}),
+        } : {}),
+      } };
+      continue;
+    }
     if (action.type === 'write_record') {
       const condition = action.config?.condition == null
         ? true
@@ -455,7 +631,9 @@ async function executePostActions({
         if (value === UNRESOLVED) throw new Error(`Post action ${action.id} field ${key} is unresolved`);
         data[key] = value;
       }
-      const record = await writeRecord(action.config.recordType, data);
+      const record = await writeRecord(action.config.recordType, data, {
+        recordSource: 'post_action', postActionId: action.id,
+      });
       references.actions[action.id] = {
         output: { recorded: true, ...record },
       };
@@ -485,7 +663,7 @@ async function executePostActions({
         references.actions[action.id] = { output: { scheduled: false, reason: 'subagent_recovery_turn' } };
         continue;
       }
-      if (recoveryKeys.has(recoveryKey)) {
+      if (hasCurrentRecovery(recoveryKeys, recoveryKey)) {
         references.actions[action.id] = { output: { scheduled: false, reason: 'already_scheduled' } };
         continue;
       }
@@ -505,9 +683,14 @@ async function executePostActions({
         executionId,
         messageText,
         displayMessage: context.redact(messageText),
+        isExecutionCurrent: context.isExecutionCurrent,
       });
+      if (!context.isExecutionCurrent() || schedulingResult?.scheduled === false || schedulingResult?.queued === false) {
+        references.actions[action.id] = { output: { scheduled: false, reason: 'superseded_user_input' } };
+        continue;
+      }
       if (isSubagentStop(event)) subagentFeedback.push(messageText);
-      recoveryKeys.add(recoveryKey);
+      recoveryKeys.set(recoveryKey, context.isExecutionCurrent);
       references.actions[action.id] = {
         output: {
           scheduled: true,
@@ -541,7 +724,7 @@ async function executePostActions({
         references.actions[action.id] = { output: { scheduled: false, reason: 'subagent_recovery_turn' } };
         continue;
       }
-      if (recoveryKeys.has(recoveryKey)) {
+      if (hasCurrentRecovery(recoveryKeys, recoveryKey)) {
         references.actions[action.id] = { output: { scheduled: false, reason: 'already_scheduled' } };
         continue;
       }
@@ -553,13 +736,17 @@ async function executePostActions({
       const childRecovery = isSubagentStop(event);
       // Reserve before asynchronous content loading so duplicate callbacks for
       // the same child cannot both deliver the same recovery Skill.
-      if (childRecovery) recoveryKeys.add(recoveryKey);
+      if (childRecovery) recoveryKeys.set(recoveryKey, context.isExecutionCurrent);
       try {
         const modelContent = await context.skillContentLoader(
           action.config.skillId,
           action.config.skillName,
           argumentsText,
         );
+        if (!context.isExecutionCurrent()) {
+          references.actions[action.id] = { output: { scheduled: false, reason: 'superseded_user_input' } };
+          continue;
+        }
         const recoveryRequest = {
           hook,
           action,
@@ -567,6 +754,7 @@ async function executePostActions({
           executionId,
           argumentsText,
           modelContent,
+          isExecutionCurrent: context.isExecutionCurrent,
           displayCommand: context.redact(`/${action.config.skillName}${argumentsText ? ` ${argumentsText}` : ''}`),
         };
         if (childRecovery) {
@@ -583,7 +771,11 @@ async function executePostActions({
         if (childRecovery) recoveryKeys.delete(recoveryKey);
         throw error;
       }
-      recoveryKeys.add(recoveryKey);
+      if (!context.isExecutionCurrent() || schedulingResult?.scheduled === false || schedulingResult?.queued === false) {
+        references.actions[action.id] = { output: { scheduled: false, reason: 'superseded_user_input' } };
+        continue;
+      }
+      recoveryKeys.set(recoveryKey, context.isExecutionCurrent);
       references.actions[action.id] = {
         output: {
           scheduled: true,
@@ -614,6 +806,7 @@ export function createHookRuntimeSession({
   }),
   headersHelperRunner = null,
   suppressSkillRecovery = false,
+  captureStopHookBoundary = () => null,
   skillContentLoader = loadSkillContent,
   enqueueSkillRecovery = async () => {
     throw new Error('Skill recovery is not available in this runtime');
@@ -627,13 +820,22 @@ export function createHookRuntimeSession({
   enqueueMcpLoop = async () => {
     throw new Error('MCP loop scheduling is not available in this runtime');
   },
+  reviewCompletion = async () => {
+    throw new Error('Completion reviewer is not available in this runtime');
+  },
   onSubagentLoopWait = () => {},
   onExecutionActivity = () => {},
   database = defaultDatabase,
   scriptExecutor = executeHookScript,
   mcpCaller = callHookMcpTool,
 } = {}) {
-  const recoveryKeys = new Set();
+  const recoveryKeys = new Map();
+  // General Hook invocation counts remain scoped to the SDK query. A query can
+  // consume multiple user turns, so completion review needs its own turn count.
+  const invocationCounts = new Map();
+  const completionReviewCounts = new Map();
+  let completionReviewEpoch = 0;
+  const beginUserTurn = () => { completionReviewEpoch += 1; };
   const context = {
     userId,
     username,
@@ -651,6 +853,7 @@ export function createHookRuntimeSession({
     prepareSubagentSkillRecovery,
     enqueueAgentMessage,
     enqueueMcpLoop,
+    reviewCompletion,
     onExecutionActivity,
     mcpCaller,
     scriptExecutor,
@@ -669,9 +872,34 @@ export function createHookRuntimeSession({
     }
   };
 
-  const executeHookWithAudit = async (configuredHook, event, toolUseId, callbackOptions = {}) => {
+  const executeHookWithAudit = async (configuredHook, event, toolUseId, callbackOptions = {}, reviewEpoch) => {
     const hook = resolveEffectiveHook(configuredHook, event);
     if (!hook) return {};
+    const stopBoundary = callbackOptions.stopBoundary;
+    const isExecutionCurrent = () => !stopBoundary || stopBoundary.isCurrent();
+    if (!isExecutionCurrent()) return {};
+    const environment = buildEnvironment(context, event);
+    const invocationScope = invocationScopeFor(hook, environment, event, stopBoundary);
+    const completionReviewScope = hook.eventName === 'Stop'
+      && hook.postActions?.some((action) => action.type === 'review_completion')
+      ? JSON.stringify([reviewEpoch, hook.id, stopBoundary?.inputRevision ?? null]) : null;
+    const completionReviewNumber = completionReviewScope
+      ? (completionReviewCounts.get(completionReviewScope) || 0) + 1 : null;
+    if (completionReviewScope) completionReviewCounts.set(completionReviewScope, completionReviewNumber);
+    let invocations = invocationCounts.get(invocationScope);
+    if (!invocations) {
+      invocations = { count: 0, toolUses: new Map() };
+      invocationCounts.set(invocationScope, invocations);
+    }
+    const invocationToolId = event.tool_use_id || toolUseId || null;
+    // Reserve synchronously before resolving variables or running scripts so
+    // overlapping callbacks get distinct counts, and retries retain theirs.
+    if (invocationToolId && invocations.toolUses.has(invocationToolId)) {
+      environment.hookInvocationCount = invocations.toolUses.get(invocationToolId);
+    } else {
+      environment.hookInvocationCount = ++invocations.count;
+      if (invocationToolId) invocations.toolUses.set(invocationToolId, invocations.count);
+    }
     const startedAt = Date.now();
     const definitions = hook.userVariables || [];
     let userVariables = {};
@@ -681,6 +909,7 @@ export function createHookRuntimeSession({
     } catch {
       variableError = new Error('无法读取 Hook 个人变量，请在辅助功能中重新配置');
     }
+    if (!isExecutionCurrent()) return {};
     const redact = createHookVariableRedactor(definitions, userVariables);
     const executionId = createExecutionRecord(database, hook, context, event, startedAt, toolUseId, redact);
     reportExecutionActivity({
@@ -718,7 +947,7 @@ export function createHookRuntimeSession({
     let scriptOutput = {};
     const references = {
       event,
-      ccui: { env: buildEnvironment(context, event) },
+      ccui: { env: environment },
       script: { output: scriptOutput },
       actions: {},
     };
@@ -745,6 +974,7 @@ export function createHookRuntimeSession({
             event,
             recordType,
             redact(data),
+            { recordSource: 'script' },
           ),
           onLog,
         });
@@ -755,7 +985,7 @@ export function createHookRuntimeSession({
         hook,
         executionId,
         references,
-        context: { ...context, redact },
+        context: { ...context, redact, completionReviewNumber, isExecutionCurrent },
         event,
         signal: callbackOptions.signal,
         recoveryKeys,
@@ -763,7 +993,7 @@ export function createHookRuntimeSession({
         subagentMcpResults,
         onLoopProgress,
         onLog,
-        writeRecord: async (recordType, data) => writeDataRecord(
+        writeRecord: async (recordType, data, provenance) => writeDataRecord(
           database,
           executionId,
           hook,
@@ -771,9 +1001,30 @@ export function createHookRuntimeSession({
           event,
           recordType,
           redact(data),
+          provenance,
         ),
       });
-      const response = hook.eventName === 'StopFailure' ? {} : buildClaudeHookOutput(hook, references);
+      const allowResponse = isExecutionCurrent();
+      const response = hook.eventName === 'StopFailure' || !allowResponse ? {} : buildClaudeHookOutput(hook, references);
+      const completionReview = hook.postActions?.find((action) => action.type === 'review_completion');
+      const reviewOutput = completionReview && references.actions[completionReview.id]?.output;
+      if (reviewOutput && allowResponse) {
+        if (reviewOutput.complete) {
+          if (response.decision !== 'block' && response.continue !== false) {
+            response.decision = 'approve';
+            response.reason = reviewOutput.reason;
+          }
+        } else if (reviewOutput.reviewNumber >= reviewOutput.maxReviews) {
+          response.continue = false;
+          response.stopReason = `模型验收已进行 ${reviewOutput.maxReviews} 次，任务仍未通过：${reviewOutput.reason}`;
+          delete response.decision;
+          delete response.reason;
+        } else if (response.continue !== false) {
+          response.decision = 'block';
+          response.reason = [response.reason, reviewOutput.reason, reviewOutput.nextStep]
+            .filter(Boolean).join('\n').slice(0, 4000);
+        }
+      }
       if (subagentMcpResults.length > 0) {
         response.hookSpecificOutput = {
           ...response.hookSpecificOutput,
@@ -794,18 +1045,22 @@ export function createHookRuntimeSession({
         throw new Error('Claude Hook response is larger than 2 MB');
       }
       completeExecution(database, executionId, {
-        status: 'succeeded',
+        status: reviewOutput?.failed ? 'failed' : 'succeeded',
         startedAt,
         scriptOutput: redact(scriptOutput),
         actions: redact(references.actions),
         response: redact(response),
         logs,
       });
+      if (reviewOutput?.complete && allowResponse && completionReviewScope
+          && completionReviewCounts.get(completionReviewScope) === completionReviewNumber) {
+        completionReviewCounts.delete(completionReviewScope);
+      }
       reportExecutionActivity({
         hook,
         event: redact(event),
         executionId,
-        status: 'succeeded',
+        status: reviewOutput?.failed ? 'failed' : 'succeeded',
         startedAt,
         completedAt: Date.now(),
         actions: toAuditValue(redact(references.actions)),
@@ -813,7 +1068,9 @@ export function createHookRuntimeSession({
       });
       return response;
     } catch (error) {
-      const response = requiredHookFailureResponse(hook);
+      const response = isExecutionCurrent()
+        ? completionReviewFailureResponse(hook, completionReviewNumber || 1) || requiredHookFailureResponse(hook)
+        : {};
       completeExecution(database, executionId, {
         status: 'failed',
         startedAt,
@@ -841,13 +1098,28 @@ export function createHookRuntimeSession({
 
   const executeHook = async (hook, event, toolUseId, callbackOptions = {}) => {
     const effectiveHook = resolveEffectiveHook(hook, event);
+    const stopBoundary = effectiveHook?.eventName === 'Stop' && !event.agent_id
+      ? captureStopHookBoundary(event)
+      : null;
+    if (stopBoundary && !stopBoundary.isCurrent()) return {};
+    const executionOptions = { ...callbackOptions, stopBoundary };
+    const reviewEpoch = completionReviewEpoch;
+    const completionReviewScope = effectiveHook?.eventName === 'Stop'
+      && effectiveHook.postActions?.some((action) => action.type === 'review_completion')
+      ? JSON.stringify([reviewEpoch, effectiveHook.id, stopBoundary?.inputRevision ?? null]) : null;
     const waitId = effectiveHook && event.agent_id
       && effectiveHook.postActions?.some((action) => action.type === 'mcp_loop_run')
       ? `subagent-hook-${crypto.randomUUID()}` : null;
     if (waitId) onSubagentLoopWait({ id: waitId, waiting: true });
     try {
-      return await executeHookWithAudit(hook, event, toolUseId, callbackOptions);
+      return await executeHookWithAudit(hook, event, toolUseId, executionOptions, reviewEpoch);
     } catch (error) {
+      if (stopBoundary && !stopBoundary.isCurrent()) return {};
+      if (effectiveHook?.eventName === 'Stop') {
+        const reviewNumber = completionReviewCounts.get(completionReviewScope) || 1;
+        const response = completionReviewFailureResponse(effectiveHook, reviewNumber, true);
+        if (response) return response;
+      }
       if (!isRequiredHook(effectiveHook)) throw error;
       // An audit/database failure must not turn a required check into a rejected
       // SDK callback, which the SDK can otherwise ignore as a Hook error.
@@ -876,7 +1148,7 @@ export function createHookRuntimeSession({
     }
   }
 
-  return { hooks: sdkHooks, executeHook, hasRequiredHook: hooks.some(isRequiredHook) };
+  return { hooks: sdkHooks, executeHook, beginUserTurn, hasRequiredHook: hooks.some(isRequiredHook) };
 }
 
 export function mergeSdkHooks(...hookMaps) {

@@ -12,6 +12,7 @@ import { buildAgentSpecificContext, buildControllerContext } from './agent-graph
 import { extractAgentResult, formatAgentResult } from './agent-graph-result-extractor.js';
 import { applyMcpConfigToSdkOptions, loadMcpConfig } from './claude-mcp-config.js';
 import { listWorkspaceSkills, reconcileWorkspaceSkillsForAgentTurn } from './workspace-skills.js';
+import { aiUsageSkillContextRecorder } from './ai-usage-skill-context.js';
 
 const MAX_SELECTOR_AGENT_PROFILE = 4_000;
 const MAX_AGENT_RESULT = 120_000;
@@ -151,6 +152,7 @@ async function runClaudeTurn({
   runQuery = null,
   runtimeManager = agentSessionRuntimeManager,
   mapOptions = null,
+  skillContextRecorder = aiUsageSkillContextRecorder,
 }) {
   const query = runQuery || (await import('@anthropic-ai/claude-agent-sdk')).query;
   const effectiveMapOptions = mapOptions
@@ -193,7 +195,20 @@ async function runClaudeTurn({
     let responseText = '';
     let structuredOutput = null;
     let sessionId = null;
+    const recordedSessionIds = new Set();
     for await (const message of query({ prompt, options: sdkOptions })) {
+      const observedSessionId = typeof message?.session_id === 'string' ? message.session_id.trim() : '';
+      if (observedSessionId && !recordedSessionIds.has(observedSessionId)) {
+        recordedSessionIds.add(observedSessionId);
+        // Provenance only: Graph-owned sessions must not count as user Skill invocations.
+        // Record as soon as the SDK reveals the id, even if the turn later fails.
+        try {
+          skillContextRecorder.recordSession({
+            tenantId, userId, workspaceId, provider: 'claude', sessionId: observedSessionId,
+            contextId: `session:${observedSessionId}`, requestId: null, origin: 'agent_graph', skillName: null,
+          });
+        } catch { /* Optional reporting must never interrupt Graph execution. */ }
+      }
       if (abortController?.signal.aborted) {
         throw createHttpError('Agent Graph run was cancelled', 409);
       }

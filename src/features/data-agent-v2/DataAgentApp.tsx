@@ -35,6 +35,7 @@ import {
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import ChatInterface from '../../components/chat/view/ChatInterface';
+import { addForkedSessionToProjects } from '../../components/chat/utils/sessionFork';
 import ScheduledTasksDialog from '../../components/chat/view/subcomponents/ScheduledTasksDialog';
 import { isSkillSlashCommand } from '../../components/chat/hooks/useSlashCommands.utils';
 import { useSlashCommands } from '../../components/chat/hooks/useSlashCommands';
@@ -66,12 +67,13 @@ import { useAuth } from '../../components/auth/context/AuthContext';
 import { useTenant } from '../../contexts/TenantContext';
 import { useWebSocket } from '../../contexts/WebSocketContext';
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
-import { isProjectUpdateScopedToTenant } from '../../hooks/projectTenantUpdates';
+import { createProjectUpdateTracker } from '../../hooks/projectTenantUpdates';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useUiPreferences } from '../../hooks/useUiPreferences';
 import type { LLMProvider, Project, ProjectScheduledTask, ProjectSession } from '../../types/app';
 import { api } from '../../utils/api';
 import { createClientMessageId } from '../../utils/clientMessageId';
+import { formatBeijingDate } from '../../utils/dateUtils';
 import { resolveSkillFileLink } from '../../utils/skillMarkdownLinks';
 import {
   CLAUDE_MODELS,
@@ -624,7 +626,7 @@ function DataAgentSidebar({
                       >
                         <span className={`da-status-dot ${isProcessing ? 'is-processing' : 'is-idle'}`} />
                         <span className="da-session-title">{getSessionLabel(session)}</span>
-                        <span className="da-session-time">{formatRelativeTime(String(session.updated_at || session.created_at || session.createdAt || ''))}</span>
+                        <span className="da-session-time">{formatBeijingDate(String(session.updated_at || session.lastActivity || session.created_at || session.createdAt || ''))}</span>
                       </button>
                     );
                   })}
@@ -2018,6 +2020,7 @@ function DataAgentConversation({
   onOpenSettings,
   externalMessageUpdate,
   initialUserMessage,
+  onSessionCreated,
 }: {
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
@@ -2037,6 +2040,7 @@ function DataAgentConversation({
   onOpenSettings: () => void;
   externalMessageUpdate: number;
   initialUserMessage: PendingInitialMessage | null;
+  onSessionCreated: (session: ProjectSession) => void;
 }) {
   const editor = useEditorSidebar({ selectedProject, isMobile });
   const { preferences } = useUiPreferences();
@@ -2069,7 +2073,10 @@ function DataAgentConversation({
             onSessionNotProcessing={markSessionAsNotProcessing}
             processingSessions={processingSessions}
             onReplaceTemporarySession={replaceTemporarySession}
-            onNavigateToSession={(id) => onNavigate(`/data-agent/session/${encodeURIComponent(id)}`)}
+            onNavigateToSession={(id, session) => {
+              if (session) onSessionCreated(session);
+              onNavigate(`/data-agent/session/${encodeURIComponent(id)}`);
+            }}
             onShowSettings={onOpenSettings}
             autoExpandTools={preferences.autoExpandTools}
             hideToolMessages={preferences.hideToolMessages}
@@ -2131,6 +2138,7 @@ export default function DataAgentApp() {
   const [pendingInitialMessage, setPendingInitialMessage] = useState<PendingInitialMessage | null>(null);
   const [externalMessageUpdate, setExternalMessageUpdate] = useState(0);
   const previousConnectionRef = useRef(false);
+  const projectUpdateTrackerRef = useRef(createProjectUpdateTracker());
 
   const {
     processingSessions,
@@ -2169,14 +2177,9 @@ export default function DataAgentApp() {
   }, [fetchProjects]);
 
   useEffect(() => {
-    if (
-      latestMessage?.type === 'projects_updated'
-      && Array.isArray(latestMessage.projects)
-      && isProjectUpdateScopedToTenant(latestMessage.projects, currentTenant?.id, latestMessage.tenantId)
-    ) {
-      setProjects(latestMessage.projects);
-    }
-    if (latestMessage?.type === 'projects_updated' && route.sessionId && latestMessage.changedFile?.includes(route.sessionId)) {
+    if (!projectUpdateTrackerRef.current.consume(latestMessage, currentTenant?.id)) return;
+    setProjects(latestMessage.projects);
+    if (route.sessionId && latestMessage.changedFile?.includes(route.sessionId)) {
       setExternalMessageUpdate((value) => value + 1);
     }
   }, [currentTenant?.id, latestMessage, route.sessionId]);
@@ -2433,6 +2436,12 @@ export default function DataAgentApp() {
             onOpenSettings={() => setSettingsOpen(true)}
             externalMessageUpdate={externalMessageUpdate}
             initialUserMessage={pendingInitialMessage?.sessionId === route.sessionId ? pendingInitialMessage : null}
+            onSessionCreated={(session) => {
+              if (!selectedProject) return;
+              setProjects((current) => addForkedSessionToProjects(current, selectedProject, session));
+              setPendingSession(session);
+              setPendingInitialMessage(null);
+            }}
           />
         );
       default:

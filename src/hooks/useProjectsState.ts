@@ -13,8 +13,9 @@ import type {
 } from '../types/app';
 import { resolveSupportedWorkspaceTab } from '../components/main-content/utils/mainContentAccess';
 import { readAgentGraphFeatureEnabled } from '../features/agent-graph/agentGraphFeature';
+import { addForkedSessionToProjects } from '../components/chat/utils/sessionFork';
 
-import { isProjectUpdateScopedToTenant } from './projectTenantUpdates';
+import { createProjectUpdateTracker } from './projectTenantUpdates';
 import { projectsHaveChanges } from './projectChangeDetection';
 
 type UseProjectsStateArgs = {
@@ -112,6 +113,7 @@ export function useProjectsState({
   const [selectedSession, setSelectedSession] = useState<ProjectSession | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>(readPersistedTab);
   const { currentTenant } = useTenant();
+  const tenantId = currentTenant?.id;
 
   useEffect(() => {
     try {
@@ -130,10 +132,11 @@ export function useProjectsState({
   const [externalMessageUpdate, setExternalMessageUpdate] = useState(0);
 
   const loadingProgressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const projectUpdateTrackerRef = useRef(createProjectUpdateTracker());
 
   const fetchProjects = useCallback(async ({ showLoadingState = true }: FetchProjectsOptions = {}) => {
     try {
-      if (!currentTenant) {
+      if (!tenantId) {
         setProjects([]);
         setSelectedProject(null);
         setSelectedSession(null);
@@ -162,7 +165,7 @@ export function useProjectsState({
         setIsLoadingProjects(false);
       }
     }
-  }, [currentTenant]);
+  }, [tenantId]);
 
   const refreshProjectsSilently = useCallback(async () => {
     // Keep chat view stable while still syncing sidebar/session metadata in background.
@@ -175,11 +178,12 @@ export function useProjectsState({
   }, []);
 
   useEffect(() => {
+    // A background tenant/permission refresh is not a tenant switch.
     setProjects([]);
     setSelectedProject(null);
     setSelectedSession(null);
     void fetchProjects();
-  }, [currentTenant?.id, fetchProjects]);
+  }, [tenantId, fetchProjects]);
 
   // Auto-select the project when there is only one, so the user lands on the new session page
   useEffect(() => {
@@ -217,6 +221,9 @@ export function useProjectsState({
     }
 
     const projectsMessage = latestMessage as ProjectsUpdatedMessage;
+    if (!projectUpdateTrackerRef.current.consume(projectsMessage, currentTenant?.id)) {
+      return;
+    }
 
     if (projectsMessage.changedFile && selectedSession && selectedProject) {
       const normalized = projectsMessage.changedFile.replace(/\\/g, '/');
@@ -241,10 +248,6 @@ export function useProjectsState({
       (activeSessions.size > 0 && Array.from(activeSessions).some((id) => id.startsWith('new-session-')));
 
     const updatedProjects = projectsMessage.projects ?? [];
-
-    if (!isProjectUpdateScopedToTenant(updatedProjects, currentTenant?.id, projectsMessage.tenantId as number | null | undefined)) {
-      return;
-    }
 
     if (
       hasActiveSession &&
@@ -442,6 +445,15 @@ export function useProjectsState({
     [isMobile, navigate],
   );
 
+  const handleNavigateToSession = useCallback((targetSessionId: string, createdSession?: ProjectSession) => {
+    if (createdSession && selectedProject) {
+      setProjects((current) => addForkedSessionToProjects(current, selectedProject, createdSession));
+      setSelectedSession(createdSession);
+    }
+    setActiveTab('chat');
+    navigate(`/session/${encodeURIComponent(targetSessionId)}`);
+  }, [navigate, selectedProject]);
+
   const handleSessionDelete = useCallback(
     (sessionIdToDelete: string) => {
       if (selectedSession?.id === sessionIdToDelete) {
@@ -605,6 +617,7 @@ export function useProjectsState({
     handleSessionSelect,
     handleNewSession,
     handleSessionDelete,
+    handleNavigateToSession,
     handleProjectDelete,
     handleSidebarRefresh,
   };

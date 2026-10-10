@@ -2,6 +2,8 @@ import { IS_PLATFORM, SQL_CHECK_BASE_URL } from "../constants/config";
 import { buildRuntimeQueryString } from "../components/admin/runtimeMonitorUtils";
 import { AUTH_TOKEN_REFRESHED_EVENT } from "../components/auth/constants";
 
+import { createClientMessageId as createRequestId } from "./clientMessageId";
+
 const RETRYABLE_HTTP_STATUSES = new Set([502, 503, 504]);
 // Cover short backend restarts as well as momentary proxy resets. Only
 // idempotent GET/HEAD requests use these retries.
@@ -212,6 +214,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ summary, provider }),
     }),
+  forkSession: (sessionId, { sourceMessageUuid, requestId, workspaceId }) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, workspaceId), {
+      method: 'POST',
+      body: JSON.stringify({ provider: 'claude', sourceMessageUuid, requestId }),
+    }),
   setSessionFavorite: (sessionId, { provider = 'claude', projectName, workspaceId, favorited }) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/sessions/${encodeURIComponent(sessionId)}/favorite`, workspaceId), {
       method: 'PUT',
@@ -251,8 +258,8 @@ export const api = {
   agentTemplates: () => authenticatedFetch(withTenantParam('/api/agent-templates')),
   readFile: (projectName, filePath, workspaceId, options = {}) =>
     authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/file?filePath=${encodeURIComponent(filePath)}`, workspaceId), options),
-  readFileBlob: (projectName, filePath, workspaceId) =>
-    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/files/content?path=${encodeURIComponent(filePath)}`, workspaceId)),
+  readFileBlob: (projectName, filePath, workspaceId, options = {}) =>
+    authenticatedFetch(withTenantAndWorkspaceParam(`/api/projects/${encodeURIComponent(projectName)}/files/content?path=${encodeURIComponent(filePath)}`, workspaceId), options),
   saveFile: (projectName, filePath, content, workspaceId) =>
     authenticatedFetch(withTenantParam(`/api/projects/${encodeURIComponent(projectName)}/file`), {
       method: 'PUT',
@@ -904,6 +911,30 @@ export const api = {
       }),
   },
 
+  skillCreation: {
+    bind: (workspaceId, input) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-creation-jobs/bind-session`), { method: 'POST', body: JSON.stringify(input) }),
+    start: (workspaceId, input) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-creation-jobs`), { method: 'POST', body: JSON.stringify(input) }),
+    list: (workspaceId, conversationKey) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-creation-jobs?conversationKey=${encodeURIComponent(conversationKey)}`)),
+    cancel: (workspaceId, jobId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-creation-jobs/${jobId}/cancel`), { method: 'POST' }),
+  },
+
+  skillEvaluations: {
+    invocation: (workspaceId, messageId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-invocations?messageId=${encodeURIComponent(messageId)}`)),
+    saveInvocation: (workspaceId, name, invocationId, expectedRevision) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-cases/from-invocation`), { method: 'POST', body: JSON.stringify({ invocationId, expectedRevision }) }),
+    cases: (workspaceId, name) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-cases`)),
+    saveCase: (workspaceId, name, caseId, payload) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-cases${caseId ? `/${caseId}` : ''}`), { method: caseId ? 'PATCH' : 'POST', body: JSON.stringify(payload) }),
+    deleteCase: (workspaceId, name, caseId, expectedRevision) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-cases/${caseId}`), { method: 'DELETE', body: JSON.stringify({ expectedRevision }) }),
+    generate: (workspaceId, name, expectedRevision) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-case-jobs`), { method: 'POST', body: JSON.stringify({ expectedRevision, requestId: createRequestId() }) }),
+    job: (workspaceId, jobId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-jobs/${jobId}`)),
+    upload: (workspaceId, name, formData) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/eval-inputs`), { method: 'POST', body: formData }),
+    start: (workspaceId, name, payload) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/evaluations`), { method: 'POST', body: JSON.stringify(payload) }),
+    latest: (workspaceId, name) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(name)}/evaluations/latest`)),
+    cancel: (workspaceId, jobId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-jobs/${jobId}/cancel`), { method: 'POST' }),
+    report: (workspaceId, jobId, caseId, round) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-jobs/${jobId}/cases/${caseId}?round=${round}`)),
+    diff: (workspaceId, jobId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-jobs/${jobId}/diff`)),
+    artifact: (workspaceId, jobId, caseId, round, name) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skill-jobs/${jobId}/artifacts/${caseId}?round=${round}&name=${encodeURIComponent(name)}`)),
+  },
+
   workspaceSkills: {
     list: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/skills`)),
     detail: (workspaceId, name) =>
@@ -1039,6 +1070,7 @@ export const api = {
   },
 
   workspaceMcpTools: {
+    insertionCatalog: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools/insertion-catalog`)),
     list: (workspaceId) => authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools`)),
     install: (workspaceId, presetId) =>
       authenticatedFetch(withTenantParam(`/api/workspaces/${workspaceId}/mcp-tools/${presetId}/install`), {

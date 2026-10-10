@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "reference": "reports/example.html",
+  "report": "reports/report.html",
+  "source": "reports/data.json",
+  "checkerSkill": ".claude/skills/check-html-report/SKILL.md",
+  "verdict": ".ccui/report-quality-result.json",
+  "maxAttempts": 5
+}

@@ -13,6 +13,8 @@
     "dist/",
     "dist-server/",
     "scripts/",
+    "examples/report-quality/",
+    "examples/skill-evaluations/",
     "README.md"
   ],
   "homepage": "https://cloudcli.ai",
@@ -34,6 +36,8 @@
     "mock:mcp-loop-task": "node scripts/mcp-loop-demo-task-service.mjs",
     "mock:mcp-loop": "node scripts/mcp-loop-demo-mcp.mjs",
     "mock:skill-market": "node scripts/skill-market-test-server.mjs",
+    "test:skill-creation": "node --test server/services/skill-creation/*.test.js",
+    "test:skill-evals": "node --test server/services/skill-evals/*.test.js",
     "test:skill-market-mock": "node --test scripts/skill-market-test-server.test.mjs",
     "test:mcp-loop-e2e": "node --test scripts/mcp-loop-demo.e2e.test.mjs",
     "test:agent-templates:e2e": "tsx --tsconfig server/tsconfig.json scripts/agent-template-e2e.mjs",
@@ -44,7 +48,9 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json",
     "test:codehub": "node --test server/services/codehub-git.test.js",
-    "test:hooks": "node --test --test-force-exit --test-isolation=none server/routes/admin-hooks.test.js server/services/claude-turn-boundary.test.js server/services/hook-builtin-skills.test.js server/services/hook-configs.test.js server/services/hook-examples.test.js server/services/hook-mcp-catalog.test.js server/services/hook-mcp-client.test.js server/services/hook-runtime.test.js server/services/hook-skill-catalog.test.js server/services/hook-workspace-resources.test.js && node --test --test-force-exit --test-isolation=none server/services/hook-scenarios.test.js && tsx --test src/components/admin/hook-config/catalog.test.ts",
+    "test:hooks": "node --test --test-force-exit --test-isolation=none server/routes/admin-hooks.test.js server/services/claude-turn-boundary.test.js server/services/hook-builtin-skills.test.js server/services/hook-completion-review.test.js server/services/hook-completion-review-integration.test.js server/services/hook-completion-sample.test.js server/services/hook-configs.test.js server/services/hook-examples.test.js server/services/hook-mcp-catalog.test.js server/services/hook-mcp-client.test.js server/services/hook-runtime.test.js server/services/hook-skill-catalog.test.js server/services/hook-workspace-resources.test.js && node --test --test-force-exit --test-isolation=none server/services/hook-scenarios.test.js && tsx --test src/components/admin/hook-config/catalog.test.ts && tsx --tsconfig server/tsconfig.json --test --test-force-exit server/services/claude-stop-hook-boundary.test.js",
+    "test:report-quality": "node --test server/services/report-quality-hook.test.js server/services/claude-hook-policy.test.js scripts/report-quality-check.test.mjs",
+    "test:session-fork": "node scripts/test-session-fork.mjs",
     "seed:hook-examples": "node scripts/configure-requested-hooks.mjs",
     "seed:hook-examples:db": "node scripts/configure-requested-hooks.mjs --direct-database",
     "seed:hook-test-configs": "node scripts/seed-hook-test-configs.js",
@@ -62,7 +68,16 @@
     "prepublishOnly": "npm run build",
     "postinstall": "node scripts/fix-node-pty.js",
     "prepare": "husky",
-    "update:platform": "./update-platform.sh"
+    "update:platform": "./update-platform.sh",
+    "test:ai-usage": "TSX_TSCONFIG_PATH=server/tsconfig.json node --import tsx --test --test-concurrency=1 server/services/ai-usage-*.test.js server/services/ai-session-summary.test.js server/routes/ai-usage.test.js server/routes/admin-ai-usage-roles.test.js",
+    "test:ai-usage:ui": "node --import tsx --test src/components/ai-usage/*.test.ts src/components/admin/hook-config/reportFields.test.ts src/components/admin/adminPanelUtils.test.ts",
+    "preview:ai-usage": "node scripts/preview-ai-usage.mjs",
+    "test:file-preview": "node --import tsx --test src/components/file-preview/*.test.ts src/features/data-agent-v2/fileEditorTabs.test.ts && node --test server/services/workspace-file-read-path.test.js",
+    "test:project-refresh": "node --experimental-test-module-mocks --import tsx --test scripts/project-refresh.test.mjs",
+    "test:file-tree-refresh": "node --experimental-test-module-mocks --import tsx --test scripts/file-tree-refresh.test.mjs",
+    "preview:files": "node scripts/preview-files.mjs",
+    "preview:files:e2e": "node scripts/file-preview-e2e-server.mjs",
+    "test:file-preview:api": "node scripts/file-preview-api-e2e.mjs"
   },
   "keywords": [
     "claude code",
@@ -85,7 +100,7 @@
   "author": "CloudCLI UI Contributors",
   "license": "AGPL-3.0-or-later",
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.116",
+    "@anthropic-ai/claude-agent-sdk": "0.2.141",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-html": "^6.4.9",
     "@codemirror/lang-javascript": "^6.2.4",
@@ -141,7 +156,9 @@
     "tailwind-merge": "^3.3.1",
     "undici": "^6.21.3",
     "web-push": "^3.6.7",
-    "ws": "^8.14.2"
+    "ws": "^8.14.2",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.5.0",
@@ -172,6 +189,7 @@
     "lint-staged": "^16.3.2",
     "node-gyp": "^10.0.0",
     "postcss": "^8.4.32",
+    "react-test-renderer": "18.3.1",
     "release-it": "^19.0.5",
     "sharp": "^0.34.2",
     "tailwindcss": "^3.4.0",

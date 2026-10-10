@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Search } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
@@ -20,6 +21,8 @@ type HookSelectProps = {
   disabled?: boolean;
   className?: string;
   menuClassName?: string;
+  menuMinWidth?: number;
+  anchorRef?: RefObject<HTMLElement>;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   hideTrigger?: boolean;
@@ -34,6 +37,8 @@ export default function HookSelect({
   disabled = false,
   className,
   menuClassName,
+  menuMinWidth = 0,
+  anchorRef,
   open: controlledOpen,
   onOpenChange,
   hideTrigger = false,
@@ -46,7 +51,7 @@ export default function HookSelect({
     onOpenChange?.(resolved);
   }, [controlledOpen, onOpenChange, open]);
   const [search, setSearch] = useState('');
-  const [menuPlacement, setMenuPlacement] = useState<'top' | 'bottom'>('bottom');
+  const [menuPosition, setMenuPosition] = useState<CSSProperties>({});
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const selected = options.find((option) => option.value === value);
@@ -64,7 +69,9 @@ export default function HookSelect({
   useEffect(() => {
     if (!open) return undefined;
     const onPointerDown = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)
+        && !anchorRef?.current?.contains(target)) setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
@@ -75,39 +82,51 @@ export default function HookSelect({
       document.removeEventListener('mousedown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [open, setOpen]);
+  }, [anchorRef, open, setOpen]);
 
   useEffect(() => {
     if (!open) setSearch('');
   }, [open]);
 
   useLayoutEffect(() => {
-    if (!open) {
-      setMenuPlacement('bottom');
-      return undefined;
-    }
+    if (!open) return undefined;
 
     const updatePlacement = () => {
-      const root = rootRef.current;
+      const root = anchorRef?.current || rootRef.current;
       const menu = menuRef.current;
       if (!root || !menu) return;
 
       const rootRect = root.getBoundingClientRect();
-      const menuHeight = menu.getBoundingClientRect().height;
+      const menuHeight = Math.min(320, menu.scrollHeight);
       const viewportHeight = window.innerHeight;
-      const spaceBelow = viewportHeight - rootRect.bottom;
-      const spaceAbove = rootRect.top;
-      setMenuPlacement(spaceBelow < menuHeight + 8 && spaceAbove > spaceBelow ? 'top' : 'bottom');
+      const margin = 8;
+      const gap = 6;
+      const spaceBelow = Math.max(0, viewportHeight - rootRect.bottom - gap - margin);
+      const spaceAbove = Math.max(0, rootRect.top - gap - margin);
+      const above = spaceBelow < menuHeight && spaceAbove > spaceBelow;
+      const width = Math.min(Math.max(rootRect.width, menuMinWidth), window.innerWidth - margin * 2);
+      setMenuPosition({
+        left: Math.max(margin, Math.min(rootRect.left, window.innerWidth - width - margin)),
+        width,
+        maxHeight: Math.min(320, above ? spaceAbove : spaceBelow),
+        top: above ? 'auto' : rootRect.bottom + gap,
+        bottom: above ? viewportHeight - rootRect.top + gap : 'auto',
+      });
     };
 
     updatePlacement();
     window.addEventListener('resize', updatePlacement);
     window.addEventListener('scroll', updatePlacement, true);
+    const observer = new ResizeObserver(updatePlacement);
+    const anchor = anchorRef?.current || rootRef.current;
+    if (anchor) observer.observe(anchor);
+    if (menuRef.current) observer.observe(menuRef.current);
     return () => {
       window.removeEventListener('resize', updatePlacement);
       window.removeEventListener('scroll', updatePlacement, true);
+      observer.disconnect();
     };
-  }, [filtered.length, open]);
+  }, [anchorRef, filtered.length, menuMinWidth, open]);
 
   const groups = filtered.reduce<Record<string, HookSelectOption[]>>((result, option) => {
     const group = option.group || '';
@@ -139,14 +158,13 @@ export default function HookSelect({
         </button>
       ) : null}
 
-      {open ? (
-        <div ref={menuRef} className={cn(
-          'absolute left-0 z-50 max-h-80 min-w-full overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl',
-          menuPlacement === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5',
+      {open ? createPortal(
+        <div ref={menuRef} style={menuPosition} className={cn(
+          'fixed z-[100] flex max-h-80 flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl',
           menuClassName,
         )}>
           {searchable ? (
-            <div className="border-b border-border p-2">
+            <div className="shrink-0 border-b border-border p-2">
               <div className="flex items-center gap-2 rounded-lg bg-muted/50 px-2.5">
                 <Search className="h-3.5 w-3.5 text-muted-foreground" />
                 <input
@@ -159,7 +177,7 @@ export default function HookSelect({
               </div>
             </div>
           ) : null}
-          <div className="max-h-64 overflow-y-auto p-1.5" role="listbox" aria-label={ariaLabel}>
+          <div className="max-h-64 min-h-0 overflow-y-auto p-1.5" role="listbox" aria-label={ariaLabel}>
             {filtered.length === 0 ? (
               <div className="px-3 py-6 text-center text-xs text-muted-foreground">{placeholder}</div>
             ) : Object.entries(groups).map(([group, groupOptions]) => (
@@ -200,7 +218,8 @@ export default function HookSelect({
               </div>
             ))}
           </div>
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </div>
   );

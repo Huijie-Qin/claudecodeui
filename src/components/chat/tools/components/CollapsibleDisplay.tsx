@@ -7,6 +7,8 @@ import { CollapsibleSection } from './CollapsibleSection';
 interface CollapsibleDisplayProps {
   toolName: string;
   toolId?: string;
+  expanded?: boolean;
+  onExpandedChange?: (open: boolean) => void;
   title: string;
   defaultOpen?: boolean;
   stickyHeader?: boolean;
@@ -35,6 +37,8 @@ const borderColorMap: Record<string, string> = {
 export const CollapsibleDisplay: React.FC<CollapsibleDisplayProps> = ({
   toolName,
   title,
+  expanded,
+  onExpandedChange,
   defaultOpen = false,
   stickyHeader = true,
   meta,
@@ -53,6 +57,8 @@ export const CollapsibleDisplay: React.FC<CollapsibleDisplayProps> = ({
     <div className={`border-l-2 ${borderColor} my-1 py-0.5 pl-3 ${className}`}>
       <CollapsibleSection
         title={title}
+        expanded={expanded}
+        onExpandedChange={onExpandedChange}
         toolName={toolName}
         open={defaultOpen}
         stickyHeader={stickyHeader}

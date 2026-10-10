@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { api } from '../../../../utils/api';
 import { useUiPreferences } from '../../../../hooks/useUiPreferences';
+import { useHookChatVisibilityStore } from '../../../hooks/hookChatVisibility';
 import type { HookUserVariable } from '../../../admin/hook-config/types';
 import type { SettingsProject } from '../../types/types';
 import SettingsCard from '../SettingsCard';
@@ -59,6 +60,7 @@ export default function HookSettingsTab({
 }) {
   const { t } = useTranslation('settings');
   const { preferences, setPreference } = useUiPreferences();
+  const hookChatVisibility = useHookChatVisibilityStore();
   const availableProjects = useMemo(
     () => projects.filter((project) => Number.isInteger(project.workspaceId) && Number(project.workspaceId) > 0),
     [projects],
@@ -165,11 +167,13 @@ export default function HookSettingsTab({
       if (!response.ok) {
         throw new Error(await readError(response, showInChat ? '开启对话展示失败' : '关闭对话展示失败'));
       }
+      hookChatVisibility.set(workspaceId, hook.id, showInChat);
+      if (currentWorkspaceId.current !== workspaceId) return;
       setHooks((current) => current.map((candidate) => (
         candidate.id === hook.id ? { ...candidate, showInChat } : candidate
       )));
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : '更新对话展示失败');
+      if (currentWorkspaceId.current === workspaceId) setError(caughtError instanceof Error ? caughtError.message : '更新对话展示失败');
     } finally {
       setVisibilityBusyHookId(null);
     }

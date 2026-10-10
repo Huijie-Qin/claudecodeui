@@ -7,9 +7,12 @@ import { TaskMasterProvider } from './contexts/TaskMasterContext';
 import { TasksSettingsProvider } from './contexts/TasksSettingsContext';
 import { TenantProvider } from './contexts/TenantContext';
 import { WebSocketProvider } from './contexts/WebSocketContext';
+import { HookChatVisibilityProvider } from './components/hooks/hookChatVisibility';
 import { PluginsProvider } from './contexts/PluginsContext';
 import AppContent from './components/app/AppContent';
 import AdminPage from './components/admin/AdminPage';
+import AiUsagePage from './components/ai-usage/AiUsagePage';
+import TenantManagementPage from './components/tenant-management/TenantManagementPage';
 import DataAgentApp from './features/data-agent-v2/DataAgentApp';
 import i18n from './i18n/config.js';
 
@@ -20,6 +23,7 @@ export default function App() {
         <AuthProvider>
           <TenantProvider>
             <WebSocketProvider>
+              <HookChatVisibilityProvider>
               <PluginsProvider>
                 <TasksSettingsProvider>
                   <TaskMasterProvider>
@@ -30,12 +34,15 @@ export default function App() {
                           <Route path="/session/:sessionId" element={<AppContent />} />
                           <Route path="/data-agent/*" element={<DataAgentApp />} />
                           <Route path="/admin" element={<AdminPage />} />
+                          <Route path="/ai-usage" element={<AiUsagePage />} />
+                          <Route path="/tenant-management" element={<TenantManagementPage />} />
                         </Routes>
                       </Router>
                     </ProtectedRoute>
                   </TaskMasterProvider>
                 </TasksSettingsProvider>
               </PluginsProvider>
+              </HookChatVisibilityProvider>
             </WebSocketProvider>
           </TenantProvider>
         </AuthProvider>

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 
 import { copyTextToClipboard } from '../../../../utils/clipboard';
 
+import { scrollToToolResult } from './scrollToToolResult';
 import { ToolStatusBadge } from './ToolStatusBadge';
 import type { ToolStatus } from './ToolStatusBadge';
 
@@ -52,10 +53,12 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
   },
   toolResult,
   toolId,
+  resultId,
   status,
   completionTime,
 }) => {
   const [copied, setCopied] = useState(false);
+  const targetResultId = resultId || (toolId ? `tool-result-${toolId}` : undefined);
 
   const handleAction = async () => {
     if (action === 'copy' && value) {
@@ -125,15 +128,18 @@ export const OneLineDisplay: React.FC<OneLineDisplayProps> = ({
           </span>
         )}
         {status && <ToolStatusBadge status={status} />}
-        {toolResult && (
-          <a
-            href={`#tool-result-${toolId}`}
+        {toolResult && targetResultId && (
+          <button
+            type="button"
+            aria-label="Jump to tool result"
+            title="Jump to tool result"
+            onClick={(event) => scrollToToolResult(event.currentTarget, targetResultId)}
             className="flex flex-shrink-0 items-center gap-0.5 text-[11px] text-primary transition-colors hover:text-primary/80"
           >
             <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
-          </a>
+          </button>
         )}
       </div>
     );

@@ -37,6 +37,7 @@ parentPort.on('message', async (message) => {
         writeJson: (filePath, value) => callParent('workspace.writeJson', [filePath, value]),
         list: (filePath = '.') => callParent('workspace.list', [filePath]),
         exists: (filePath) => callParent('workspace.exists', [filePath]),
+        sha256: (filePath) => callParent('workspace.sha256', [filePath]),
       }),
       records: Object.freeze({
         write: (recordType, data) => callParent('records.write', [recordType, data]),

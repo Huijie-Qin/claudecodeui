@@ -8,7 +8,9 @@ import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messag
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ProcessingSessions } from '../../../hooks/useSessionProtection';
 
-import { normalizedToChatMessages } from './useChatMessages';
+import { chatMessageToNormalized, normalizedToChatMessages } from './useChatMessages';
+import { useHookChatVisibilityRevision } from '../../hooks/hookChatVisibility';
+import { preserveChatMessageReferences } from '../utils/stableChatMessages';
 import {
   shouldFlushPendingUserMessageToSession,
   shouldShowPendingUserMessageInView,
@@ -48,62 +50,6 @@ interface ScrollRestoreState {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Helper: Convert a ChatMessage to a NormalizedMessage for the store */
-/* ------------------------------------------------------------------ */
-
-function chatMessageToNormalized(
-  msg: ChatMessage,
-  sessionId: string,
-  provider: LLMProvider,
-): NormalizedMessage | null {
-  const id = typeof msg.id === 'string' && msg.id.trim()
-    ? msg.id
-    : `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const ts = msg.timestamp instanceof Date
-    ? msg.timestamp.toISOString()
-    : typeof msg.timestamp === 'number'
-      ? new Date(msg.timestamp).toISOString()
-      : String(msg.timestamp);
-  const base = { id, sessionId, timestamp: ts, provider };
-
-  if (msg.isToolUse) {
-    return {
-      ...base,
-      kind: 'tool_use',
-      toolName: msg.toolName,
-      toolInput: msg.toolInput,
-      toolId: msg.toolId || id,
-    } as NormalizedMessage;
-  }
-  if (msg.isThinking) {
-    return { ...base, kind: 'thinking', content: msg.content || '' } as NormalizedMessage;
-  }
-  if (msg.isInteractivePrompt) {
-    return { ...base, kind: 'interactive_prompt', content: msg.content || '' } as NormalizedMessage;
-  }
-  if ((msg as any).isTaskNotification) {
-    return {
-      ...base,
-      kind: 'task_notification',
-      status: (msg as any).taskStatus || 'completed',
-      summary: msg.content || '',
-    } as NormalizedMessage;
-  }
-  if (msg.type === 'error') {
-    return { ...base, kind: 'error', content: msg.content || '' } as NormalizedMessage;
-  }
-  return {
-    ...base,
-    kind: 'text',
-    role: msg.type === 'user' ? 'user' : 'assistant',
-    content: msg.content || '',
-    ...(msg.clientMessageId ? { clientMessageId: msg.clientMessageId } : {}),
-    ...(msg.queueStatus ? { queueStatus: msg.queueStatus } : {}),
-    ...(typeof msg.queuePosition === 'number' ? { queuePosition: msg.queuePosition } : {}),
-  } as NormalizedMessage;
-}
-
-/* ------------------------------------------------------------------ */
 /*  Hook                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -120,6 +66,12 @@ export function useChatSessionState({
   sessionStore,
   initialUserMessage,
 }: UseChatSessionStateArgs) {
+  // Project/session metadata changes must not restart the transcript loader.
+  const selectedSessionId = selectedSession?.id;
+  const selectedProjectName = selectedProject?.name;
+  const selectedProjectPath = selectedProject?.fullPath || selectedProject?.path || '';
+  const selectedWorkspaceId = selectedProject?.workspaceId;
+  const selectedSessionProvider = selectedSession?.__provider;
   const [isLoading, setIsLoading] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(selectedSession?.id || null);
   const [isLoadingSessionMessages, setIsLoadingSessionMessages] = useState(false);
@@ -161,6 +113,21 @@ export function useChatSessionState({
   /* ---------------------------------------------------------------- */
 
   const activeSessionId = selectedSession?.id || currentSessionId || null;
+  const visibilityRevision = useHookChatVisibilityRevision(selectedProject?.workspaceId);
+  const lastVisibilityRefresh = useRef('');
+  const refreshHistory = sessionStore.refreshFromServer;
+  useEffect(() => {
+    if (!visibilityRevision || !activeSessionId || !selectedProject) return;
+    const key = `${selectedProject.workspaceId}:${activeSessionId}:${visibilityRevision}`;
+    if (lastVisibilityRefresh.current === key) return;
+    lastVisibilityRefresh.current = key;
+    void refreshHistory(activeSessionId, {
+      provider: selectedSession?.__provider || 'claude',
+      projectName: selectedProject.name,
+      projectPath: selectedProject.fullPath,
+      workspaceId: selectedProject.workspaceId,
+    });
+  }, [visibilityRevision, activeSessionId, selectedProject, selectedSession?.__provider, refreshHistory]);
   const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
 
   // Tell the store which session we're viewing so it only re-renders for this one
@@ -198,8 +165,16 @@ export function useChatSessionState({
     if (viewHiddenCount > 0) setViewHiddenCount(0);
   }
 
+  const normalizeMessages = useMemo(() => {
+    let previous: ChatMessage[] = [];
+    return (messages: NormalizedMessage[]) => {
+      previous = preserveChatMessageReferences(previous, normalizedToChatMessages(messages));
+      return previous;
+    };
+  }, [activeSessionId]);
+
   const chatMessages = useMemo(() => {
-    const all = normalizedToChatMessages(storeMessages);
+    const all = normalizeMessages(storeMessages);
     // Show pending messages when no session data exists yet (new session, pre-backend-response)
     if (pendingMessages.length > 0 && shouldShowPendingUserMessageInView({
       selectedSessionId: selectedSession?.id || null,
@@ -210,7 +185,7 @@ export function useChatSessionState({
     }
     if (viewHiddenCount > 0 && viewHiddenCount < all.length) return all.slice(0, -viewHiddenCount);
     return all;
-  }, [storeMessages, viewHiddenCount, pendingMessages, selectedSession?.id]);
+  }, [normalizeMessages, storeMessages, viewHiddenCount, pendingMessages, selectedSession?.id]);
 
   useEffect(() => {
     if (!initialUserMessage || selectedSession?.id !== initialUserMessage.sessionId) return;
@@ -381,7 +356,7 @@ export function useChatSessionState({
     topLoadLockRef.current = false;
     pendingScrollRestoreRef.current = null;
     setIsUserScrolledUp(false);
-  }, [selectedProject?.name, selectedSession?.id]);
+  }, [selectedProjectName, selectedWorkspaceId, selectedSessionId, selectedSessionProvider]);
 
   // Initial scroll to bottom
   useEffect(() => {
@@ -393,7 +368,7 @@ export function useChatSessionState({
 
   // Main session loading effect — store-based
   useEffect(() => {
-    if (!selectedSession || !selectedProject) {
+    if (!selectedSessionId || !selectedProjectName) {
       resetStreamingState();
       pendingViewSessionRef.current = null;
       setClaudeStatus(null);
@@ -411,17 +386,17 @@ export function useChatSessionState({
       return;
     }
 
-    const provider = (selectedSession.__provider || localStorage.getItem('selected-provider') as Provider) || 'claude';
-    const sessionKey = `${selectedSession.id}:${selectedProject.name}:${selectedProject.workspaceId || 'legacy'}:${provider}`;
+    const provider = (selectedSessionProvider || localStorage.getItem('selected-provider') as Provider) || 'claude';
+    const sessionKey = `${selectedSessionId}:${selectedProjectName}:${selectedWorkspaceId || 'legacy'}:${provider}`;
 
-    const existingSlot = sessionStore.getSessionSlot(selectedSession.id);
+    const existingSlot = sessionStore.getSessionSlot(selectedSessionId);
 
     // Reuse a fresh page instead of forcing the complete transcript back into
     // memory. Older pages remain available through the existing scroll loader.
     if (
       lastLoadedSessionKeyRef.current === sessionKey &&
-      sessionStore.has(selectedSession.id) &&
-      !sessionStore.isStale(selectedSession.id) &&
+      sessionStore.has(selectedSessionId) &&
+      !sessionStore.isStale(selectedSessionId) &&
       existingSlot
     ) {
       setVisibleMessageCount(Infinity);
@@ -432,7 +407,7 @@ export function useChatSessionState({
       return;
     }
 
-    const sessionChanged = currentSessionId !== selectedSession.id;
+    const sessionChanged = currentSessionId !== selectedSessionId;
     if (sessionChanged) {
       pendingViewSessionRef.current = null;
       setPendingMessages([]);
@@ -460,26 +435,26 @@ export function useChatSessionState({
       setLoadingStartedAt(null);
     }
 
-    setCurrentSessionId(selectedSession.id);
+    setCurrentSessionId(selectedSessionId);
     if (provider === 'cursor') {
-      sessionStorage.setItem('cursorSessionId', selectedSession.id);
+      sessionStorage.setItem('cursorSessionId', selectedSessionId);
     }
 
     // Check session status. The server also uses this to reconnect active Claude
     // SDK output to the current WebSocket after a reconnect.
     if (ws) {
-      sendMessage({ type: 'check-session-status', sessionId: selectedSession.id, provider });
+      sendMessage({ type: 'check-session-status', sessionId: selectedSessionId, provider });
     }
 
     lastLoadedSessionKeyRef.current = sessionKey;
 
     // Fetch from server → store updates → chatMessages re-derives automatically
     setIsLoadingSessionMessages(true);
-    sessionStore.fetchFromServer(selectedSession.id, {
-      provider: (selectedSession.__provider || provider) as LLMProvider,
-      projectName: selectedProject.name,
-      projectPath: selectedProject.fullPath || selectedProject.path || '',
-      workspaceId: selectedProject.workspaceId,
+    sessionStore.fetchFromServer(selectedSessionId, {
+      provider: provider as LLMProvider,
+      projectName: selectedProjectName,
+      projectPath: selectedProjectPath,
+      workspaceId: selectedWorkspaceId,
       limit: MESSAGES_PER_PAGE,
       offset: 0,
     }).then(slot => {
@@ -499,8 +474,11 @@ export function useChatSessionState({
   }, [
     pendingViewSessionRef,
     resetStreamingState,
-    selectedProject,
-    selectedSession?.id,
+    selectedProjectName,
+    selectedProjectPath,
+    selectedWorkspaceId,
+    selectedSessionId,
+    selectedSessionProvider,
     sendMessage,
     ws,
     sessionStore,
@@ -508,7 +486,7 @@ export function useChatSessionState({
 
   // External message update (e.g. WebSocket reconnect, background refresh)
   useEffect(() => {
-    if (!externalMessageUpdate || !selectedSession || !selectedProject) return;
+    if (!externalMessageUpdate || !selectedSessionId || !selectedProjectName) return;
 
     const reloadExternalMessages = async () => {
       try {
@@ -516,11 +494,11 @@ export function useChatSessionState({
 
         // Skip store refresh during active streaming
         if (!isLoading) {
-          await sessionStore.refreshFromServer(selectedSession.id, {
-            provider: (selectedSession.__provider || provider) as LLMProvider,
-            projectName: selectedProject.name,
-            projectPath: selectedProject.fullPath || selectedProject.path || '',
-            workspaceId: selectedProject.workspaceId,
+          await sessionStore.refreshFromServer(selectedSessionId, {
+            provider: (selectedSessionProvider || provider) as LLMProvider,
+            projectName: selectedProjectName,
+            projectPath: selectedProjectPath,
+            workspaceId: selectedWorkspaceId,
           });
 
           if (Boolean(autoScrollToBottom) && isNearBottom()) {
@@ -538,8 +516,11 @@ export function useChatSessionState({
     externalMessageUpdate,
     isNearBottom,
     scrollToBottom,
-    selectedProject,
-    selectedSession,
+    selectedProjectName,
+    selectedProjectPath,
+    selectedWorkspaceId,
+    selectedSessionId,
+    selectedSessionProvider,
     sessionStore,
     isLoading,
   ]);
@@ -819,6 +800,10 @@ export function useChatSessionState({
     setVisibleMessageCount((prev) => prev + 100);
   }, []);
 
+  const revealAllLoadedMessages = useCallback(() => {
+    setVisibleMessageCount(Infinity);
+  }, []);
+
   return {
     chatMessages,
     addMessage,
@@ -841,6 +826,7 @@ export function useChatSessionState({
     visibleMessageCount,
     visibleMessages,
     loadEarlierMessages,
+    revealAllLoadedMessages,
     loadAllMessages,
     allMessagesLoaded,
     isLoadingAllMessages,

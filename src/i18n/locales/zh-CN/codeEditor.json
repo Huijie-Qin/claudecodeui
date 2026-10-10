@@ -14,6 +14,7 @@
     "showingChanges": "显示更改"
   },
   "actions": {
+    "refreshHtml": "刷新 HTML 预览",
     "download": "下载文件",
     "save": "保存",
     "saving": "保存中...",
@@ -36,6 +37,20 @@
   "binaryFile": {
     "title": "二进制文件",
     "message": "文件 \"{{fileName}}\" 无法在文本编辑器中显示，因为它是二进制文件。"
+  },
+  "tabs": {
+    "list": "打开的文件",
+    "unsaved": "未保存",
+    "closeFile": "关闭 {{fileName}}",
+    "menu": "文件 Tab 操作",
+    "closeCurrent": "关闭当前",
+    "closeOthers": "关闭其他",
+    "closeAll": "关闭全部",
+    "back": "返回",
+    "collapsePreview": "收起弹出预览",
+    "saveFailed": "无法保存 {{fileName}}，修改仍保留在文件 Tab 中。",
+    "hiddenSaveFailed": "{{scope}}中的文件保存失败，原 Tab 已保留。",
+    "retrySave": "重试保存"
   },
   "skillMarket": {
     "loadFailed": "技能发布状态加载失败。",

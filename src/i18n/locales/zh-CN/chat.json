@@ -1,4 +1,19 @@
 {
+  "hookResultViewer": {
+    "view": "查看结果",
+    "collapse": "收起结果",
+    "loading": "正在加载结果…",
+    "error": "结果加载失败，请收起后重试。",
+    "limit": "仅预览前 100 行或 20 KB，内容已脱敏。"
+  },
+  "fork": {
+    "action": "分支到新聊天",
+    "creating": "正在创建分支…",
+    "unavailableWhileRunning": "请等待当前聊天运行结束后再创建分支。",
+    "failed": "创建聊天分支失败，请重试。",
+    "viewParent": "查看原聊天",
+    "sameWorkspace": "此分支继续使用同一工作区。"
+  },
   "codeBlock": {
     "copy": "复制",
     "copied": "已复制",
@@ -485,6 +500,7 @@
       "ariaLabel": "子代理执行时间线",
       "title": "调用过程",
       "waiting": "正在等待首次工具调用…",
+      "syncing": "正在加载子代理执行记录…",
       "noActivity": "没有记录到工具调用。"
     },
     "activity": {
@@ -499,5 +515,63 @@
     "locatingQuestion": "正在连接子代理的问题…",
     "newUpdates": "{{count}} 条新动态 · 回到最新",
     "newUpdates_other": "{{count}} 条新动态 · 回到最新"
+  },
+  "execution": {
+    "status": {
+      "running": "运行中",
+      "waiting": "待处理",
+      "completed": "已完成",
+      "failed": "失败",
+      "stopped": "已停止",
+      "unknown": "状态未知"
+    },
+    "kind": {
+      "background": "后台任务"
+    },
+    "tabs": {
+      "overview": "概览",
+      "activity": "执行记录",
+      "result": "结果"
+    },
+    "outputFile": "输出文件",
+    "close": "关闭任务详情",
+    "details": "任务详情",
+    "exitCode": "退出码：{{code}}",
+    "locateSource": "定位到会话",
+    "openParent": "查看所属子代理",
+    "detailSections": "任务详情分类",
+    "latestProgress": "最近进展",
+    "noProgress": "尚未收到此任务的进展详情。",
+    "startedAt": "开始时间",
+    "updatedAt": "最近更新",
+    "completedAt": "结束时间",
+    "command": "执行命令",
+    "input": "任务输入",
+    "usage": "运行时上报用量",
+    "identifiers": "任务标识",
+    "taskId": "任务 ID",
+    "toolId": "工具调用 ID",
+    "activityNotice": "顶部状态表示任务当前状态，这里的记录展示任务执行过程。",
+    "noEvents": "尚无此任务的执行记录。",
+    "eventOutput": "查看上报输出",
+    "reportedResult": "任务结果",
+    "noResult": "尚未收到结果正文，可查看执行记录或已提供的输出文件。",
+    "outputOutsideWorkspace": "此文件位于执行环境的临时目录，当前无法直接预览。已回传的输出可在「结果」中查看。",
+    "sourceUnavailable": "来源消息尚未包含在已加载的记录中。",
+    "activity": {
+      "started": "已启动",
+      "progress": "执行进展",
+      "waiting": "等待记录",
+      "completed": "执行完成",
+      "failed": "执行失败",
+      "stopped": "执行停止",
+      "unknown": "执行记录",
+      "result": "查询结果",
+      "output": "输出记录"
+    },
+    "completionSummary": "结束摘要",
+    "emptyResult": "运行时已上报空结果正文，可查看执行记录或已提供的输出文件。",
+    "noResultCompleted": "任务已完成，但运行时未提供结果正文。可查看执行记录或已提供的输出文件。",
+    "noResultEnded": "任务已结束，但运行时未提供结果正文。可查看执行记录或已提供的输出文件。"
   }
 }

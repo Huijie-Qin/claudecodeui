@@ -90,6 +90,37 @@ test('GET /:workspaceId/mcp-tools returns catalog for view-only users', async ()
   assert.deepEqual(payload.summary, { available: 1, installed: 0 });
 });
 
+test('insertion catalog is scoped and read-only, excludes uninstalled and disabled tools, and returns names without config', async () => {
+  let seen;
+  const router = createRouter({ service: {
+    listWorkspaceMcpPresetCatalog: (args) => {
+      seen = args;
+      return { presets: [
+        { name: 'docs', displayName: '文档', installed: true, allowedToolNames: ['search'], config: { secret: 'not-public' },
+          tools: [{ name: 'search', description: '检索文档', inputSchema: { secret: true } }, { name: 'delete' }] },
+        { name: 'uninstalled', installed: false, allowedToolNames: ['query'], tools: [{ name: 'query' }] },
+        { name: 'disabled', installed: true, allowedToolNames: [], tools: [{ name: 'query' }] },
+        { name: 'other', installed: true, allowedToolNames: ['search'], tools: [{ name: 'search' }] },
+      ] };
+    },
+  } });
+  const { response, payload } = await requestJson(router, '/10/mcp-tools/insertion-catalog');
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(seen, { tenantId: 2, workspaceId: 10, userId: 7, workspacePath: '/tmp/workspace', accessRole: 'view', refreshProbes: false });
+  assert.deepEqual(payload, { workspaceId: 10, tools: [
+    { name: 'mcp__docs__search', description: '检索文档', serverName: 'docs', serverDisplayName: '文档' },
+    { name: 'mcp__other__search', description: '', serverName: 'other', serverDisplayName: 'other' },
+  ] });
+});
+
+test('insertion catalog rejects unauthorized workspace access before reading tools', async () => {
+  const router = createRouter({ requireWorkspace: () => { throw Object.assign(new Error('Workspace access denied'), { statusCode: 403 }); },
+    service: { listWorkspaceMcpPresetCatalog: () => assert.fail('must not read another workspace') } });
+  const { response } = await requestJson(router, '/999/mcp-tools/insertion-catalog');
+  assert.equal(response.status, 403);
+});
+
 test('POST /:workspaceId/mcp-tools/:presetId/install requires edit access', async () => {
   const router = createRouter({
     requireWorkspace: () => {

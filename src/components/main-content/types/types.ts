@@ -52,7 +52,7 @@ export type MainContentProps = {
   onSessionNotProcessing: SessionLifecycleHandler;
   processingSessions: ProcessingSessions;
   onReplaceTemporarySession: SessionLifecycleHandler;
-  onNavigateToSession: (targetSessionId: string) => void;
+  onNavigateToSession: (targetSessionId: string, createdSession?: ProjectSession) => void;
   onShowSettings: () => void;
   externalMessageUpdate: number;
 };

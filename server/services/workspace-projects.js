@@ -3,6 +3,8 @@ import path from 'path';
 
 import { scheduledTasksDb } from '../database/db.js';
 
+import { sessionForkSummaryFields } from './session-fork-metadata.js';
+
 export function slugifyWorkspaceName(value) {
   const normalizedName = String(value || '')
     .trim()
@@ -104,6 +106,10 @@ export function resolveCloneDestinationPath({
   return path.join(workspaceRootPath, normalizedRepoName);
 }
 
+function hasSkillCreationHistory(session) {
+  try { return JSON.parse(session.metadata_json || '{}').skillCreation === true; } catch { return false; }
+}
+
 function mapSession(session, workspaceId, scheduledTaskMap = new Map()) {
   const mapped = {
     id: session.provider_session_id,
@@ -112,6 +118,7 @@ function mapSession(session, workspaceId, scheduledTaskMap = new Map()) {
     isFavorited: session.is_favorited === 1,
     __provider: session.provider,
     __workspaceId: workspaceId,
+    ...sessionForkSummaryFields(session),
   };
   const scheduledTask = scheduledTaskMap.get(session.provider_session_id);
   if (scheduledTask) {
@@ -135,7 +142,7 @@ export function mapWorkspaceRowsToProjects(rows, {
       userId,
     }).filter((session) => (
       !String(session.provider_session_id || '').startsWith('scheduled-task-')
-      && !String(session.provider_session_id || '').startsWith('pending:')
+      && (!String(session.provider_session_id || '').startsWith('pending:') || hasSkillCreationHistory(session))
     ));
     const scheduledTasks = listScheduledTasks({
       tenantId,

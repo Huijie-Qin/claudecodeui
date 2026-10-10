@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { createClaudeUsageTurnCapture } from './services/ai-usage-turns.js';
+import { createClaudeSkillContextCapture } from './services/ai-usage-skill-context.js';
+
 const withEnv = (key, value, callback) => {
   const previous = process.env[key];
   if (value === undefined) {
@@ -19,6 +22,37 @@ const withEnv = (key, value, callback) => {
     }
   }
 };
+
+test('usage capture commits only the final parent response boundary after background work settles', async () => {
+  const { createClaudeTurnLifecycleTracker, shouldEmitClaudeTurnCompletion } = await import('./claude-sdk.js');
+  const completed = [];
+  let timestamp = '2026-09-11T02:00:00.000Z';
+  const capture = createClaudeUsageTurnCapture({ options: { tenantId: 1, userId: 2, workspaceId: 3 },
+    now: () => timestamp,
+    recorder: {
+      start: (input) => ({ ...input, turnKey: 'turn-1' }),
+      complete: (input) => completed.push(input),
+      terminal: () => assert.fail('A successful parent response must not be marked incomplete'),
+    },
+  });
+  const lifecycle = createClaudeTurnLifecycleTracker();
+  lifecycle.observe({ type: 'system', subtype: 'task_started', task_id: 'child-1' });
+  lifecycle.observe({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+  capture.observe({ type: 'result', subtype: 'success' });
+  lifecycle.finishResult(0);
+  const completion = { sessionId: 'session-1' };
+  assert.equal(shouldEmitClaudeTurnCompletion(completion, null, lifecycle), false);
+  assert.equal(completed.length, 0);
+  lifecycle.observe({ type: 'system', subtype: 'task_notification', task_id: 'child-1' });
+  timestamp = '2026-09-11T02:02:00.000Z';
+  capture.observe({ type: 'assistant', message: { content: [{ type: 'text', text: 'Final parent response' }] } });
+  capture.onStop({ hook_event_name: 'Stop' });
+  timestamp = '2026-09-11T02:03:00.000Z'; // Post-response Hook work.
+  lifecycle.observe({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+  assert.equal(shouldEmitClaudeTurnCompletion(completion, null, lifecycle), true);
+  capture.complete();
+  assert.equal(completed[0].responseCompletedAt, '2026-09-11T02:02:00.000Z');
+});
 
 test('resolveClaudeModel lets ANTHROPIC_MODEL override UI model aliases', async () => {
   const claudeSdk = await import('./claude-sdk.js');
@@ -1014,6 +1048,49 @@ test('ClaudeInputQueue notifies when the SDK consumes queued and waiting input',
   assert.deepEqual(consumed, ['queued', 'waiting']);
 });
 
+test('ClaudeInputQueue starts a query turn only when the SDK consumes query input', async () => {
+  const { ClaudeInputQueue, buildClaudeUserMessage } = await import('./claude-sdk.js');
+  const consumedQueries = [];
+  const queue = new ClaudeInputQueue({
+    onQueryConsumed: (message) => consumedQueries.push(message.message.content),
+  });
+  queue.push(buildClaudeUserMessage('first request', []));
+  queue.push(buildClaudeUserMessage('context only', [], { shouldQuery: false }));
+  queue.push(buildClaudeUserMessage('next request', []));
+  assert.deepEqual(consumedQueries, [], 'queuing a future user turn must not reset review state');
+
+  await queue.next();
+  assert.deepEqual(consumedQueries, ['first request']);
+  await queue.next();
+  assert.deepEqual(consumedQueries, ['first request'], 'context-only input must not start a query turn');
+  await queue.next();
+  assert.deepEqual(consumedQueries, ['first request', 'next request']);
+  queue.close();
+});
+
+test('completion review waits for the result boundary before counting an early next-turn input', async () => {
+  const { ClaudeInputQueue, buildClaudeUserMessage, createClaudeHookReviewTurnTracker } =
+    await import('./claude-sdk.js');
+  let reviewTurn = 0;
+  const tracker = createClaudeHookReviewTurnTracker(() => { reviewTurn += 1; });
+  const queue = new ClaudeInputQueue({ onQueryConsumed: tracker.onQueryConsumed });
+  queue.push(buildClaudeUserMessage('first request', [], { priority: 'next' }));
+  await queue.next();
+  assert.equal(reviewTurn, 1);
+
+  queue.push(buildClaudeUserMessage('next request', [], { priority: 'next' }));
+  await queue.next();
+  assert.equal(reviewTurn, 1, 'an early next-turn message must leave the current Stop in turn one');
+  tracker.onQueryResult();
+  assert.equal(reviewTurn, 2, 'the next Stop belongs to the second user turn');
+
+  queue.push(buildClaudeUserMessage('inline request', [], { priority: 'now' }));
+  await queue.next();
+  assert.equal(reviewTurn, 3, 'an immediate supplement starts a new turn when consumed');
+  tracker.onQueryResult();
+  queue.close();
+});
+
 test('live supplements reach a waiting SDK reader before any result boundary', { timeout: 1000 }, async () => {
   const { ClaudeInputQueue, buildClaudeUserMessage } = await import('./claude-sdk.js');
   const queue = new ClaudeInputQueue();
@@ -1051,6 +1128,53 @@ test('buildClaudeUserMessage preserves native multiline skill invocations exactl
   assert.equal(message.message.content, invocation);
 });
 
+test('Skill context follows the consumed SDK UUID without persisting slash arguments', async () => {
+  const { ClaudeInputQueue, buildClaudeUserMessage, resolveClaudeUserMessageId } = await import('./claude-sdk.js');
+  const records = [];
+  const capture = createClaudeSkillContextCapture({ options: { tenantId: 1, userId: 2, workspaceId: 3 },
+    recorder: { recordRequest: (input) => records.push(input) } });
+  const messageId = resolveClaudeUserMessageId('not-a-client-uuid');
+  const command = '/report private parameters\nprivate prompt body';
+  const queue = new ClaudeInputQueue();
+  queue.push(buildClaudeUserMessage(command, [], { uuid: messageId }), {
+    onConsumed: () => capture.request({ messageId, command }),
+  });
+  assert.equal(records.length, 0);
+  const received = await queue.next();
+  assert.equal(received.value.uuid, messageId);
+  assert.equal(records[0].contextId, received.value.uuid);
+  assert.equal(records[0].requestId, received.value.uuid);
+  assert.equal(records[0].skillName, 'report');
+  assert.equal(JSON.stringify(records).includes('private'), false);
+  queue.close();
+});
+
+test('an inline supplemental UUID is independently recorded without guessing later Skill ownership', async () => {
+  const { ClaudeInputQueue, buildClaudeUserMessage } = await import('./claude-sdk.js');
+  const requests = [];
+  const tools = [];
+  const capture = createClaudeSkillContextCapture({ options: { tenantId: 1, userId: 2, workspaceId: 3 },
+    recorder: { recordRequest: (input) => requests.push(input), recordTool: (input) => tools.push(input) } });
+  const queue = new ClaudeInputQueue();
+  for (const [messageId, supplemental] of [
+    ['11111111-1111-4111-8111-111111111111', false],
+    ['22222222-2222-4222-8222-222222222222', true],
+  ]) {
+    queue.push(buildClaudeUserMessage('/report', [], { uuid: messageId }), {
+      onConsumed: () => capture.request({ messageId, command: '/report', supplemental }),
+    });
+    await queue.next();
+  }
+  capture.observe({ type: 'assistant', parent_tool_use_id: null,
+    message: { content: [{ type: 'tool_use', name: 'Skill', id: 'tool', input: { skill: 'report' } }] } });
+  assert.equal(requests.length, 2);
+  assert.notEqual(requests[0].requestId, requests[1].requestId);
+  assert.equal(requests.every((input) => input.origin === 'user'), true);
+  assert.equal(tools[0].requestId, null);
+  assert.equal(tools[0].origin, 'unknown');
+  queue.close();
+});
+
 test('Claude user message IDs preserve client UUIDs and replace invalid or missing values', async () => {
   const { resolveClaudeUserMessageId } = await import('./claude-sdk.js');
   const clientMessageId = '11111111-1111-4111-8111-111111111111';
@@ -1077,51 +1201,24 @@ test('resolveClaudeSupplementPayload validates without trimming native skill con
   });
 });
 
-test('createClaudePromptFactory creates native image content blocks', async () => {
-  const claudeSdk = await import('./claude-sdk.js');
-
-  const createPrompt = claudeSdk.createClaudePromptFactory('describe this', [
-    {
-      data: 'data:image/png;base64,aGVsbG8=',
-      size: 5,
-      mimeType: 'image/png',
-    },
-  ]);
-
-  const iterator = createPrompt()[Symbol.asyncIterator]();
-  const first = await iterator.next();
-  const second = await iterator.next();
-
-  assert.equal(second.done, true);
-  assert.equal(first.value.type, 'user');
-  assert.equal(first.value.parent_tool_use_id, null);
-  assert.deepEqual(first.value.message, {
-    role: 'user',
-    content: [
-      { type: 'text', text: 'describe this' },
-      {
-        type: 'image',
-        source: {
-          type: 'base64',
-          media_type: 'image/png',
-          data: 'aGVsbG8=',
-        },
-      },
-    ],
-  });
-});
-
-test('createClaudePromptFactory rejects unsupported image types', async () => {
-  const claudeSdk = await import('./claude-sdk.js');
-
-  assert.throws(
-    () => claudeSdk.createClaudePromptFactory('describe this', [
-      {
-        data: 'data:image/svg+xml;base64,PHN2Zy8+',
-        size: 6,
-        mimeType: 'image/svg+xml',
-      },
-    ]),
-    /Unsupported image type image\/svg\+xml/,
-  );
+test('legacy image attachments never turn a Claude request into multimodal input', async () => {
+  const { buildClaudeUserMessage, createClaudePromptFactory } = await import('./claude-sdk.js');
+  const command = '/report\n保留原始文本\n';
+  const metadata = {
+    uuid: '11111111-1111-4111-8111-111111111111',
+    priority: 'now', shouldQuery: false, timestamp: '2026-09-20T00:00:00.000Z',
+  };
+  for (const images of [
+    undefined, [],
+    [{ data: 'data:image/png;base64,aGVsbG8=', mimeType: 'image/png' }],
+    [{ data: 'data:image/svg+xml;base64,PHN2Zy8+', mimeType: 'image/svg+xml' }],
+    [{ data: 'invalid legacy attachment' }],
+  ]) {
+    const message = buildClaudeUserMessage(command, images, metadata);
+    assert.deepEqual(message, {
+      type: 'user', message: { role: 'user', content: command },
+      parent_tool_use_id: null, ...metadata,
+    });
+    assert.equal(createClaudePromptFactory(command, images)(), command);
+  }
 });

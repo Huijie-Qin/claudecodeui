@@ -13,6 +13,7 @@ import { claudeEnvService as defaultClaudeEnvService } from './claude-env.js';
 import { hookConfigService as defaultHookConfigService } from './hook-configs.js';
 import { codeHubService } from './codehub.js';
 import { resolveContainerUser } from './container-user.js';
+import { DEFAULT_CLAUDE_DOCKER_IMAGE, resolveClaudeDockerImage, resolveDockerCliExecutable } from './docker-runtime-config.js';
 import { prepareClaudeDockerCa } from './claude-docker-ca.js';
 import {
   CODEHUB_EMAIL_ENV_NAMES,
@@ -23,6 +24,7 @@ import { mapWorkspacePathForContainer } from './workspace-path-mapping.js';
 import { migratePathOwnership } from './workspace-ownership.js';
 
 export { migratePathOwnership } from './workspace-ownership.js';
+export { DOCKER_CLI_PATH_ENV_NAME, resolveDockerCliExecutable } from './docker-runtime-config.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -39,13 +41,11 @@ const CLAUDE_WRAPPER_DEFAULT_ENV_NAMES = [
   ANTHROPIC_MODEL_ENV_NAME,
   DAS_ENV_NAME,
 ];
-const DEFAULT_CLAUDE_DOCKER_IMAGE = 'docker.io/cloudcliai/sandbox:claude-code';
 const DEFAULT_RUNTIME_ROOT = path.join(os.homedir(), '.cloudcli', 'runtimes');
 const DEFAULT_DOCKER_MEMORY = '2g';
 const DEFAULT_DOCKER_CPUS = '2';
 const DOCKER_WORKSPACE_CHECK_TIMEOUT_MS = 10_000;
 const DOCKER_PYTHON_PACKAGES_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_PACKAGES';
-export const DOCKER_CLI_PATH_ENV_NAME = 'CLOUDCLI_DOCKER_CLI_PATH';
 const CLAUDE_CLEANUP_PERIOD_DAYS = 36_500;
 const DOCKER_SHARED_PYTHON_ENABLED_ENV_NAME = 'CLOUDCLI_DOCKER_SHARED_PYTHON';
 const DOCKER_SHARED_PYTHON_ROOT_ENV_NAME = 'CLOUDCLI_DOCKER_PYTHON_SHARED_ROOT';
@@ -285,15 +285,6 @@ export function resolveClaudeExecutionMode(env = process.env) {
     return mode;
   }
   throw new Error('CLAUDE_EXECUTION_MODE must be local or docker');
-}
-
-export function resolveDockerCliExecutable(env = process.env) {
-  const configuredPath = String(env?.[DOCKER_CLI_PATH_ENV_NAME] || '').trim();
-  return configuredPath || 'docker';
-}
-
-function resolveClaudeDockerImage(env = process.env) {
-  return readEnvValue(env, 'CLOUDCLI_CLAUDE_DOCKER_IMAGE') || DEFAULT_CLAUDE_DOCKER_IMAGE;
 }
 
 export function parseDockerPythonPackages(value) {
@@ -1898,6 +1889,7 @@ export function createAgentSessionRuntimeManager({
   }
 
   return {
+    resolveClaudeRuntimeEnv,
     async prepareClaudeRuntime(options = {}) {
       const mode = resolveClaudeExecutionMode(env);
       if (mode === 'local') {

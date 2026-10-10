@@ -1,0 +1,26 @@
+{
+  "testedAt": "2026-09-18T07:25:01.691Z",
+  "sourceSessionId": "1ddaecc1-3e1d-4c28-9307-300cfa16cb89",
+  "sourceHash": "a44f2f645a75e9c4c5e2ec4dbffb5d073857205a1006470d990a0c344e365655",
+  "originalSourceHash": "a44f2f645a75e9c4c5e2ec4dbffb5d073857205a1006470d990a0c344e365655",
+  "sourceUnchanged": true,
+  "forks": [
+    {
+      "sessionId": "25d64fd1-8124-4d12-b49a-060131c30995",
+      "parentSessionId": "1ddaecc1-3e1d-4c28-9307-300cfa16cb89",
+      "sourceMessageUuid": "3bc8e269-56e8-48fc-8d69-aeba45347291",
+      "requestId": "e363ddb0-285f-4cca-9ca1-88caad2d3cf6",
+      "runtimeId": "fork-browser-runtime",
+      "createdAt": "2026-09-18T07:23:50.479Z"
+    }
+  ],
+  "modelContext": {
+    "containsBlueHistory": true,
+    "containsReadToolResult": true,
+    "containsNewPrompt": true,
+    "containsLaterRedHistory": false
+  },
+  "failedApiRequests": [],
+  "browserConsoleErrors": 0,
+  "verifiedPage": "http://127.0.0.1:4417/data-agent/session/25d64fd1-8124-4d12-b49a-060131c30995"
+}

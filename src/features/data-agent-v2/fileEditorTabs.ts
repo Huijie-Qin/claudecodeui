@@ -1,7 +1,8 @@
 import type { CodeEditorFile } from '../../components/code-editor/types/types';
+import { getFilePreviewKind, type FilePreviewKind } from '../../components/file-preview/filePreviewKind';
 import type { Project } from '../../types/app';
 
-export type FileEditorTabKind = 'editor' | 'image';
+export type FileEditorTabKind = FilePreviewKind;
 
 export type FileEditorTab = {
   id: string;
@@ -96,10 +97,7 @@ export function resolveFileTabFile(project: Project, displayPathValue: string): 
 }
 
 export function inferFileEditorTabKind(pathValue: string): FileEditorTabKind {
-  const extension = normalizeFileTabPath(pathValue).split('.').pop()?.toLowerCase();
-  return new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'bmp']).has(extension || '')
-    ? 'image'
-    : 'editor';
+  return getFilePreviewKind(normalizeFileTabPath(pathValue));
 }
 
 export function createFileEditorTab(project: Project, pathValue: string): FileEditorTab {

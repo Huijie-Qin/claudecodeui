@@ -4,15 +4,16 @@ type SystemAdminCandidate = {
 } | null | undefined;
 
 export type TenantPermission = 'view' | 'edit';
+export type TenantRole = 'member' | 'tenant_admin';
 
 export function isSystemAdminUser(user: SystemAdminCandidate): boolean {
   return user?.is_system_admin === 1 || user?.is_system_admin === true;
 }
 
-export function buildTenantMembershipPayload(permission: TenantPermission) {
+export function buildTenantMembershipPayload(role?: TenantRole) {
   return {
-    role: 'member',
-    permission,
+    ...(role ? { role } : {}),
+    permission: 'edit' as const,
     status: 'active',
   };
 }

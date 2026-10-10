@@ -94,7 +94,7 @@ const DRAFT_SAVE_DELAY_MS = 400;
 const MIN_TEXTAREA_HEIGHT_PX = 40;
 
 const isTemporarySessionId = (sessionId: string | null | undefined) =>
-  Boolean(sessionId && sessionId.startsWith('new-session-'));
+  Boolean(sessionId && (sessionId.startsWith('new-session-') || sessionId.startsWith('skill-creation:') || sessionId.startsWith('pending:')));
 
 const getNotificationSessionSummary = (
   selectedSession: ProjectSession | null,
@@ -505,8 +505,9 @@ export function useChatComposerState({
       const displayInput = pendingDisplayInputRef.current || currentInput;
       pendingDisplayInputRef.current = null;
 
-      const effectiveSessionId =
-        currentSessionId || selectedSession?.id || sessionStorage.getItem('cursorSessionId');
+      const candidateSessionId = currentSessionId || selectedSession?.id || sessionStorage.getItem('cursorSessionId');
+      const creationConversation = candidateSessionId?.startsWith('skill-creation:') || candidateSessionId?.startsWith('pending:');
+      const effectiveSessionId = creationConversation ? null : candidateSessionId;
       const sessionToActivate = effectiveSessionId || `new-session-${Date.now()}`;
       const clientMessageId = provider === 'claude' ? createClientMessageId() : undefined;
 
@@ -529,7 +530,7 @@ export function useChatComposerState({
       setIsUserScrolledUp(false);
       setTimeout(() => scrollToBottom(), 100);
 
-      if (!effectiveSessionId && !selectedSession?.id) {
+      if (!effectiveSessionId && (!selectedSession?.id || creationConversation)) {
         if (typeof window !== 'undefined') {
           // Reset stale pending IDs from previous interrupted runs before creating a new one.
           sessionStorage.removeItem('pendingSessionId');

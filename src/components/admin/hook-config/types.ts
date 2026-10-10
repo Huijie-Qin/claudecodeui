@@ -45,10 +45,10 @@ export type HookScriptOutput = {
 };
 
 export type HookExtensionLogic = {
-  failClosed?: boolean;
   language: HookScriptLanguage;
   code: string;
   outputs: HookScriptOutput[];
+  failClosed?: boolean;
 };
 
 export type HookValueBinding =
@@ -67,9 +67,17 @@ export type HookValueBinding =
 
 export type HookPostAction = {
   id: string;
-  type: 'call_mcp_tool' | 'mcp_loop_run' | 'write_record' | 'invoke_skill' | 'send_agent_message' | 'request_confirmation';
+  type: 'call_mcp_tool' | 'mcp_loop_run' | 'write_record' | 'invoke_skill' | 'send_agent_message' | 'request_confirmation' | 'review_completion';
   position: number;
   config: Record<string, unknown>;
+};
+
+export type HookCompletionReviewConfig = {
+  maxReviews: number;
+  model: string;
+  criteria: string;
+  artifactPaths: string[];
+  validationResultPath?: string;
 };
 
 export type HookClaudeResponse = {
@@ -106,6 +114,8 @@ export type HookConfig = HookConfigDraft & {
   updatedAt: string;
   publishedAt: string | null;
   activationScope: 'manual' | 'all_users';
+  ownerTenantId?: number | null;
+  defaultEnabled?: boolean;
   bindingController: 'admin' | 'sql_check';
   boundUserCount: number;
   scopedUserCount: number;

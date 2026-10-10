@@ -12,18 +12,26 @@ import { useChatProviderState } from '../hooks/useChatProviderState';
 import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
+import { useChatSessionFork } from '../hooks/useChatSessionFork';
+import { useSkillCreation } from '../hooks/useSkillCreation';
 import { isRealtimeActivityForSession, shouldRefreshSessionHistoryForRealtimeMessage } from '../hooks/chatRealtimeRefresh';
 import { getHookDisplayFollowups } from '../utils/hookFollowupPresentation';
 import { getCancellableHookLoopJobId } from '../utils/hookLoopControls';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { createSessionStreamAccumulator } from '../hooks/sessionStreamAccumulator';
 import { buildSubagentTraces } from '../subagent/buildSubagentTraces';
+import { startSubagentHistorySync } from '../subagent/subagentHistorySync';
 import { SubagentPanel } from '../subagent/SubagentPanel';
 import {
   applySubagentPermissionWaitingState,
   partitionSubagentPermissionRequests,
 } from '../subagent/subagentPermissionRouting';
 import { useSubagentPanelLayout } from '../subagent/useSubagentPanelLayout';
+import { buildExecutionTasks } from '../execution/buildExecutionTasks';
+import { ExecutionTaskPanel } from '../execution/ExecutionTaskPanel';
+import { findExecutionTaskParentTrace } from '../execution/navigation';
+import { isWorkspaceExecutionOutput } from '../execution/display';
+import type { ExecutionTask } from '../execution/types';
 
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
@@ -84,6 +92,9 @@ function ChatInterface({
   const [showScheduledTasks, setShowScheduledTasks] = useState(false);
   const [isQuickSettingsOpen, setIsQuickSettingsOpen] = useState(false);
   const [selectedSubagentTraceId, setSelectedSubagentTraceId] = useState<string | null>(null);
+  const [selectedExecutionTaskId, setSelectedExecutionTaskId] = useState<string | null>(null);
+  const [executionNavigationMessage, setExecutionNavigationMessage] = useState('');
+  const [locatedExecutionSource, setLocatedExecutionSource] = useState<{ messageId?: string; toolUseId?: string } | null>(null);
 
   const {
     provider,
@@ -152,6 +163,7 @@ function ChatInterface({
     scrollToBottom,
     scrollToBottomAndReset,
     handleScroll,
+    revealAllLoadedMessages,
   } = useChatSessionState({
     selectedProject,
     selectedSession,
@@ -164,6 +176,14 @@ function ChatInterface({
     pendingViewSessionRef,
     sessionStore,
     initialUserMessage,
+  });
+
+  const { forkMessage, forkingMessageUuid, forkError, forkDisabled } = useChatSessionFork({
+    selectedProject,
+    sessionId: selectedSession?.id || currentSessionId,
+    provider,
+    isProcessing: isLoading || Boolean(processingSessions?.has(selectedSession?.id || currentSessionId || '')),
+    onNavigateToSession,
   });
 
   const activeLoopJobVisible = useMemo(() => chatMessages.some((message) => (
@@ -224,7 +244,17 @@ function ChatInterface({
     () => applySubagentPermissionWaitingState(subagentTraces, routedSubagentQuestions),
     [routedSubagentQuestions, subagentTraces],
   );
+  const executionTasks = useMemo(
+    () => buildExecutionTasks(chatMessages, subagentDisplayTraces),
+    [chatMessages, subagentDisplayTraces],
+  );
+  const selectedExecutionTask = executionTasks.find((task) => task.id === selectedExecutionTaskId) || null;
+  const executionOutputUnavailableReason = selectedExecutionTask?.outputFile
+    && !isWorkspaceExecutionOutput(selectedExecutionTask.outputFile, selectedProject?.fullPath)
+    ? t('execution.outputOutsideWorkspace', { defaultValue: 'This file belongs to the execution runtime and cannot be previewed here. Reported output is available in Result.' })
+    : undefined;
   const isSubagentPanelOpen = selectedSubagentTraceId !== null;
+  const isDetailsPanelOpen = isSubagentPanelOpen || selectedExecutionTask !== null;
   const {
     containerRef: subagentLayoutRef,
     panelWidth: subagentPanelWidth,
@@ -234,14 +264,18 @@ function ChatInterface({
     isResizing: isSubagentPanelResizing,
     handleResizeStart: handleSubagentPanelResizeStart,
     handleResizeKeyDown: handleSubagentPanelResizeKeyDown,
-  } = useSubagentPanelLayout(isSubagentPanelOpen);
+  } = useSubagentPanelLayout(isDetailsPanelOpen);
 
   const closeSubagentPanel = useCallback(() => {
     setSelectedSubagentTraceId(null);
+    setSelectedExecutionTaskId(null);
     const returnFocusTarget = subagentReturnFocusRef.current;
     subagentReturnFocusRef.current = null;
-    window.requestAnimationFrame(() => returnFocusTarget?.focus());
-  }, []);
+    window.requestAnimationFrame(() => {
+      if (returnFocusTarget?.isConnected) returnFocusTarget.focus();
+      else subagentLayoutRef.current?.querySelector<HTMLButtonElement>('[data-execution-task-id]')?.focus();
+    });
+  }, [subagentLayoutRef]);
 
   // Keep opening explicit: only the matching Task/Agent tool card receives this callback.
   const handleOpenSubagent = useCallback((toolId: string) => {
@@ -249,30 +283,47 @@ function ChatInterface({
       candidate.id === toolId || candidate.sourceToolIds.includes(toolId)
     ));
     if (trace) {
-      subagentReturnFocusRef.current = document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
+      if (document.activeElement instanceof HTMLElement && !document.activeElement.closest('[data-execution-task-panel], #subagent-activity-panel')) {
+        subagentReturnFocusRef.current = document.activeElement;
+      }
       setIsQuickSettingsOpen(false);
+      setSelectedExecutionTaskId(null);
       setSelectedSubagentTraceId(trace.id);
     }
   }, [subagentTraces]);
+
+  const handleOpenExecutionTask = useCallback((taskId: string) => {
+    const task = executionTasks.find((candidate) => candidate.id === taskId);
+    if (!task || task.kind !== 'background') return;
+    setExecutionNavigationMessage('');
+    if (document.activeElement instanceof HTMLElement && !document.activeElement.closest('[data-execution-task-panel], #subagent-activity-panel')) {
+      subagentReturnFocusRef.current = document.activeElement;
+    }
+    setIsQuickSettingsOpen(false);
+    setSelectedSubagentTraceId(null);
+    setSelectedExecutionTaskId(task.id);
+  }, [executionTasks]);
 
   const latestHiddenSubagentQuestion = hiddenSubagentQuestions[hiddenSubagentQuestions.length - 1];
   const hiddenSubagentQuestionCount = hiddenSubagentQuestions.length + unresolvedSubagentQuestions.length;
 
   useEffect(() => {
     setSelectedSubagentTraceId(null);
+    setSelectedExecutionTaskId(null);
+    setExecutionNavigationMessage('');
+    setLocatedExecutionSource(null);
     setIsQuickSettingsOpen(false);
     subagentReturnFocusRef.current = null;
   }, [selectedSession?.id]);
 
   const handleQuickSettingsOpenChange = useCallback((nextOpen: boolean) => {
     setIsQuickSettingsOpen(nextOpen);
-    if (nextOpen && isSubagentPanelOpen && !isSubagentPanelDocked) {
+    if (nextOpen && isDetailsPanelOpen && !isSubagentPanelDocked) {
       subagentReturnFocusRef.current = null;
       setSelectedSubagentTraceId(null);
+      setSelectedExecutionTaskId(null);
     }
-  }, [isSubagentPanelDocked, isSubagentPanelOpen]);
+  }, [isSubagentPanelDocked, isDetailsPanelOpen]);
 
   useEffect(() => {
     if (
@@ -359,6 +410,44 @@ function ChatInterface({
     setPendingPermissionRequests,
   });
 
+  const creation = useSkillCreation({ project: selectedProject, sessionId: selectedSession?.id || currentSessionId, provider, input, setInput, onConversationReady: (id) => { setCurrentSessionId(id); onNavigateToSession?.(id); } });
+  const combinedMessages = useMemo(() => [...chatMessages, ...creation.messages].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()), [chatMessages, creation.messages]);
+  const combinedVisible = useMemo(() => [...visibleMessages, ...creation.messages].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()), [visibleMessages, creation.messages]);
+
+  useEffect(() => {
+    if (!isUserScrolledUp && creation.messages.length) {
+      const timer = setTimeout(scrollToBottom, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [creation.messages, isUserScrolledUp, scrollToBottom]);
+
+  const handleLocateExecutionTask = useCallback((task: ExecutionTask) => {
+    setLocatedExecutionSource({ messageId: task.sourceMessageId, toolUseId: task.toolUseId });
+    const parent = findExecutionTaskParentTrace(task, subagentTraces);
+    if (parent) handleOpenSubagent(parent.id);
+    else if (!isSubagentPanelDocked) closeSubagentPanel();
+    revealAllLoadedMessages();
+    setIsUserScrolledUp(true);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const candidates = [...(subagentLayoutRef.current?.querySelectorAll<HTMLElement>('[data-chat-message-id]') || [])];
+      const target = candidates.find((element) => element.dataset.chatMessageId === task.sourceMessageId)
+        || candidates.find((element) => Boolean(task.toolUseId) && element.dataset.chatToolId === task.toolUseId);
+      if (!target) {
+        setExecutionNavigationMessage(t('execution.sourceUnavailable', { defaultValue: 'The source message is not in the loaded history.' }));
+        return;
+      }
+      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      target.querySelector<HTMLElement>('button, summary, a')?.focus({ preventScroll: true });
+      setExecutionNavigationMessage('');
+    }));
+  }, [closeSubagentPanel, handleOpenSubagent, isSubagentPanelDocked, revealAllLoadedMessages, setIsUserScrolledUp, subagentLayoutRef, subagentTraces, t]);
+
+  const handleExecutionOpenParent = useCallback((task: ExecutionTask) => {
+    const parent = findExecutionTaskParentTrace(task, subagentTraces);
+    if (parent) handleOpenSubagent(parent.id);
+    else handleLocateExecutionTask(task);
+  }, [handleLocateExecutionTask, handleOpenSubagent, subagentTraces]);
+
   const getCurrentConcreteSessionId = useCallback(() => {
     const providerVal = (localStorage.getItem('selected-provider') as LLMProvider) || 'claude';
     const reconnectProvider = (selectedSession?.__provider || providerVal) as LLMProvider;
@@ -375,7 +464,7 @@ function ChatInterface({
       provider: reconnectProvider,
       sessionId: isConcreteSessionId(candidateSessionId) ? candidateSessionId : null,
     };
-  }, [currentSessionId, selectedSession]);
+  }, [currentSessionId, selectedSession?.id, selectedSession?.__provider]);
 
   const probeCurrentSessionStatus = useCallback(() => {
     const { provider: probeProvider, sessionId } = getCurrentConcreteSessionId();
@@ -439,6 +528,7 @@ function ChatInterface({
     onSessionProcessing,
     onSessionNotProcessing,
     onReplaceTemporarySession,
+    onSessionAdopted: creation.adoptSession,
     onNavigateToSession,
     onWebSocketReconnect: handleWebSocketReconnect,
     addMessage,
@@ -506,6 +596,30 @@ function ChatInterface({
     });
   }, [getCurrentConcreteSessionId, selectedProject, sessionStore, subscribeMessage]);
 
+  const recoveryProjectName = selectedProject?.name;
+  const recoveryProjectPath = selectedProject?.fullPath || selectedProject?.path || '';
+  const recoveryWorkspaceId = selectedProject?.workspaceId;
+
+  const hasRunningSubagents = subagentTraces.some((trace) => (
+    trace.status === 'running' || trace.status === 'waiting'
+  ));
+  useEffect(() => {
+    const { provider: historyProvider, sessionId } = getCurrentConcreteSessionId();
+    if (!isSubagentPanelOpen || historyProvider !== 'claude' || !sessionId || !recoveryProjectName) {
+      return undefined;
+    }
+    return startSubagentHistorySync({
+      isRunning: hasRunningSubagents,
+      refreshHistory: () => sessionStore.refreshFromServer(sessionId, {
+        provider: historyProvider,
+        projectName: recoveryProjectName,
+        projectPath: recoveryProjectPath,
+        workspaceId: recoveryWorkspaceId,
+      }),
+      onError: (error) => console.error('[Chat] Subagent history sync failed:', error),
+    });
+  }, [getCurrentConcreteSessionId, hasRunningSubagents, isSubagentPanelOpen, recoveryProjectName, recoveryProjectPath, recoveryWorkspaceId, sessionStore]);
+
   useEffect(() => {
     if (!isLoading) {
       return undefined;
@@ -532,7 +646,8 @@ function ChatInterface({
   }, [isLoading, probeCurrentSessionStatus]);
 
   useEffect(() => {
-    const canCloseSubagentDrawer = isSubagentPanelOpen && !isSubagentPanelDocked;
+    const canCloseSubagentDrawer = selectedExecutionTask !== null
+      || (isSubagentPanelOpen && !isSubagentPanelDocked);
     if (
       !isQuickSettingsOpen &&
       !canCloseSubagentDrawer &&
@@ -587,6 +702,7 @@ function ChatInterface({
     isQuickSettingsOpen,
     isSubagentPanelDocked,
     isSubagentPanelOpen,
+    selectedExecutionTask,
   ]);
 
   useEffect(() => {
@@ -655,12 +771,31 @@ function ChatInterface({
         className="relative flex h-full min-h-0 overflow-hidden"
       >
         <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+          {selectedSession?.parentSessionId && onNavigateToSession && (
+            <div className="shrink-0 border-b border-border px-3 py-2 text-xs text-muted-foreground">
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-foreground"
+                onClick={() => onNavigateToSession(selectedSession.parentSessionId!)}
+              >
+                {t('fork.viewParent', { defaultValue: 'View original chat' })}
+              </button>
+              <span className="ml-2">{t('fork.sameWorkspace', { defaultValue: 'This branch uses the same workspace.' })}</span>
+            </div>
+          )}
+          {forkError && (
+            <div role="alert" className="shrink-0 border-b border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+              {t('fork.failed', { defaultValue: 'Could not branch this chat. Please retry.' })} {forkError}
+            </div>
+          )}
+          {executionNavigationMessage && <p role="status" className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">{executionNavigationMessage}</p>}
           <ChatMessagesPane
+            creationMode={creation.mode}
           scrollContainerRef={scrollContainerRef}
           onWheel={handleScroll}
           onTouchMove={handleScroll}
           isLoadingSessionMessages={isLoadingSessionMessages}
-          chatMessages={chatMessages}
+          chatMessages={combinedMessages}
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
           provider={provider}
@@ -682,7 +817,7 @@ function ChatInterface({
           hasMoreMessages={hasMoreMessages}
           totalMessages={totalMessages}
           sessionMessagesCount={chatMessages.length}
-          visibleMessages={visibleMessages}
+          visibleMessages={combinedVisible}
           allMessagesLoaded={allMessagesLoaded}
           createDiff={createDiff}
           onFileOpen={onFileOpen}
@@ -694,6 +829,12 @@ function ChatInterface({
           showThinking={showThinking}
           selectedProject={selectedProject}
           onOpenSubagent={handleOpenSubagent}
+          executionTasks={executionTasks}
+          locatedExecutionSource={locatedExecutionSource}
+          onOpenExecutionTask={handleOpenExecutionTask}
+          onForkMessage={onNavigateToSession && selectedProject.accessRole !== 'view' ? forkMessage : undefined}
+          forkingMessageUuid={forkingMessageUuid}
+          forkDisabled={forkDisabled}
         />
 
           {(latestHiddenSubagentQuestion || unresolvedSubagentQuestions.length > 0) && (
@@ -721,14 +862,16 @@ function ChatInterface({
             </div>
           )}
 
+          {creation.error && <div role="alert" className="px-4 py-2 text-sm text-red-600">{creation.error}</div>}
           <ChatComposer
+          skillCreation={{ mode: creation.mode, busy: creation.busy, disabled: !selectedProject.workspaceId || selectedProject.accessRole === 'view', onToggle: creation.toggle }}
           pendingPermissionRequests={mainPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}
-          claudeStatus={claudeStatus}
-          isLoading={isLoading}
+          claudeStatus={creation.busy ? null : claudeStatus}
+          isLoading={isLoading || creation.busy}
           loadingStartedAt={loadingStartedAt}
-          onAbortSession={handleAbortSession}
+          onAbortSession={creation.busy ? () => void creation.cancel() : handleAbortSession}
           provider={provider}
           permissionMode={permissionMode}
           onModeSwitch={cyclePermissionMode}
@@ -738,12 +881,12 @@ function ChatInterface({
           slashCommandsCount={slashCommandsCount}
           onToggleCommandMenu={handleToggleCommandMenu}
           onOpenCapabilities={onOpenCapabilities}
-          hasInput={Boolean(input.trim())}
-          onClearInput={handleClearInput}
+          hasInput={!creation.busy && Boolean((creation.mode ? creation.description : input).trim())}
+          onClearInput={creation.mode ? () => creation.change('') : handleClearInput}
           isUserScrolledUp={isUserScrolledUp}
           hasMessages={chatMessages.length > 0}
           onScrollToBottom={scrollToBottomAndReset}
-          onSubmit={handleSubmit}
+          onSubmit={creation.mode ? (event) => { event.preventDefault(); if (!isLoading) void creation.submit(); } : handleSubmit}
           isDragActive={isDragActive}
           attachedImages={attachedImages}
           onRemoveImage={(index) =>
@@ -753,7 +896,7 @@ function ChatInterface({
           }
           uploadingImages={uploadingImages}
           imageErrors={imageErrors}
-          showFileDropdown={showFileDropdown}
+          showFileDropdown={!creation.mode && showFileDropdown}
           filteredFiles={filteredFiles}
           selectedFileIndex={selectedFileIndex}
           onSelectFile={selectFile}
@@ -761,22 +904,26 @@ function ChatInterface({
           selectedCommandIndex={selectedCommandIndex}
           onCommandSelect={handleCommandSelect}
           onCloseCommandMenu={resetCommandMenuState}
-          isCommandMenuOpen={showCommandMenu}
+          isCommandMenuOpen={!creation.mode && showCommandMenu}
           frequentCommands={commandQuery ? [] : frequentCommands}
           getRootProps={getRootProps as (...args: unknown[]) => Record<string, unknown>}
           inputHighlightRef={inputHighlightRef}
           renderInputWithMentions={renderInputWithMentions}
           textareaRef={textareaRef}
-          input={input}
-          onInputChange={handleInputChange}
+          input={creation.mode ? creation.description : input}
+          onInputChange={creation.mode ? (event) => creation.change(event.target.value) : handleInputChange}
           onTextareaClick={handleTextareaClick}
-          onTextareaKeyDown={handleKeyDown}
+          onTextareaKeyDown={creation.mode ? (event) => {
+            if (event.key === 'Enter' && !event.nativeEvent.isComposing && !event.shiftKey && ((event.ctrlKey || event.metaKey) || !sendByCtrlEnter)) {
+              event.preventDefault(); if (!isLoading) void creation.submit();
+            }
+          } : handleKeyDown}
           onTextareaPaste={handlePaste}
           onTextareaScrollSync={syncInputOverlayScroll}
           onTextareaInput={handleTextareaInput}
           onInputFocusChange={handleInputFocusChange}
           placeholder={
-            isLoading && provider === 'claude'
+            creation.mode ? t('skillCreation.placeholder', { ns: 'common' }) : isLoading && provider === 'claude'
               ? t('input.supplementPlaceholder', {
                   defaultValue: 'Add supplemental information while Claude is working...',
                 })
@@ -798,14 +945,14 @@ function ChatInterface({
         />
         </div>
 
-        {isSubagentPanelOpen && isSubagentPanelDocked && (
+        {isDetailsPanelOpen && isSubagentPanelDocked && (
           <div className="flex h-full min-w-0 flex-shrink-0">
             <div
               role="separator"
               tabIndex={0}
               aria-label={t('subagent.resizePanel', { defaultValue: 'Resize agent activity panel' })}
               aria-orientation="vertical"
-              aria-controls="subagent-activity-panel"
+              aria-controls={selectedExecutionTask ? 'execution-task-panel' : 'subagent-activity-panel'}
               aria-valuemin={subagentPanelMinWidth}
               aria-valuemax={subagentPanelMaxWidth}
               aria-valuenow={Math.round(subagentPanelWidth)}
@@ -819,7 +966,15 @@ function ChatInterface({
               className="h-full min-w-0 overflow-hidden border-l border-border bg-background"
               style={{ width: `${subagentPanelWidth}px` }}
             >
-              <SubagentPanel
+              {selectedExecutionTask ? <ExecutionTaskPanel
+                task={selectedExecutionTask}
+                mode="docked"
+                onClose={closeSubagentPanel}
+                onLocateTask={handleLocateExecutionTask}
+                outputFileUnavailableReason={executionOutputUnavailableReason}
+                onOpenParent={handleExecutionOpenParent}
+                onFileOpen={onFileOpen}
+              /> : <SubagentPanel
                 traces={subagentDisplayTraces}
                 selectedTraceId={selectedSubagentTraceId}
                 onSelectTrace={setSelectedSubagentTraceId}
@@ -836,7 +991,9 @@ function ChatInterface({
                 showThinking={showThinking}
                 selectedProject={selectedProject}
                 provider={provider}
-              />
+                executionTasks={executionTasks}
+                onOpenExecutionTask={handleOpenExecutionTask}
+              />}
             </div>
           </div>
         )}
@@ -859,6 +1016,20 @@ function ChatInterface({
             showThinking={showThinking}
             selectedProject={selectedProject}
             provider={provider}
+            executionTasks={executionTasks}
+            onOpenExecutionTask={handleOpenExecutionTask}
+          />
+        )}
+
+        {selectedExecutionTask && !isSubagentPanelDocked && (
+          <ExecutionTaskPanel
+            task={selectedExecutionTask}
+            mode="drawer"
+            onClose={closeSubagentPanel}
+            onLocateTask={handleLocateExecutionTask}
+            outputFileUnavailableReason={executionOutputUnavailableReason}
+            onOpenParent={handleExecutionOpenParent}
+            onFileOpen={onFileOpen}
           />
         )}
 

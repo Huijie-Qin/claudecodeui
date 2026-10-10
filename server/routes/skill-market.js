@@ -108,6 +108,8 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const skill = await marketService.downloadMarketSkill({
+        tenantId: getRequestTenantId(req),
+        userId: getRequestUserId(req),
         workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
@@ -136,6 +138,8 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const result = await marketService.publishMarketSkill({
+        tenantId: getRequestTenantId(req),
+        userId: getRequestUserId(req),
         workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
@@ -217,6 +221,8 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const result = await marketService.publishMarketSkill({
+        tenantId: getRequestTenantId(req),
+        userId: getRequestUserId(req),
         workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
@@ -245,6 +251,8 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const result = await marketService.uploadAndPublishLocalSkill({
+        tenantId: getRequestTenantId(req),
+        userId: getRequestUserId(req),
         workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
@@ -270,6 +278,8 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const result = await marketService.reserveUnpublishMarketSkill({
+        tenantId: getRequestTenantId(req),
+        userId: getRequestUserId(req),
         workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,
@@ -297,6 +307,8 @@ export function createSkillMarketRouter({
       const tenantCode = resolveTenantCode(req, tenants);
       const accountId = resolveAccountId(req, users);
       const result = await marketService.removeMarketSkill({
+        tenantId: getRequestTenantId(req),
+        userId: getRequestUserId(req),
         workspaceId: workspace.id,
         workspacePath: workspace.path,
         name: req.params.name,

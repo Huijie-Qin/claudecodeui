@@ -10,7 +10,7 @@ async function requestJson(router, path, { method = 'GET', isSystemAdmin = true 
     const app = express();
     app.use(express.json());
     app.use((req, _res, next) => {
-      req.user = { id: 9, username: 'admin-user', is_system_admin: isSystemAdmin ? 1 : 0 };
+      req.user = { id: 9, username: 'admin-user', is_system_admin: isSystemAdmin ? 1 : 0, role: 'tenant_admin' };
       next();
     });
     app.use(router);
@@ -46,6 +46,21 @@ function createRouter({ agentTemplates, hookSkillCatalog, hookMcpCatalog }) {
     hookMcpCatalog,
   );
 }
+
+test('tenant admins cannot mutate platform templates through Admin endpoints', async () => {
+  let mutations = 0;
+  const deniedMutation = () => { mutations += 1; return {}; };
+  const router = createRouter({ agentTemplates: {
+    saveTemplate: deniedMutation, publishTemplate: deniedMutation,
+    disableTemplate: deniedMutation, deleteTemplate: deniedMutation,
+  } });
+  for (const [path, method] of [
+    ['/agent-templates', 'POST'], ['/agent-templates/3', 'PUT'],
+    ['/agent-templates/3/publish', 'POST'], ['/agent-templates/3/disable', 'POST'],
+    ['/agent-templates/3', 'DELETE'],
+  ]) assert.equal((await requestJson(router, path, { method, isSystemAdmin: false })).response.status, 403);
+  assert.equal(mutations, 0);
+});
 
 test('Agent template details return folder metadata and require system admin access', async () => {
   const calls = [];

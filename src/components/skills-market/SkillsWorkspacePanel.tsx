@@ -1,4 +1,3 @@
-import CodeMirror from '@uiw/react-codemirror';
 import {
   AlertCircle,
   ArrowLeft,
@@ -19,6 +18,7 @@ import {
 import type { DragEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { useTranslation } from 'react-i18next';
 import type { Project } from '../../types/app';
 import { api } from '../../utils/api';
 import { resolveSkillFileLink } from '../../utils/skillMarkdownLinks';
@@ -26,6 +26,9 @@ import { dispatchSlashCommandsChangedForPath } from '../chat/utils/slashCommandE
 import MarkdownPreview from '../code-editor/view/subcomponents/markdown/MarkdownPreview';
 import { dispatchProjectFilesChanged } from '../file-tree/utils/fileTreeEvents';
 
+import SnippetLibrary from './snippets/SnippetLibrary';
+import SnippetFileEditor from './snippets/SnippetFileEditor';
+import SkillEvaluationPanel from './evaluation/SkillEvaluationPanel';
 import RemovalConfirmDialog, { type RemovalDialogTarget } from './RemovalConfirmDialog';
 import SkillFileTree from './SkillFileTree';
 import SkillPublishAction from './SkillPublishAction';
@@ -116,6 +119,8 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     if (typeof window === 'undefined') return 'market';
     return window.localStorage.getItem('skillsWorkspaceView') === 'mine' ? 'mine' : 'market';
   });
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
+  const [snippetRefresh, setSnippetRefresh] = useState(0);
   const [query, setQuery] = useState('');
   const [originFilter, setOriginFilter] = useState<'all' | 'market' | 'local'>('all');
   const [marketSkills, setMarketSkills] = useState<MarketSkill[]>([]);
@@ -316,6 +321,7 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
   const guardUnsaved = () => !dirty || window.confirm('当前文件有未保存的修改，确定放弃吗？');
 
   const changeView = (nextView: SkillsView) => {
+    setSnippetsOpen(false);
     const decision = getSkillTabClickDecision({
       currentView: view,
       nextView,
@@ -652,16 +658,22 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
     <section className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-3">
         <div className="inline-flex rounded-md border border-border bg-muted p-1" role="tablist" aria-label="技能页面">
-          <SubTab active={view === 'market'} onClick={() => changeView('market')}>技能市场</SubTab>
-          <SubTab active={view === 'mine'} onClick={() => changeView('mine')}>我的技能</SubTab>
+          <SubTab active={!snippetsOpen && view === 'market'} onClick={() => changeView('market')}>技能市场</SubTab>
+          <SubTab active={!snippetsOpen && view === 'mine'} onClick={() => changeView('mine')}>我的技能</SubTab>
+          <SubTab active={snippetsOpen} onClick={() => {
+            if (!guardUnsaved()) return;
+            resetDetail();
+            setSnippetsOpen(true);
+            setSnippetRefresh((value) => value + 1);
+          }}>片段管理</SubTab>
         </div>
         <div className="flex items-center gap-2">
-          {view === 'mine' && !detailTarget ? (
+          {!snippetsOpen && view === 'mine' && !detailTarget ? (
             <ActionButton icon={Upload} label="上传技能" primary onClick={() => setUploadOpen(true)} disabled={!canManage} />
           ) : null}
           <button
             type="button"
-            onClick={() => view === 'market' ? void loadMarket(1, true) : void mine.reload()}
+            onClick={() => snippetsOpen ? setSnippetRefresh((value) => value + 1) : view === 'market' ? void loadMarket(1, true) : void mine.reload()}
             disabled={marketLoading || mine.isLoading || actionLoading}
             className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-50"
             aria-label="刷新"
@@ -673,8 +685,13 @@ export default function SkillsWorkspacePanel({ selectedProject, isReadOnly }: Sk
 
       {message ? <InlineMessage message={message} onClose={() => setMessage(null)} /> : null}
 
-      {detailTarget ? (
+      {snippetsOpen ? <SnippetLibrary refreshKey={snippetRefresh} /> : detailTarget ? (
         <SkillDetailView
+          workspaceId={workspaceId}
+          key={`${workspaceId}:${detailTarget.source}:${detailTarget.name}`}
+          evaluationPanel={detailTarget.source === 'mine' && workspaceId ? (
+            <SkillEvaluationPanel key={`${workspaceId}:${detailTarget.name}`} workspaceId={workspaceId} name={detailTarget.name} canManage={canManage} onFilesChanged={() => notifyWorkspaceChanged(detailTarget.name, 'skill-evaluation-files')} />
+          ) : null}
           actionLoading={actionLoading}
           canManage={canManage}
           detail={detail}
@@ -930,6 +947,8 @@ function SkillList({
 }
 
 function SkillDetailView({
+  workspaceId,
+  evaluationPanel,
   actionLoading,
   canManage,
   detail,
@@ -960,6 +979,8 @@ function SkillDetailView({
   publishAction,
   unpublishAction,
 }: {
+  workspaceId?: number;
+  evaluationPanel?: ReactNode;
   actionLoading: boolean;
   canManage: boolean;
   detail: SkillDetail | null;
@@ -990,6 +1011,8 @@ function SkillDetailView({
   publishAction?: ReactNode;
   unpublishAction?: ReactNode;
 }) {
+  const { t } = useTranslation('common');
+  const [detailTab, setDetailTab] = useState<'files' | 'evaluation'>('files');
   if (detailLoading) return <CenteredState icon={<Loader2 className="h-5 w-5 animate-spin" />} title="正在加载技能详情…" />;
   if (!detail) return <CenteredState icon={<AlertCircle className="h-5 w-5" />} title="技能详情不可用" action="返回" onAction={onBack} />;
   const isLocalOrigin = source === 'mine' && detail.origin === 'local';
@@ -1019,7 +1042,11 @@ function SkillDetailView({
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
+      {evaluationPanel && <div className="flex gap-2 border-b border-border px-4 py-2" role="tablist" aria-label={t('skillEvaluation.title')}>
+        <button type="button" role="tab" aria-selected={detailTab === 'files'} className={`rounded-md px-4 py-2 text-sm ${detailTab === 'files' ? 'bg-muted font-medium' : ''}`} onClick={() => setDetailTab('files')}>{t('skillEvaluation.filesTab')}</button>
+        <button type="button" role="tab" aria-selected={detailTab === 'evaluation'} className={`rounded-md px-4 py-2 text-sm ${detailTab === 'evaluation' ? 'bg-muted font-medium' : ''}`} onClick={() => { if (!dirty || window.confirm(t('skillEvaluation.unsaved'))) setDetailTab('evaluation'); }}>{t('skillEvaluation.title')}</button>
+      </div>}
+      {detailTab === 'evaluation' && evaluationPanel ? evaluationPanel : <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
         <SkillFileTree
           busy={actionLoading}
           editable={detailEditable}
@@ -1075,8 +1102,11 @@ function SkillDetailView({
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
                   <FileContentView
+                    key={file.path}
+                    workspaceId={workspaceId}
+                    skillName={detail.name}
                     content={editing ? editContent : file.content ?? ''}
-                    editing={editing}
+                    editing={editing && detailEditable}
                     file={file}
                     files={detail.files}
                     onChange={onEditContent}
@@ -1088,12 +1118,13 @@ function SkillDetailView({
             ) : <CenteredState icon={<FileText className="h-5 w-5" />} title="选择文件后查看内容" />}
           </div>
         </main>
-      </div>
+      </div>}
     </div>
   );
 }
 
-function FileContentView({ content, editing, file, files, onChange, onSelectFile, previewMode }: { content: string; editing: boolean; file: SkillFile; files: WorkspaceSkillEntry[]; onChange: (content: string) => void; onSelectFile: (path: string) => void; previewMode: boolean }) {
+function FileContentView({ content, editing, file, files, workspaceId, skillName, onChange, onSelectFile, previewMode }: { content: string; editing: boolean; file: SkillFile; files: WorkspaceSkillEntry[]; workspaceId?: number; skillName: string; onChange: (content: string) => void; onSelectFile: (path: string) => void; previewMode: boolean }) {
+
   if (file.isBinary) {
     if (file.mimeType?.startsWith('image/') && file.contentBase64) {
       return <div className="flex min-h-full items-center justify-center bg-muted/20 p-6"><img src={`data:${file.mimeType};base64,${file.contentBase64}`} alt={file.path} className="max-h-full max-w-full rounded-md border border-border object-contain" /></div>;
@@ -1119,7 +1150,7 @@ function FileContentView({ content, editing, file, files, onChange, onSelectFile
     );
   }
   if (editing) {
-    return <CodeMirror value={content} onChange={onChange} height="100%" style={{ height: '100%', fontSize: '13px' }} basicSetup={{ lineNumbers: true, foldGutter: true, bracketMatching: true, closeBrackets: true }} />;
+    return <SnippetFileEditor content={content} filePath={file.path} workspaceId={workspaceId} skillName={skillName} onChange={onChange} />;
   }
   return <pre className="min-h-full overflow-auto p-4 font-mono text-xs leading-6 text-foreground"><code>{content}</code></pre>;
 }

@@ -316,6 +316,7 @@ export function createWorkspaceMcpToolsService({
     userId = null,
     workspacePath,
     accessRole = 'view',
+    refreshProbes = true,
     now = () => new Date(),
   }) => {
     const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
@@ -338,7 +339,7 @@ export function createWorkspaceMcpToolsService({
     const preferencesByPresetId = new Map(
       preferences.map((preference) => [Number(preference.preset_id), preference]),
     );
-    const probesByPresetId = await probeInstalledWorkspacePresets({
+    const probesByPresetId = refreshProbes ? await probeInstalledWorkspacePresets({
       multitenancy,
       tenantId: normalizedTenantId,
       workspaceId: normalizedWorkspaceId,
@@ -350,7 +351,7 @@ export function createWorkspaceMcpToolsService({
       users,
       env,
       now,
-    });
+    }) : new Map();
     const workspacePresets = presets.map((preset) => (
       withUserToolPreference(toWorkspacePreset(
         preset,

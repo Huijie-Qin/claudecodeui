@@ -1,0 +1,162 @@
+-- AI 看板相关明细表 DDL
+-- 数据库：SQLite。按当前项目代码整理。
+-- 范围：6 张看板业务明细表 + 1 张保留的原宽表。
+-- 不含夜间暂存、批次状态、权限身份等辅助表，也不包含历史废弃表。
+-- 本文件只记录表结构，不执行迁移或删除已有数据。
+--
+-- 页面对应关系：
+-- 整体概览 / AI 使用：ai_dashboard_ai_detail
+-- Skill 发布：ai_dashboard_skill_publication_detail
+-- Skill 调用：ai_dashboard_skill_invocation_detail
+-- 代码产出 / 生成 SQL：ai_dashboard_sql_generation_detail
+-- 代码产出 / 提交代码：ai_dashboard_code_submission_detail
+-- 记录性 Hook / Agent 模板：ai_usage_report_rows
+-- 中间投影与原对接：ai_dashboard_integration_detail
+--
+-- 前五表与宽表：stat_date 为 YYYY-MM-DD；
+-- occurred_at 使用上海时区 YYYY-MM-DD HH:mm:ss。
+-- 原报表 ai_usage_report_rows 的 occurred_at 保留带时区信息的时间字符串。
+-- 五表 AI 时长使用 REAL 秒数；原宽表仍使用 INTEGER 毫秒。
+-- 字段未声明 NOT NULL 时允许 NULL；NULL 不等于已确认的 0。
+-- 正式明细均不含 partition_id 或 batch_id。
+-- 当前链路：原报表候选 -> 宽表候选 -> 五表候选，同一事务统一发布。
+
+-- 1. AI 交互与时长明细
+-- 粒度：同租户、用户、工作区、会话、统计日一行。
+CREATE TABLE IF NOT EXISTS ai_dashboard_ai_detail (
+    id                         TEXT NOT NULL,     -- 明细唯一标识
+    tenant_id                  INTEGER NOT NULL,  -- 租户 ID
+    stat_date                  TEXT NOT NULL,     -- 统计日期；页面日期筛选使用此字段
+    occurred_at                TEXT,              -- 当日最早交互时间；仅有时长时取原请求开始时间
+    user_id                    INTEGER,           -- AI 使用者用户 ID
+    user_name                  TEXT,              -- 用户名快照
+    workspace_id               INTEGER,           -- 工作区 ID
+    workspace_name             TEXT,              -- 工作区名称快照
+    ai_session_id              TEXT,              -- 统计用会话标识；有交互的会话按此字段去重
+    has_ai_interaction         INTEGER,           -- 1：当日有交互；0：仅有跨日等时长记录
+    ai_active_duration_seconds REAL,              -- 当日已知的已完成请求时长之和，单位秒
+    PRIMARY KEY (tenant_id, id)
+);
+
+-- 2. Skill 发布明细
+-- 粒度：一个确认首次发布的 Skill 一行；重复发布不重复计数。
+CREATE TABLE IF NOT EXISTS ai_dashboard_skill_publication_detail (
+    id                  TEXT NOT NULL,     -- 明细唯一标识
+    tenant_id           INTEGER NOT NULL,  -- 租户 ID
+    stat_date           TEXT NOT NULL,     -- 统计日期
+    occurred_at         TEXT,              -- 首次发布时间
+    workspace_id        INTEGER,           -- 工作区 ID
+    workspace_name      TEXT,              -- 工作区名称快照
+    skill_id            TEXT,              -- Skill 标识
+    skill_name          TEXT,              -- Skill 名称快照
+    publisher_user_id   INTEGER,           -- 发布者用户 ID
+    publisher_user_name TEXT,              -- 发布者用户名快照
+    PRIMARY KEY (tenant_id, id)
+);
+
+-- 3. Skill 调用明细
+-- 粒度：一次去重后的有效调用一行；COUNT(*) 统计调用次数。
+CREATE TABLE IF NOT EXISTS ai_dashboard_skill_invocation_detail (
+    id                  TEXT NOT NULL,     -- 明细唯一标识
+    tenant_id           INTEGER NOT NULL,  -- 租户 ID
+    stat_date           TEXT NOT NULL,     -- 统计日期
+    occurred_at         TEXT,              -- 调用发生时间
+    user_id             INTEGER,           -- 实际调用者用户 ID
+    user_name           TEXT,              -- 实际调用者用户名快照
+    workspace_id        INTEGER,           -- 工作区 ID
+    workspace_name      TEXT,              -- 工作区名称快照
+    skill_id            TEXT,              -- Skill 标识
+    skill_name          TEXT,              -- Skill 名称快照
+    publisher_user_id   INTEGER,           -- Skill 发布者用户 ID；被调用次数归属此用户
+    publisher_user_name TEXT,              -- Skill 发布者用户名快照
+    PRIMARY KEY (tenant_id, id)
+);
+
+-- 4. SQL 生成明细
+-- 粒度：每条含 SQL 的 AI 回复一行；夜间扫描会话生成，不依赖 Hook。
+CREATE TABLE IF NOT EXISTS ai_dashboard_sql_generation_detail (
+    id                  TEXT NOT NULL,     -- 明细唯一标识
+    tenant_id           INTEGER NOT NULL,  -- 租户 ID
+    stat_date           TEXT NOT NULL,     -- 统计日期
+    occurred_at         TEXT,              -- SQL 输出时间
+    user_id             INTEGER,           -- 所属用户 ID
+    user_name           TEXT,              -- 用户名快照
+    workspace_id        INTEGER,           -- 工作区 ID
+    workspace_name      TEXT,              -- 工作区名称快照
+    sql_record_id       TEXT,              -- 会话 SQL 输出稳定标识；不是 Hook 记录 ID
+    generated_sql_lines INTEGER,           -- 会话回复中提取的 SQL 行数
+    PRIMARY KEY (tenant_id, id)
+);
+
+-- 5. CodeHub 代码提交明细
+-- 粒度：一条已合并 MR 提交记录一行。
+-- 来源：ai_mr_submissions.status='merged'，行数取 additions。
+CREATE TABLE IF NOT EXISTS ai_dashboard_code_submission_detail (
+    id                   TEXT NOT NULL,     -- 明细唯一标识
+    tenant_id            INTEGER NOT NULL,  -- 租户 ID
+    stat_date            TEXT NOT NULL,     -- 统计日期
+    occurred_at          TEXT,              -- MR 合并时间
+    user_id              INTEGER,           -- 提交记录所属用户 ID
+    user_name            TEXT,              -- 用户名快照
+    workspace_id         INTEGER,           -- 工作区 ID
+    workspace_name       TEXT,              -- 工作区名称快照
+    code_submission_id   TEXT,              -- 原 MR 提交记录标识
+    repository_url       TEXT,              -- 代码仓库地址
+    commit_sha           TEXT,              -- 来源记录中的提交 SHA；仅追溯，不按 SHA 跨 MR 去重
+    submitted_code_lines INTEGER,           -- 已合并 MR 的 additions 行数
+    PRIMARY KEY (tenant_id, id)
+);
+
+-- 6. 原报表明细
+-- 记录性 Hook 与 Agent 模板继续从本表查询；本表也是宽表的指标来源。
+-- 正式表只保存当前已发布结果。
+CREATE TABLE IF NOT EXISTS ai_usage_report_rows (
+    tenant_id    INTEGER NOT NULL,  -- 租户 ID
+    dataset      TEXT NOT NULL,     -- 数据类别
+    row_key      TEXT NOT NULL,     -- 类别内记录标识
+    stat_date    TEXT NOT NULL,     -- 统计日期
+    user_id      INTEGER,           -- 用户 ID
+    workspace_id INTEGER,           -- 工作区 ID
+    subject_id   TEXT,              -- Hook、Agent 模板、Skill 等对象标识
+    session_key  TEXT,              -- 内部会话关联标识
+    occurred_at  TEXT,              -- 带时区信息的发生时间
+    value_json   TEXT NOT NULL,     -- JSON 格式的具体指标及记录内容
+    PRIMARY KEY (tenant_id, dataset, stat_date, row_key)
+);
+
+-- 项目已有的报表筛选索引
+CREATE INDEX IF NOT EXISTS idx_ai_usage_report_filter
+ON ai_usage_report_rows (
+    tenant_id, stat_date, user_id, workspace_id, subject_id
+);
+
+-- 7. 保留的原宽表
+-- 从原报表投影，再生成五张拆分表；当前核心看板指标不直接查询本表。
+-- 不属于当前记录类型的字段为空。此表目前仍被夜间任务和迁移流程使用。
+CREATE TABLE IF NOT EXISTS ai_dashboard_integration_detail (
+    id                    TEXT NOT NULL,     -- 明细唯一标识
+    tenant_id             INTEGER NOT NULL,  -- 租户 ID
+    stat_date             TEXT NOT NULL,     -- 统计日期
+    occurred_at           TEXT,              -- 发生时间
+    user_id               INTEGER,           -- 行为用户 ID
+    user_name             TEXT,              -- 用户名快照
+    workspace_id          INTEGER,           -- 工作区 ID
+    workspace_name        TEXT,              -- 工作区名称快照
+    ai_session_id         TEXT,              -- 统计用会话标识
+    has_ai_interaction    INTEGER,           -- AI 交互记录为 1
+    ai_active_duration_ms INTEGER,           -- 已知的已完成请求时长，单位毫秒
+    skill_id              TEXT,              -- Skill 标识
+    skill_name            TEXT,              -- Skill 名称快照
+    publisher_user_id     INTEGER,           -- Skill 发布者用户 ID
+    publisher_user_name   TEXT,              -- Skill 发布者用户名快照
+    skill_publish_count   INTEGER,           -- 首次发布记录为 1
+    skill_call_count      INTEGER,           -- 有效调用记录为 1
+    sql_record_id         TEXT,              -- 会话 SQL 输出标识
+    generated_sql_lines   INTEGER,           -- 生成 SQL 行数
+    code_submission_id    TEXT,              -- 原 MR 提交记录标识
+    repository_url        TEXT,              -- 代码仓库地址
+    commit_sha            TEXT,              -- 来源保存的提交 SHA
+    submitted_code_lines  INTEGER,           -- 已合并 MR 的 additions 行数
+    refreshed_at          TEXT NOT NULL,     -- 统计结果刷新时间，上海时区
+    PRIMARY KEY (tenant_id, id)
+);

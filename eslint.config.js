@@ -168,6 +168,13 @@ export default tseslint.config(
             "server/database/*.{js,ts}",
             "server/services/agent-template-folders.js",
             "server/services/agent-template-folder-assets.js",
+            "server/services/ai-dashboard-integration.js",
+            "server/services/ai-dashboard-split.js",
+            "server/services/ai-usage-turns.js",
+            "server/services/ai-usage-inheritance.js",
+            "server/services/claude-fork-checkpoint.js",
+            "server/services/claude-fork-checkpoint-store.js",
+            "server/services/skill-evals/contracts.js",
             "server/utils/runtime-paths.js",
           ], // provider history loading still resolves session data through these legacy runtime/database files
           mode: "file",

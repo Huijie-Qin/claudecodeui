@@ -24,6 +24,15 @@ type WebSocketContextType = {
 };
 
 const WebSocketContext = createContext<WebSocketContextType | null>(null);
+type WebSocketControls = Pick<WebSocketContextType, 'sendMessage' | 'isConnected'>;
+export const WebSocketControlsContext = createContext<WebSocketControls | null>(null);
+
+// Message rows only need controls; incoming messages must not invalidate them.
+export const useWebSocketControls = () => {
+  const context = useContext(WebSocketControlsContext);
+  if (!context) throw new Error('useWebSocketControls must be used within a WebSocketProvider');
+  return context;
+};
 
 export const useWebSocket = () => {
   const context = useContext(WebSocketContext);
@@ -177,10 +186,14 @@ const useWebSocketProviderState = (): WebSocketContextType => {
 
 export const WebSocketProvider = ({ children }: { children: React.ReactNode }) => {
   const webSocketData = useWebSocketProviderState();
+  const controls = useMemo(() => ({
+    sendMessage: webSocketData.sendMessage,
+    isConnected: webSocketData.isConnected,
+  }), [webSocketData.sendMessage, webSocketData.isConnected]);
   
   return (
     <WebSocketContext.Provider value={webSocketData}>
-      {children}
+      <WebSocketControlsContext.Provider value={controls}>{children}</WebSocketControlsContext.Provider>
     </WebSocketContext.Provider>
   );
 };

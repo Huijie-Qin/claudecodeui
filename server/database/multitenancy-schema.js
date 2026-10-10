@@ -436,6 +436,7 @@ CREATE TABLE IF NOT EXISTS agent_template_categories (
 
 CREATE TABLE IF NOT EXISTS agent_templates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_tenant_id INTEGER,
   name TEXT NOT NULL,
   category TEXT NOT NULL DEFAULT '',
   summary TEXT NOT NULL DEFAULT '',

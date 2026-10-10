@@ -76,6 +76,7 @@ const POST_ACTION_TYPES = Object.freeze([
   'invoke_skill',
   'send_agent_message',
   'request_confirmation',
+  'review_completion',
 ]);
 const AGENT_TURN_ACTION_EVENTS = new Set(['Stop', 'StopFailure']);
 const SCRIPT_OUTPUT_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array']);
@@ -98,6 +99,7 @@ const ENVIRONMENT_VARIABLE_PATHS = new Set([
   'ccui.env.workspaceId',
   'ccui.env.sessionId',
   'ccui.env.sqlCheckRuleIds',
+  'ccui.env.hookInvocationCount',
 ]);
 const COMMON_CLAUDE_OUTPUTS = Object.freeze([
   'continue',
@@ -150,6 +152,7 @@ function allowedPostActions(eventName) {
   return new Set(actions.filter((type) => (
     (type !== 'mcp_loop_run' || eventName === 'PostToolUse')
     && (type !== 'request_confirmation' || eventName === 'PreToolUse')
+    && (type !== 'review_completion' || eventName === 'Stop')
   )));
 }
 
@@ -192,6 +195,21 @@ function requireInteger(value, name, { min = 1, max = Number.MAX_SAFE_INTEGER } 
     throw createHttpError(`${name} must be an integer between ${min} and ${max}`);
   }
   return number;
+}
+
+function normalizeReviewArtifactPaths(value, name) {
+  const paths = value ?? [];
+  if (!Array.isArray(paths)) throw createHttpError(`${name} must be an array`);
+  if (paths.length > 20) throw createHttpError(`${name} must contain 20 paths or fewer`);
+  return [...new Set(paths.map((entry, index) => {
+    const candidate = requireString(entry, `${name}[${index}]`, { max: 500 });
+    if (candidate.startsWith('/') || candidate.startsWith('~') || candidate.includes('\\')
+        || candidate.includes(':') || /[\u0000-\u001f\u007f]/.test(candidate)
+        || candidate.split('/').includes('..')) {
+      throw createHttpError(`${name}[${index}] must be a workspace-relative path or glob`);
+    }
+    return candidate;
+  }))];
 }
 
 function normalizeEqualityCondition(value, name, { optional = false } = {}) {
@@ -360,6 +378,39 @@ function normalizeBinding(value, name) {
   return { source: 'literal', value: value.value };
 }
 
+function normalizeRecordReportFields(value, fields, name) {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.length > 20) {
+    throw createHttpError(`${name} must be an array of at most 20 fields`);
+  }
+  const keys = new Set();
+  return value.map((field, index) => {
+    const prefix = `${name}[${index}]`;
+    if (!isPlainObject(field)) throw createHttpError(`${prefix} must be an object`);
+    if (Object.keys(field).some((key) => !['key', 'label', 'type', 'unit', 'aggregation'].includes(key))) {
+      throw createHttpError(`${prefix} only supports key, label, type, unit, and aggregation`);
+    }
+    const key = requireString(field.key, `${prefix}.key`, { max: 200 });
+    if (!/^[\p{L}_][\p{L}\p{N}_-]*$/u.test(key) || ['__proto__', 'prototype', 'constructor'].includes(key)) {
+      throw createHttpError(`${prefix}.key must be a plain record field name, not a path or expression`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(fields, key)) throw createHttpError(`${prefix}.key must select an existing record field`);
+    if (keys.has(key)) throw createHttpError(`${prefix}.key is duplicated`);
+    keys.add(key);
+    if (!['number', 'string', 'boolean'].includes(field.type)) throw createHttpError(`${prefix}.type must be number, string, or boolean`);
+    const aggregation = field.aggregation ?? 'none';
+    if (!['sum', 'avg', 'min', 'max', 'none'].includes(aggregation)) throw createHttpError(`${prefix}.aggregation is not supported`);
+    if (field.type !== 'number' && aggregation !== 'none') throw createHttpError(`${prefix}.aggregation requires a numeric field`);
+    return {
+      key,
+      label: requireString(field.label ?? key, `${prefix}.label`, { max: 120 }),
+      type: field.type,
+      ...(field.unit == null ? {} : { unit: requireString(field.unit, `${prefix}.unit`, { max: 32, allowEmpty: true }) }),
+      aggregation,
+    };
+  });
+}
+
 function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true } = {}) {
   const rawActions = value == null ? [] : value;
   if (!Array.isArray(rawActions)) throw createHttpError('postActions must be an array');
@@ -379,6 +430,9 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
       }
       if (action.type === 'request_confirmation') {
         throw createHttpError('request_confirmation is only supported for PreToolUse');
+      }
+      if (action.type === 'review_completion') {
+        throw createHttpError('review_completion is only supported for Stop');
       }
       throw createHttpError(`postActions[${index}].type is not supported`);
     }
@@ -447,6 +501,43 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
         },
       };
     }
+    if (action.type === 'review_completion') {
+      const validationResultPath = config.validationResultPath == null
+        || config.validationResultPath === ''
+        ? ''
+        : requireString(
+          config.validationResultPath,
+          `postActions[${index}].config.validationResultPath`,
+          { max: 300 },
+        );
+      return {
+        id,
+        type: 'review_completion',
+        position: index,
+        config: {
+          maxReviews: requireInteger(
+            config.maxReviews ?? 3,
+            `postActions[${index}].config.maxReviews`,
+            { min: 1, max: 10 },
+          ),
+          model: requireString(
+            typeof config.model === 'string' ? config.model : '',
+            `postActions[${index}].config.model`,
+            { max: 200, allowEmpty: true },
+          ),
+          criteria: requireString(
+            config.criteria ?? '',
+            `postActions[${index}].config.criteria`,
+            { max: 8_000, allowEmpty: true },
+          ),
+          artifactPaths: normalizeReviewArtifactPaths(
+            config.artifactPaths,
+            `postActions[${index}].config.artifactPaths`,
+          ),
+          ...(validationResultPath ? { validationResultPath } : {}),
+        },
+      };
+    }
     if (action.type === 'write_record') {
       const rawFields = isPlainObject(config.fields) ? config.fields : {};
       const fields = {};
@@ -468,6 +559,7 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
             ? null
             : normalizeBinding(config.condition, `postActions[${index}].config.condition`),
           fields,
+          reportFields: normalizeRecordReportFields(config.reportFields, fields, `postActions[${index}].config.reportFields`),
         },
       };
     }
@@ -540,6 +632,13 @@ function normalizePostActions(value, eventName, { validateBuiltinSkillIds = true
   if (confirmationActions.length === 1 && normalizedActions.at(-1)?.type !== 'request_confirmation') {
     throw createHttpError('request_confirmation must be the final post action');
   }
+  const reviewActions = normalizedActions.filter((action) => action.type === 'review_completion');
+  if (reviewActions.length > 1) {
+    throw createHttpError('Stop supports at most one review_completion post action');
+  }
+  if (reviewActions.length === 1 && normalizedActions.at(-1)?.type !== 'review_completion') {
+    throw createHttpError('review_completion must be the final post action');
+  }
   return normalizedActions;
 }
 
@@ -597,6 +696,28 @@ function validateHookReferences(hook) {
   const allActionIds = new Set(hook.postActions.map((action) => action.id));
   const precedingActionIds = new Set();
   for (const action of hook.postActions) {
+    if (action.type === 'review_completion') {
+      const validationResultPath = action.config.validationResultPath;
+      if (validationResultPath) {
+        const scriptMatch = /^script\.output\.([A-Za-z_$][A-Za-z0-9_$]*)$/.exec(validationResultPath);
+        const actionMatch = /^actions\.([^.]+)\.output$/.exec(validationResultPath);
+        if (scriptMatch) {
+          const output = hook.extensionLogic?.outputs?.find((entry) => entry.name === scriptMatch[1]);
+          if (output?.type !== 'object') {
+            throw createHttpError(`review_completion validationResultPath ${validationResultPath} requires a declared object script output`);
+          }
+        } else if (actionMatch) {
+          const sourceAction = hook.postActions.find((entry) => entry.id === actionMatch[1]);
+          if (!precedingActionIds.has(actionMatch[1]) || sourceAction?.type !== 'call_mcp_tool') {
+            throw createHttpError(`review_completion validationResultPath ${validationResultPath} requires a preceding call_mcp_tool action`);
+          }
+        } else {
+          throw createHttpError('review_completion validationResultPath must reference a script object output or preceding MCP result');
+        }
+      }
+      precedingActionIds.add(action.id);
+      continue;
+    }
     if (['call_mcp_tool', 'mcp_loop_run', 'write_record'].includes(action.type)) {
       const bindings = action.type === 'call_mcp_tool'
         ? [action.config.condition, ...Object.values(action.config.inputs)].filter(Boolean)
@@ -664,8 +785,23 @@ function normalizeHookInput(input, { strict = false } = {}) {
     postActions: normalizePostActions(input.postActions, eventName),
     claudeResponse: normalizeClaudeResponse(input.claudeResponse),
   };
+  if (normalized.includeSubagents && normalized.postActions.some((action) => action.type === 'review_completion')) {
+    throw createHttpError('review_completion only supports the main agent; disable includeSubagents');
+  }
+  if (normalized.postActions.some((action) => action.type === 'review_completion')) {
+    for (const field of ['continue', 'stopReason', 'decision', 'reason']) {
+      if (Object.hasOwn(normalized.claudeResponse.bindings, field)) {
+        throw createHttpError(`review_completion controls Claude response field ${field}`);
+      }
+    }
+  }
   validateHookReferences(normalized);
   if (strict) {
+    for (const action of normalized.postActions) {
+      if (action.type === 'review_completion' && action.config.maxReviews > 5) {
+        throw createHttpError('review_completion maxReviews must be 5 or fewer when publishing');
+      }
+    }
     const allowedOutputs = allowedClaudeOutputs(eventName);
     for (const path of Object.keys(normalized.claudeResponse.bindings)) {
       if (!allowedOutputs.has(path)) {
@@ -684,6 +820,7 @@ function mapHookRow(row) {
   if (!row) return null;
   return {
     id: row.id,
+    ownerTenantId: row.owner_tenant_id ?? null,
     name: row.name,
     description: row.description || '',
     userVariables: normalizeHookUserVariables(parseJson(row.user_variables_json, [])),
@@ -1111,6 +1248,8 @@ function validatePublishResources(hook, hookMcpCatalog, validatedSkills) {
       }
     } else if (action.type === 'request_confirmation' && !action.config.messageTemplate.trim()) {
       throw createHttpError(`Post action ${action.id} must set a confirmation message`);
+    } else if (action.type === 'review_completion') {
+      // The reviewer uses the current Stop transcript; no resource binding is needed.
     } else if (!action.config.messageTemplate.trim()) {
       throw createHttpError(`Post action ${action.id} must set an Agent message`);
     }
@@ -1256,6 +1395,7 @@ export function createHookConfigService({
     return mergeHookUserVariableValues(hook.userVariables, values);
   };
   const isAdminHookAvailableToUser = ({ hook, userId, tenantId = null }) => (
+    (hook.ownerTenantId == null || Number(hook.ownerTenantId) === Number(tenantId)) && (
     hook.activationScope === 'all_users'
     || Boolean(database.prepare(`
       SELECT 1
@@ -1278,7 +1418,7 @@ export function createHookConfigService({
         WHERE tenant_scope.hook_id = ?
           AND (? IS NULL OR tenant_scope.tenant_id = ?)
       )
-    `).get(hook.id, userId, userId, hook.id, tenantId, tenantId))
+    `).get(hook.id, userId, userId, hook.id, tenantId, tenantId)))
   );
   const requireWorkspaceContext = ({ workspaceId, tenantId = null }) => {
     const normalizedWorkspaceId = Number(workspaceId);
@@ -1419,7 +1559,7 @@ export function createHookConfigService({
       normalizedUserId,
       workspace.tenantId,
     );
-    const hooks = rows.map((row) => {
+    const hooks = rows.filter((row) => row.owner_tenant_id == null || Number(row.owner_tenant_id) === workspace.tenantId).map((row) => {
       const hasAssignment = row.assignment_hook_version != null;
       const assignment = hasAssignment ? {
         workspaceId: workspace.id,
@@ -1457,6 +1597,7 @@ export function createHookConfigService({
       const inheritsAdminDefaults = assignment?.source === 'manual'
         && isAdminHookAvailableToUser({ hook: latestHook, userId: normalizedUserId, tenantId: workspace.tenantId });
       const adminDefaultEnabled = latestHook.status === 'published' && latestHook.defaultEnabled
+        && assignment?.source !== 'agent_template'
         && isAdminHookAvailableToUser({ hook: latestHook, userId: normalizedUserId, tenantId: workspace.tenantId });
       let enabled;
       if (assignment) {
@@ -1517,6 +1658,9 @@ export function createHookConfigService({
   }) => {
     const workspace = requireWorkspaceContext({ workspaceId });
     const hook = requireHook(hookId);
+    if (hook.ownerTenantId != null && Number(hook.ownerTenantId) !== workspace.tenantId) {
+      throw createHttpError('Hook is not available in this tenant', 403);
+    }
     if (!['manual', 'agent_template'].includes(source)) {
       throw createHttpError('source must be manual or agent_template');
     }
@@ -1638,6 +1782,9 @@ export function createHookConfigService({
   const ensureWorkspaceHookEligible = ({ workspaceId, userId, hookId }) => {
     const workspace = requireWorkspaceContext({ workspaceId });
     const hook = requireHook(hookId);
+    if (hook.ownerTenantId != null && Number(hook.ownerTenantId) !== workspace.tenantId) {
+      throw createHttpError('Hook is not available in this tenant', 403);
+    }
     const assignment = getWorkspaceHookAssignment({ workspaceId, hookId });
     const userEligible = hook.bindingController === 'sql_check' || isAdminHookAvailableToUser({
       hook,
@@ -2197,7 +2344,9 @@ export function createHookConfigService({
     `,
       )
       .all(userId, userId, userId, userId, userId);
-    return rows.map((row) => ({
+    // Legacy callers have no tenant context: never execute tenant-owned Hooks
+    // on this path, even if the user belongs to more than one tenant.
+    return rows.filter((row) => row.owner_tenant_id == null).map((row) => ({
       ...mapHookRow(row),
       enabled: (row.user_enabled === 1 || (row.default_enabled === 1 && row.opted_out_user_id == null
         && isAdminHookAvailableToUser({ hook: mapHookRow(row), userId })))
@@ -2423,6 +2572,9 @@ export function createHookConfigService({
 
     replaceHookBindings: ({ hookId, scope = 'users', userIds = [], tenantIds = [], defaultEnabled, defaultShowInChat, overwriteUserPreferences = false, boundBy }) => {
       const hook = requireHook(hookId);
+      if (hook.ownerTenantId != null && (scope !== 'tenants' || !Array.isArray(tenantIds) || tenantIds.length !== 1 || Number(tenantIds[0]) !== Number(hook.ownerTenantId) || !Array.isArray(userIds) || userIds.length)) {
+        throw createHttpError('Tenant-owned Hooks can only be bound to their owning tenant', 403);
+      }
       if (hook.status !== 'published') {
         throw createHttpError('Publish the Hook before binding users');
       }
@@ -2567,6 +2719,9 @@ export function createHookConfigService({
             database.prepare('DELETE FROM user_hook_preferences WHERE hook_id = ? AND user_id = ?').run(hookId, userId);
           }
           for (const { workspace_id: workspaceId } of contexts.all(userId, hookId, hookId, userId, userId)) {
+            // Template defaults and the member's choices within that template
+            // are independent of administrator-wide Hook preference updates.
+            if (getWorkspaceHookAssignment({ workspaceId, hookId })?.source === 'agent_template') continue;
             const workspace = requireWorkspaceContext({ workspaceId });
             if (!isAdminHookAvailableToUser({ hook: updatedHook, userId, tenantId: workspace.tenantId })) continue;
             saveWorkspacePreference.run(workspaceId, userId, hookId,
@@ -2731,7 +2886,7 @@ export function createHookConfigService({
         .map(mapDataRecordRow);
     },
 
-    createHook: ({ input, userId }) => {
+    createHook: ({ input, userId, ownerTenantId = null }) => {
       const normalized = normalizeWithMcpIdentity(input);
       const hookId = crypto.randomUUID();
       database
@@ -2740,8 +2895,8 @@ export function createHookConfigService({
         INSERT INTO hooks (
           id, name, description, status, event_name, include_subagents, matcher_json,
           extension_logic_json, post_actions_json, claude_response_json, user_variables_json,
-          binding_controller, created_by, updated_by
-        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          binding_controller, created_by, updated_by, owner_tenant_id
+        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -2755,9 +2910,10 @@ export function createHookConfigService({
           JSON.stringify(normalized.postActions),
           JSON.stringify(normalized.claudeResponse),
           JSON.stringify(normalized.userVariables),
-          normalized.name === SQL_CHECK_HOOK_NAME ? 'sql_check' : 'admin',
+          ownerTenantId == null && normalized.name === SQL_CHECK_HOOK_NAME ? 'sql_check' : 'admin',
           userId,
           userId,
+          ownerTenantId,
         );
       return getHook(hookId);
     },
@@ -2919,6 +3075,7 @@ export function createHookConfigService({
         { path: 'ccui.env.workspaceId', type: 'number' },
         { path: 'ccui.env.sessionId', type: 'string' },
         { path: 'ccui.env.sqlCheckRuleIds', type: 'array' },
+        { path: 'ccui.env.hookInvocationCount', type: 'number' },
       ],
     }),
   };

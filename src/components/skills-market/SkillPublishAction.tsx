@@ -462,9 +462,9 @@ function SideBySideFileDiff({ change }: { change: MarketSkillPublishChange }) {
 
 function DiffCell({ lineNumber, content, tone, border = false }: { lineNumber: number | null; content: string; tone: DiffTone; border?: boolean }) {
   return (
-    <div className={`grid grid-cols-[3.5rem_minmax(0,1fr)] ${border ? 'border-r border-border' : ''} ${getDiffToneClassName(tone)}`}>
+    <div className={`grid min-w-0 grid-cols-[3.5rem_minmax(0,1fr)] ${border ? 'border-r border-border' : ''} ${getDiffToneClassName(tone)}`}>
       <div className="select-none border-r border-border/60 px-2 text-right text-muted-foreground">{lineNumber ?? ''}</div>
-      <pre className="min-h-5 overflow-visible whitespace-pre px-3">{content || ' '}</pre>
+      <pre className="min-h-5 min-w-0 whitespace-pre-wrap break-words px-3">{content || ' '}</pre>
     </div>
   );
 }

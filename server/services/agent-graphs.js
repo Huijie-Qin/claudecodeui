@@ -6,6 +6,7 @@ import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
 
 import { applyWorkspaceOwnership } from './workspace-ownership.js';
 import { expandLeadingSkillCommand } from './skill-command-expander.js';
+import { aiUsageSkillContextRecorder } from './ai-usage-skill-context.js';
 
 const STORE_VERSION = 1;
 const STORE_DIRECTORY = '.ccui';
@@ -546,6 +547,7 @@ async function executeSkillCreator({
   runQuery = null,
   runtimeManager = null,
   mapOptions = null,
+  skillContextRecorder = aiUsageSkillContextRecorder,
 }) {
   const effectiveRunQuery = runQuery || (await import('@anthropic-ai/claude-agent-sdk')).query;
   const effectiveRuntimeManager = runtimeManager
@@ -581,7 +583,20 @@ async function executeSkillCreator({
     sdkOptions.systemPrompt = 'Follow the supplied skill-creator instructions. Return only the requested SKILL.md content.';
 
     let responseText = '';
+    const recordedSessionIds = new Set();
     for await (const message of effectiveRunQuery({ prompt: resolved.prompt, options: sdkOptions })) {
+      const sessionId = typeof message?.session_id === 'string' ? message.session_id.trim() : '';
+      if (sessionId && !recordedSessionIds.has(sessionId)) {
+        recordedSessionIds.add(sessionId);
+        // This non-persisted, tool-free generator is not a user Skill invocation.
+        // Retain only an observed session identity, never its prompt or generated content.
+        try {
+          skillContextRecorder.recordSession({
+            tenantId, userId, workspaceId, provider: 'claude', sessionId,
+            contextId: `session:${sessionId}`, requestId: null, origin: 'top_skill', skillName: null,
+          });
+        } catch { /* Optional reporting must never interrupt Top Skill generation. */ }
+      }
       const text = extractAssistantText(message);
       if (text) responseText = text;
     }
@@ -620,6 +635,7 @@ export async function generateTopSkill({
   runQuery = null,
   runtimeManager = null,
   mapOptions = null,
+  skillContextRecorder = aiUsageSkillContextRecorder,
   expand,
 }) {
   const resolved = await resolveSkillCreatorPrompt({ workspacePath, input, expand });
@@ -634,6 +650,7 @@ export async function generateTopSkill({
     runQuery,
     runtimeManager,
     mapOptions,
+    skillContextRecorder,
   });
 }
 
@@ -646,6 +663,7 @@ export async function optimizeTopSkill({
   runQuery = null,
   runtimeManager = null,
   mapOptions = null,
+  skillContextRecorder = aiUsageSkillContextRecorder,
   expand,
 }) {
   const resolved = await resolveSkillCreatorOptimizationPrompt({ workspacePath, input, expand });
@@ -660,6 +678,7 @@ export async function optimizeTopSkill({
     runQuery,
     runtimeManager,
     mapOptions,
+    skillContextRecorder,
   });
 }
 

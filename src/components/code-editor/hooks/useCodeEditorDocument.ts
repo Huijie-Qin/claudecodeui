@@ -4,6 +4,7 @@ import { dispatchSlashCommandsChangedForPath } from '../../chat/utils/slashComma
 import { api } from '../../../utils/api';
 import type { CodeEditorFile } from '../types/types';
 import { isBinaryFile } from '../utils/binaryFile';
+import { getFilePreviewKind } from '../../file-preview/filePreviewKind';
 
 type UseCodeEditorDocumentParams = {
   file: CodeEditorFile;
@@ -58,7 +59,7 @@ export const useCodeEditorDocument = ({
         setLoadError(null);
 
         // Check if file is binary by extension
-        if (isBinaryFile(file.name)) {
+        if (isBinaryFile(file.name) || getFilePreviewKind(file.name) !== 'editor') {
           setIsBinary(true);
           setLoading(false);
           return;
@@ -115,7 +116,7 @@ export const useCodeEditorDocument = ({
     };
   }, [file.diffInfo, file.name, file.workspaceId, fileDiffNewString, fileDiffOldString, fileName, filePath, fileProjectName, reloadToken, showLoadError]);
 
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (contentToSave: string = content) => {
     setSaving(true);
     setSaveError(null);
 
@@ -128,7 +129,7 @@ export const useCodeEditorDocument = ({
         throw new Error('Missing project identifier');
       }
 
-      const response = await api.saveFile(fileProjectName, filePath, content, file.workspaceId);
+      const response = await api.saveFile(fileProjectName, filePath, contentToSave, file.workspaceId);
 
       if (!response.ok) {
         const contentType = response.headers.get('content-type');
@@ -193,6 +194,10 @@ export const useCodeEditorDocument = ({
     isBinary,
     handleSave,
     handleDownload,
-    reloadFile: () => setReloadToken((current) => current + 1),
+    reloadToken,
+    reloadFile: () => {
+      setLoading(true);
+      setReloadToken((current) => current + 1);
+    },
   };
 };

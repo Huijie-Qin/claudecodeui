@@ -6,10 +6,11 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 
 import { resolveSupportedWorkspaceTab } from '../components/main-content/utils/mainContentAccess';
+import { addForkedSessionToProjects } from '../components/chat/utils/sessionFork';
 import type { AppTab, Project, ProjectsUpdatedMessage } from '../types/app';
 
 import { projectsHaveChanges } from './projectChangeDetection';
-import { isProjectUpdateScopedToTenant } from './projectTenantUpdates';
+import { createProjectUpdateTracker } from './projectTenantUpdates';
 
 type ProjectsState = ReturnType<typeof import('./useProjectsState').useProjectsState>;
 type ProjectsStateArgs = Parameters<typeof import('./useProjectsState').useProjectsState>[0];
@@ -96,7 +97,8 @@ function createProjectsHarness(initialProjects: Project[], persistedTab: AppTab)
     '../utils/api': { api: { projects: async () => ({ json: async () => projectResponse }) } },
     '../components/main-content/utils/mainContentAccess': { resolveSupportedWorkspaceTab },
     '../features/agent-graph/agentGraphFeature': { readAgentGraphFeatureEnabled: () => false },
-    './projectTenantUpdates': { isProjectUpdateScopedToTenant },
+    '../components/chat/utils/sessionFork': { addForkedSessionToProjects },
+    './projectTenantUpdates': { createProjectUpdateTracker },
     './projectChangeDetection': { projectsHaveChanges },
   };
   const exports: { useProjectsState?: typeof import('./useProjectsState').useProjectsState } = {};
@@ -132,6 +134,7 @@ function createProjectsHarness(initialProjects: Project[], persistedTab: AppTab)
     storage,
     navigations,
     setProjectResponse(next: Project[]) { projectResponse = next; },
+    setRouteSession(sessionId: string) { args.sessionId = sessionId; dirty = true; },
     deliverProjectUpdate(message: ProjectsUpdatedMessage) {
       args.latestMessage = message;
       dirty = true;
@@ -236,3 +239,39 @@ for (const previousTab of ['skills', 'mcp-tools', 'files'] as const) {
     assert.equal(harness.storage.get('activeTab'), previousTab);
   });
 }
+
+
+test('fork navigation registers its session before selection and does not replay the previous project event', async (context) => {
+  const parent = { id: 'parent-session', summary: 'Original' };
+  const tenantProject = { ...project, tenantId: 1, sessions: [parent] };
+  const harness = createProjectsHarness([tenantProject], 'chat');
+  context.after(() => harness.dispose());
+  await harness.flush();
+  harness.setRouteSession(parent.id);
+  await harness.flush();
+
+  const previousUpdate: ProjectsUpdatedMessage = {
+    type: 'projects_updated', tenantId: 1, projects: [tenantProject],
+    changedFile: `/workspace/${parent.id}.jsonl`,
+  };
+  harness.deliverProjectUpdate(previousUpdate);
+  await harness.flush();
+  assert.equal(harness.state.externalMessageUpdate, 1);
+
+  const fork = { id: 'fork-session', parentSessionId: parent.id, __provider: 'claude' as const };
+  harness.state.handleNavigateToSession(fork.id, fork);
+  harness.setRouteSession(fork.id);
+  await harness.flush();
+  assert.equal(harness.navigations.at(-1), '/session/fork-session');
+  assert.equal(harness.state.selectedSession?.id, fork.id);
+  assert.equal(harness.state.selectedSession?.parentSessionId, parent.id);
+  assert.deepEqual(harness.state.projects[0].sessions?.map(session => session.id), [fork.id, parent.id]);
+  assert.equal(harness.state.externalMessageUpdate, 1);
+
+  harness.state.handleNavigateToSession(parent.id);
+  harness.setRouteSession(parent.id);
+  await harness.flush();
+  assert.equal(harness.state.selectedSession?.id, parent.id);
+  assert.equal(harness.state.externalMessageUpdate, 1, 'Returning to the parent must not replay an old file event');
+  assert.deepEqual(harness.state.projects[0].sessions?.map(session => session.id), [fork.id, parent.id]);
+});

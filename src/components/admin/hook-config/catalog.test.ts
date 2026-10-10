@@ -3,17 +3,23 @@ import test from 'node:test';
 
 import {
   EVENT_DEFINITIONS,
+  buildCompletionReviewValidationChoices,
   buildFieldChoices,
   buildReferenceChoices,
   buildScriptTemplate,
+  canAddCompletionReviewAction,
   canAddConfirmationAction,
+  createDefaultCompletionReviewConfig,
   createEmptyHook,
   createHookCopyDraft,
+  getCompletionReviewConfigError,
   getHookSubagentLabel,
   getClaudeOutputFields,
   inferNativeMatcherMode,
   hasTerminalPostAction,
+  parseCompletionReviewArtifactPaths,
   retainCompatiblePostActions,
+  retainReviewCompatibleClaudeBindings,
   shouldShowBusinessData,
 } from './catalog';
 import type { HookConfig, HookConfigDraft, HookPostAction, HookResources } from './types';
@@ -122,25 +128,110 @@ test('confirmation is available only before tool execution and ends the action l
   const record: HookPostAction = { id: 'record', type: 'write_record', position: 0, config: {} };
   assert.equal(canAddConfirmationAction({ ...draft, postActions: [record] }), true);
   assert.equal(hasTerminalPostAction([record]), false);
-  for (const type of ['request_confirmation', 'mcp_loop_run'] as const) {
+  for (const type of ['request_confirmation', 'mcp_loop_run', 'review_completion'] as const) {
     const actions: HookPostAction[] = [record, { id: 'terminal', type, position: 1, config: {} }];
     assert.equal(canAddConfirmationAction({ ...draft, postActions: actions }), false);
     assert.equal(hasTerminalPostAction(actions), true);
   }
 });
 
+test('completion review is available once for Stop and ends the action list', () => {
+  for (const event of EVENT_DEFINITIONS) {
+    assert.equal(canAddCompletionReviewAction({ ...draft, eventName: event.name }), event.name === 'Stop', event.name);
+  }
+  const record: HookPostAction = { id: 'record', type: 'write_record', position: 0, config: {} };
+  const review: HookPostAction = { id: 'review', type: 'review_completion', position: 1, config: { maxReviews: 3, model: '' } };
+  assert.equal(canAddCompletionReviewAction({ ...draft, eventName: 'Stop', postActions: [record] }), true);
+  assert.equal(canAddCompletionReviewAction({ ...draft, eventName: 'Stop', postActions: [record, review] }), false);
+  assert.equal(hasTerminalPostAction([record, review]), true);
+});
+
+test('completion review exposes typed verdict fields', () => {
+  const choices = buildReferenceChoices({
+    ...draft,
+    eventName: 'Stop',
+    postActions: [{ id: 'review', type: 'review_completion', position: 0, config: {} }],
+  }, resources).filter((field) => field.group === 'action');
+
+  assert.deepEqual(choices.map(({ path, type }) => ({ path, type })), [
+    { path: 'actions.review.output', type: 'object' },
+    { path: 'actions.review.output.complete', type: 'boolean' },
+    { path: 'actions.review.output.reason', type: 'string' },
+    { path: 'actions.review.output.nextStep', type: 'string' },
+    { path: 'actions.review.output.reviewNumber', type: 'number' },
+    { path: 'actions.review.output.maxReviews', type: 'number' },
+    { path: 'actions.review.output.failed', type: 'boolean' },
+  ]);
+});
+
+test('model review config keeps legacy defaults and validates optional acceptance inputs', () => {
+  const defaults = createDefaultCompletionReviewConfig();
+  assert.deepEqual(defaults, { maxReviews: 3, model: '', criteria: '', artifactPaths: [] });
+  assert.equal(getCompletionReviewConfigError(defaults), null);
+  assert.equal(getCompletionReviewConfigError({ maxReviews: 3, model: '' }), null);
+  assert.equal(getCompletionReviewConfigError({ ...defaults, maxReviews: 5 }), null);
+  assert.equal(getCompletionReviewConfigError({ ...defaults, maxReviews: 6 }), 'maxReviews');
+  assert.equal(getCompletionReviewConfigError({ ...defaults, maxReviews: null }), 'maxReviews');
+  assert.deepEqual(parseCompletionReviewArtifactPaths(' ./reports/** \n\n screenshots/[ab]?.png \r\n'), [
+    './reports/**',
+    'screenshots/[ab]?.png',
+  ]);
+  assert.equal(getCompletionReviewConfigError({
+    ...defaults,
+    criteria: 'x'.repeat(8000),
+    artifactPaths: ['./reports/**', 'screenshots/[ab]?.png', 'x'.repeat(500)],
+  }), null);
+  assert.equal(getCompletionReviewConfigError({ ...defaults, criteria: 'x'.repeat(8001) }), 'criteria');
+  assert.equal(getCompletionReviewConfigError({ ...defaults, artifactPaths: Array(21).fill('report.md') }), 'artifactPathsCount');
+  assert.equal(getCompletionReviewConfigError({ ...defaults, artifactPaths: ['x'.repeat(501)] }), 'artifactPathLength');
+  for (const path of ['/tmp/report.md', '~/report.md', 'C:/report.md', '\\\\server\\report.md', 'https://example.com/report', 'foo/../bar', 'foo\\bar', 'foo\tbar']) {
+    assert.equal(getCompletionReviewConfigError({ ...defaults, artifactPaths: [path] }), 'artifactPathFormat', path);
+  }
+});
+
+test('model review can reference only declared object script outputs or earlier MCP results', () => {
+  const hook: HookConfigDraft = {
+    ...draft,
+    eventName: 'Stop',
+    extensionLogic: {
+      language: 'javascript',
+      code: 'return { output: { validation: { passed: true } } };',
+      outputs: [
+        { name: 'validation', type: 'object' },
+        { name: 'summary', type: 'string' },
+      ],
+    },
+    postActions: [
+      { id: 'mcp-before', type: 'call_mcp_tool', position: 0, config: { toolName: 'validate_report' } },
+      { id: 'record-before', type: 'write_record', position: 1, config: {} },
+      { id: 'review', type: 'review_completion', position: 2, config: {} },
+      { id: 'mcp-after', type: 'call_mcp_tool', position: 3, config: {} },
+    ],
+  };
+  const choices = buildCompletionReviewValidationChoices(hook, 'review');
+  const paths = choices.map((choice) => choice.path);
+  assert.deepEqual(paths, ['script.output.validation', 'actions.mcp-before.output']);
+  const defaults = createDefaultCompletionReviewConfig();
+  assert.equal(getCompletionReviewConfigError({ ...defaults, validationResultPath: paths[0] }, paths), null);
+  assert.equal(getCompletionReviewConfigError({ ...defaults, validationResultPath: paths[1] }, paths), null);
+  assert.equal(getCompletionReviewConfigError({ ...defaults, validationResultPath: 'script.output.summary' }, paths), 'validationResultPath');
+  assert.equal(getCompletionReviewConfigError({ ...defaults, validationResultPath: 'actions.mcp-after.output' }, paths), 'validationResultPath');
+});
+
 test('changing events removes incompatible actions and reindexes retained actions', () => {
   const actions: HookPostAction[] = [
     { id: 'skill', type: 'invoke_skill', position: 0, config: {} },
     { id: 'record', type: 'write_record', position: 1, config: { recordType: 'audit' } },
-    { id: 'message', type: 'send_agent_message', position: 2, config: {} },
-    { id: 'confirm', type: 'request_confirmation', position: 3, config: {} },
-    { id: 'loop', type: 'mcp_loop_run', position: 4, config: {} },
+    { id: 'review', type: 'review_completion', position: 2, config: { maxReviews: 3, model: '' } },
+    { id: 'message', type: 'send_agent_message', position: 3, config: {} },
+    { id: 'confirm', type: 'request_confirmation', position: 4, config: {} },
+    { id: 'loop', type: 'mcp_loop_run', position: 5, config: {} },
+    { id: 'duplicate-review', type: 'review_completion', position: 6, config: { maxReviews: 5, model: 'other' } },
   ];
   for (const [eventName, expectedIds] of [
     ['PreToolUse', ['record', 'confirm']],
     ['PostToolUse', ['record', 'loop']],
-    ['Stop', ['skill', 'record', 'message']],
+    ['Stop', ['skill', 'record', 'message', 'review']],
     ['StopFailure', ['skill', 'record', 'message']],
     ['SessionStart', ['record']],
   ] as const) {
@@ -262,6 +353,25 @@ test('Claude output fields are constrained by the selected event', () => {
   assert.ok(stopFields.includes('continue'));
   assert.ok(stopFields.includes('decision'));
   assert.deepEqual(getClaudeOutputFields('StopFailure'), []);
+});
+
+test('completion review reserves its four Claude response fields and clears conflicting bindings', () => {
+  const review: HookPostAction = { id: 'review', type: 'review_completion', position: 0, config: {} };
+  const fields = getClaudeOutputFields('Stop', [review]).map((field) => field.path);
+  assert.deepEqual(fields, ['suppressOutput', 'systemMessage']);
+
+  const bindings = {
+    continue: { source: 'literal' as const, value: false },
+    stopReason: { source: 'literal' as const, value: 'custom' },
+    decision: { source: 'literal' as const, value: 'block' },
+    reason: { source: 'literal' as const, value: 'custom' },
+    systemMessage: { source: 'literal' as const, value: 'keep' },
+  };
+  assert.deepEqual(retainReviewCompatibleClaudeBindings(bindings, [review]), {
+    systemMessage: bindings.systemMessage,
+  });
+  assert.equal(retainReviewCompatibleClaudeBindings(bindings, []), bindings);
+  assert.equal(Object.keys(bindings).length, 5);
 });
 
 test('each SDK event template exposes every callback field once', () => {

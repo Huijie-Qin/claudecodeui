@@ -13,7 +13,8 @@
     "hooks": "Hooks",
     "sqlCheck": "SQL Check",
     "runtimes": "Runtime Monitor",
-    "scheduledTaskLogs": "Scheduled Task Logs"
+    "scheduledTaskLogs": "Scheduled Task Logs",
+    "aiUsage": "AI usage reports"
   },
   "common": {
     "select": "Select",
@@ -30,6 +31,10 @@
     "never": "Never"
   },
   "skillPresets": {
+    "creator": "Creator: {{name}}",
+    "tenant": "Tenant: {{name}}",
+    "unknownCreator": "Unknown",
+    "unknownTenant": "Unknown",
     "description": "Install these Skills when a user’s default workspace is first initialized. Manually created projects do not inherit them; template projects use only their selected Skills.",
     "pagination": {
       "page": "Page {{page}}",
@@ -504,6 +509,9 @@
       "input": "Event input",
       "scriptOutput": "Script output",
       "actions": "Post-actions",
+      "rawReviewOutput": "Reviewer raw output (redacted)",
+      "rawReviewOutputMeta": "Source: {{source}} · Original length: {{length}} characters",
+      "rawReviewOutputTruncated": "truncated",
       "response": "Response to Claude",
       "logs": "Runtime logs",
       "loopAttempts": {
@@ -575,6 +583,25 @@
       }
     },
     "bindings": {
+      "scopeLabel": "Access scope",
+      "defaultsTitle": "Default behavior",
+      "selectionTitle": "Selected scope",
+      "onlySelected": "Selected only",
+      "selectResults": "Select search results",
+      "noSelectedMatches": "No selected items match",
+      "noResults": "No matching results",
+      "moreSelected": "and {{count}} more",
+      "advanced": "Advanced settings",
+      "preserveHint": "Existing user choices are preserved by default. Required personal variables must be completed before activation.",
+      "preserveShort": "Preserve user choices",
+      "overwriteShort": "Overwrite user choices",
+      "overwritePending": "You will confirm the affected scope before saving.",
+      "confirmTitle": "Confirm overwriting user settings",
+      "confirmDescription": "Saving will replace existing activation and chat visibility choices within this scope. Hooks installed by Agent templates are not affected. Users can change their choices afterward. Review the scope and settings before continuing.",
+      "backToEdit": "Back to editing",
+      "confirmOverwrite": "Overwrite and save",
+      "on": "On",
+      "off": "Off",
       "title": "Set user scope and defaults",
       "manage": "Users & activation",
       "boundCountShort": "Visible to {{count}}",
@@ -628,12 +655,12 @@
       "loadError": "Failed to load Hook user scope",
       "saveError": "Failed to save Hook user scope",
       "overwriteUserPreferences": "Overwrite user settings",
-      "overwriteUserPreferencesHint": "Apply the current activation and chat visibility settings to users in the selected scope, replacing their existing choices. Users can change them afterward.",
-      "overwritten": "Activation and chat visibility settings overwritten for users in scope",
+      "overwriteUserPreferencesHint": "Apply the current activation and chat visibility settings to users in the selected scope, replacing their existing choices. Hooks installed by Agent templates are skipped. Users can change their settings afterward.",
+      "overwritten": "User activation and chat visibility settings updated; Agent template settings were preserved",
       "defaultEnabled": "Enabled by default",
-      "defaultEnabledHint": "Save settings updates defaults while preserving existing user activation choices. Use Overwrite user settings to replace them. Required personal variables must be completed first.",
+      "defaultEnabledHint": "Save settings updates defaults while preserving existing user activation choices. Select Overwrite user settings under Advanced settings and confirm to replace them. Required personal variables must be completed first.",
       "defaultShowInChat": "Show in chat",
-      "defaultShowInChatHint": "Save settings preserves existing visibility choices. Use Overwrite user settings to replace them. Hiding cards does not affect Hook execution or records."
+      "defaultShowInChatHint": "Save settings preserves existing visibility choices. Select Overwrite user settings under Advanced settings and confirm to replace them. Hiding cards does not affect Hook execution or records."
     },
     "deleteTitle": "Delete Hook",
     "confirmDelete": "Delete Hook \"{{name}}\"? This cannot be undone.",
@@ -928,6 +955,37 @@
       "ask": "Ask user"
     },
     "actions": {
+      "completionReview": {
+        "label": "Model review",
+        "tooltip": "Available only for the main agent's Stop; add it once per Hook as the final post-action. Adding it disables subagent execution.",
+        "description": "When the main agent finishes, a fresh subagent independently reviews the result against the original user task and any optional acceptance criteria. If it does not pass, the main agent continues. Artifact paths can guide the review.",
+        "maxReviews": "Maximum reviews",
+        "maxReviewsHint": "Choose 1–5 reviews; the default is 3. Automatic continuation stops at the limit.",
+        "model": "Review model (optional)",
+        "modelPlaceholder": "Leave blank to use ANTHROPIC_MODEL",
+        "modelHint": "When blank, use the current user's ANTHROPIC_MODEL environment variable, or the main agent's model if it is unset.",
+        "criteria": "Acceptance criteria (optional)",
+        "criteriaPlaceholder": "For example: The result includes runnable code and explains how it was verified.",
+        "criteriaHint": "Both the original user task and these criteria must pass. Leave blank to keep the existing task-completion review.",
+        "artifactPaths": "Artifact path hints (optional)",
+        "artifactPathsPlaceholder": "reports/final.md\nscreenshots/*.png",
+        "artifactPathsHint": "Enter one workspace-relative path or glob per line; up to {{maxPaths}} entries, each at most {{length}} characters.",
+        "validationResult": "Program validation result (optional)",
+        "noValidationResult": "Do not use a program validation result",
+        "validationResultHint": "Select an object output declared by this Hook's script or an earlier MCP call result. The result must include a boolean passed field; it may include string issues and JSON evidence. Model review cannot approve when program validation fails.",
+        "mainAgentOnly": "Model review runs only for the main agent. Remove it before enabling subagent execution.",
+        "returnFieldsManaged": "Model review controls continue, stopReason, decision, and reason automatically. Custom bindings for these fields are unavailable.",
+        "terminalHint": "Model review is the final action. Remove it to add other actions.",
+        "errors": {
+          "maxReviews": "Review count must be an integer from 1 to 5.",
+          "model": "The model name must be at most 200 characters.",
+          "criteria": "Acceptance criteria must be at most 8,000 characters.",
+          "validationResultPath": "Invalid program validation result reference. Select a declared object script output or an earlier MCP call result.",
+          "artifactPathsCount": "Enter at most 20 artifact path hints.",
+          "artifactPathLength": "Each artifact path hint must be at most 500 characters.",
+          "artifactPathFormat": "Use workspace-relative paths or globs. Do not start with / or ~ or include a .. segment, backslash, colon, or control character."
+        }
+      },
       "selectToolFirst": "Select a specific tool in the matcher first",
       "empty": "Choose an action above and configure it here.",
       "tool": "MCP tool",
@@ -1307,5 +1365,12 @@
     "errors": {
       "load": "Failed to load scheduled task logs"
     }
+  },
+  "tenantRoles": {
+    "label": "Tenant role",
+    "preserve": "Keep role (new: member)",
+    "member": "Member",
+    "tenant_admin": "Tenant admin",
+    "hint": "Tenant admins manage their tenant's Hooks, AI usage reports and Agent templates, without system Admin access."
   }
 }

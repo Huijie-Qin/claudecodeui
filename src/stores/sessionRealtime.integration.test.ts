@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import type { TestContext } from 'node:test';
+import { setImmediate } from 'node:timers/promises';
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -10,6 +11,8 @@ import type { ViteDevServer } from 'vite';
 import { createSessionStreamAccumulator } from '../components/chat/hooks/sessionStreamAccumulator';
 import { createChatRealtimeMessageHandler } from '../components/chat/hooks/useChatRealtimeHandlers';
 import { normalizedToChatMessages } from '../components/chat/hooks/useChatMessages';
+import { buildSubagentTraces } from '../components/chat/subagent/buildSubagentTraces';
+import { startSubagentHistorySync } from '../components/chat/subagent/subagentHistorySync';
 
 import type { NormalizedMessage, SessionStore } from './useSessionStore';
 
@@ -378,4 +381,71 @@ test('confirmed history still releases redundant realtime copies after high acti
   await refresh;
   assert.equal(store.getSessionSlot('session-1')?.realtimeMessages.length, 0);
   assert.equal(store.getMessages('session-1').length, messages.length);
+});
+
+
+test('running panels hydrate parallel children when only usage arrives live, preserving parent streaming', async (t) => {
+  const replies = interceptHistory(t);
+  const store = makeStore();
+  const agents: NormalizedMessage[] = ['a', 'b'].map((name) => ({
+    id: `agent-${name}`, toolId: `agent-${name}`, kind: 'tool_use', toolName: 'Agent',
+    sessionId: 'session-1', provider: 'claude', timestamp: '2026-09-03T10:00:00.000Z',
+    toolInput: { description: name, run_in_background: true },
+  }));
+  for (const agent of agents) {
+    store.appendRealtime('session-1', agent);
+    store.appendRealtime('session-1', {
+      ...answer('', `progress-${agent.id}`), kind: 'task_notification',
+      taskId: `task-${agent.id}`, toolUseId: agent.toolId, status: 'running',
+      usage: { tool_uses: 2 },
+    });
+  }
+  store.updateStreaming('session-1', 'Parent output still streaming', 'claude');
+  const before = buildSubagentTraces(normalizedToChatMessages(store.getMessages('session-1')));
+  assert.ok(before.every((trace) => trace.usage.tool_uses === 2 && trace.messages.length === 0));
+
+  const stop = startSubagentHistorySync({
+    isRunning: true,
+    refreshHistory: () => store.refreshFromServer('session-1'),
+    onError: (error) => assert.fail(String(error)),
+  });
+  t.after(stop);
+  assert.equal(replies.length, 1);
+  replies[0](agents.map((agent) => ({
+    ...agent,
+    subagentMessages: [
+      { ...answer(`Output for ${agent.id}`, `child-${agent.id}`), parentToolUseId: agent.toolId },
+      { ...answer('', `read-${agent.id}`), kind: 'tool_use', toolId: `read-${agent.id}`,
+        toolName: 'Read', toolInput: { file_path: `/${agent.id}.ts` }, parentToolUseId: agent.toolId },
+    ],
+  })));
+  await setImmediate();
+  const chat = normalizedToChatMessages(store.getMessages('session-1'));
+  const traces = buildSubagentTraces(chat);
+  assert.equal(traces.length, 2);
+  for (const trace of traces) {
+    assert.equal(trace.status, 'running');
+    assert.equal(trace.messages[0].content, `Output for ${trace.id}`);
+    assert.equal(trace.messages[1].toolId, `read-${trace.id}`);
+  }
+  assert.ok(chat.some((message) => message.isStreaming && message.content === 'Parent output still streaming'));
+});
+
+
+test('panel refreshes retain the loaded Agent when the live parent transcript grows', async (t) => {
+  const { history, requests } = interceptPaginatedHistory(t);
+  history[80] = { ...history[80], kind: 'tool_use', toolName: 'Agent', toolId: 'active-agent' };
+  const store = makeStore();
+  const initial = store.fetchFromServer('session-1', { limit: 20, offset: 0 });
+  requests[0].reply();
+  await initial;
+  const live = { ...answer('Parent keeps working', 'new-parent-output'), timestamp: '2026-09-03T10:01:00.000Z' };
+  store.appendRealtime('session-1', live);
+  history.push(live);
+  const refresh = store.refreshFromServer('session-1');
+  assert.equal(requests[1].params.get('limit'), '21');
+  requests[1].reply();
+  await refresh;
+  assert.ok(store.getMessages('session-1').some((message) => message.toolId === 'active-agent'));
+  assert.equal(store.getMessages('session-1').at(-1)?.id, live.id);
 });

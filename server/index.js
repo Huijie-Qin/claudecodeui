@@ -38,6 +38,7 @@ import {
     isClaudeSDKSessionActive,
     pushClaudeSupplement,
     queryClaudeSDK,
+    withClaudeSessionForkLock,
     reconnectSessionWriter,
     resolveToolApproval
 } from './claude-sdk.js';
@@ -49,10 +50,20 @@ import gitRoutes from './routes/git.js';
 import codehubRoutes from './routes/codehub.js';
 import authRoutes from './routes/auth.js';
 import tenantsRoutes from './routes/tenants.js';
-import adminRoutes from './routes/admin.js';
+import adminRoutes, { requireSystemAdmin } from './routes/admin.js';
+import { createSkillSnippetsRouter } from './routes/skill-snippets.js';
+import { createSkillSnippetService } from './services/skill-snippets.js';
+import tenantManagementRoutes from './routes/tenant-management.js';
+import {createAiUsageRouter} from './routes/ai-usage.js';
+import {createAiUsageService} from './services/ai-usage-scheduler.js';
 import workspacesRoutes from './routes/workspaces.js';
 import skillMarketRoutes from './routes/skill-market.js';
 import workspaceSkillsRoutes from './routes/workspace-skills.js';
+import skillEvaluationRoutes from './routes/skill-evaluations.js';
+import skillCreationRoutes from './routes/skill-creation.js';
+import { skillCreationService } from './services/skill-creation/index.js';
+import { assertGenericFileMutation } from './services/skill-evals/files.js';
+import { skillEvaluationService } from './services/skill-evals/index.js';
 import workspaceMcpToolsRoutes from './routes/workspace-mcp-tools.js';
 import workspaceToolsRoutes from './routes/workspace-tools.js';
 import agentGraphsRoutes from './routes/agent-graphs.js';
@@ -70,12 +81,16 @@ import codexRoutes from './routes/codex.js';
 import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
 import messagesRoutes from './routes/messages.js';
+import {createSessionForkRouter} from './routes/session-forks.js';
+import {createSessionForkService} from './services/session-fork.js';
+import {createSessionMessageHistoryService} from './services/session-message-history.js';
+import {sessionForkSummaryFields} from './services/session-fork-metadata.js';
 import scheduledTasksRoutes from './routes/scheduled-tasks.js';
 import desktopUpdatesRoutes from './routes/desktop-updates.js';
 import providerRoutes from './modules/providers/provider.routes.js';
 import {sessionsService} from './modules/providers/services/sessions.service.js';
 import {getPluginPort, startEnabledPluginServers, stopAllPlugins} from './utils/plugin-process-manager.js';
-import {applyCustomSessionNames, applyScheduledSessionTaskFlags, initializeDatabase, sessionNamesDb, userDb} from './database/db.js';
+import {applyCustomSessionNames, applyScheduledSessionTaskFlags, db, initializeDatabase, sessionNamesDb, userDb} from './database/db.js';
 import {multitenancyDb} from './database/multitenancy-db.js';
 import {configureWebPush} from './services/vapid-keys.js';
 import {deleteClaudeDisplayCommands} from './modules/providers/list/claude/claude-display-command-store.js';
@@ -98,6 +113,7 @@ import {handleWorkspaceError, resolveWorkspaceForRequest} from './services/works
 import {moveWorkspaceItem} from './services/workspace-file-operations.js';
 import {parseShowInternalConfigFiles} from './services/workspace-file-visibility.js';
 import {getFileTree} from './services/workspace-file-tree.js';
+import {resolveWorkspaceFileReadPath} from './services/workspace-file-read-path.js';
 import {applyWorkspaceOwnership} from './services/workspace-ownership.js';
 import {
     assertWorkspaceUploadFitsQuota,
@@ -235,7 +251,7 @@ function resolveRuntimeMountedFilePath({ targetPath, tenantCode, userName, works
     return null;
   }
 
-  return resolvedPath;
+  return { resolvedPath, boundaryRoot: runtimeProjectsRoot };
 }
 
 function resolveTenantCode(req) {
@@ -733,11 +749,18 @@ app.use('/api/demo-data', agentGraphDemoDataRoutes);
 
 // Multitenancy routes (protected)
 app.use('/api/tenants', authenticateToken, tenantsRoutes);
+app.use('/api', createSkillSnippetsRouter({ service: createSkillSnippetService(db), requireSystemAdmin, authenticateToken }));
 app.use('/api/admin', authenticateToken, adminRoutes);
+app.use('/api/tenant-management', authenticateToken, tenantManagementRoutes);
+const aiUsageService = createAiUsageService({ database: db });
+app.locals.aiUsageService = aiUsageService;
+app.use('/api/ai-usage', authenticateToken, createAiUsageRouter({ db, getScheduleStatus: () => aiUsageService.getStatus() }));
 app.use('/api/skill-market', authenticateToken, skillMarketRoutes);
 app.use('/api/agent-templates', authenticateToken, agentTemplateRoutes);
 app.use('/api/workspaces', authenticateToken, workspacesRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceSkillsRoutes);
+app.use('/api/workspaces', authenticateToken, skillEvaluationRoutes);
+app.use('/api/workspaces', authenticateToken, skillCreationRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceMcpToolsRoutes);
 app.use('/api/workspaces', authenticateToken, workspaceToolsRoutes);
 app.use('/api/workspaces', authenticateToken, agentGraphsRoutes);
@@ -788,6 +811,28 @@ app.use('/api/plugins', authenticateToken, pluginsRoutes);
 
 // Unified session messages route (protected)
 app.use('/api/sessions', authenticateToken, messagesRoutes);
+app.use('/api/sessions', createSessionForkRouter(createSessionForkService({
+    multitenancy: multitenancyDb,
+    access: workspaceAccess,
+    history: createSessionMessageHistoryService({ multitenancy: multitenancyDb, providerSessions: sessionsService }),
+    withSessionLock: withClaudeSessionForkLock,
+    isSessionActive: isClaudeSDKSessionActive,
+    registerFork: ({ session, runtimeId, messages }) => db.transaction(() => {
+        const row = multitenancyDb.sessions.upsertSession(session);
+        if (messages.length > 0) {
+            multitenancyDb.sessionMessages.upsertMessages({
+                tenantId: session.tenantId,
+                userId: session.userId,
+                workspaceId: session.workspaceId,
+                provider: 'claude',
+                providerSessionId: session.providerSessionId,
+                runtimeId,
+                messages,
+            });
+        }
+        return row;
+    })(),
+}), [authenticateToken, tenantContext]));
 
 // Scheduled session task route (protected)
 app.use('/api/scheduled-tasks', authenticateToken, scheduledTasksRoutes);
@@ -948,6 +993,7 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, attachTenantCo
                     isFavorited: session.is_favorited === 1,
                     __provider: 'claude',
                     __workspaceId: workspace.id,
+                    ...sessionForkSummaryFields(session),
                 }));
             applyScheduledSessionTaskFlags(sessions, 'claude', {
                 tenantId: req.tenant.id,
@@ -1667,10 +1713,11 @@ app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             return res.status(400).json({ error: 'Invalid file path' });
         }
 
-        const { resolvedPath: resolved } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: false });
+        const { resolvedPath, boundaryRoot } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: false });
+        const resolved = await resolveWorkspaceFileReadPath(boundaryRoot, resolvedPath);
 
         const content = await fsPromises.readFile(resolved, { encoding: 'utf8', signal });
-        res.json({ content, path: resolved });
+        res.json({ content, path: resolvedPath });
     } catch (error) {
         if (error.name === 'AbortError' || res.destroyed) return;
         console.error('Error reading file:', error);
@@ -1697,17 +1744,11 @@ app.get('/api/projects/:projectName/files/content', authenticateToken, async (re
             return res.status(400).json({ error: 'Invalid file path' });
         }
 
-        const { resolvedPath: resolved } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: false });
-
-        // Check if file exists
-        try {
-            await fsPromises.access(resolved);
-        } catch (error) {
-            return res.status(404).json({ error: 'File not found' });
-        }
+        const { resolvedPath, boundaryRoot } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: false });
+        const resolved = await resolveWorkspaceFileReadPath(boundaryRoot, resolvedPath);
 
         // Get file extension and set appropriate content type
-        const mimeType = mime.lookup(resolved) || 'application/octet-stream';
+        const mimeType = mime.lookup(resolvedPath) || 'application/octet-stream';
         res.setHeader('Content-Type', mimeType);
 
         // Stream the file
@@ -1753,6 +1794,7 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             runtimeMounted,
         } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: true });
 
+        assertGenericFileMutation(workspace.path, [resolved]);
         // Write the new content
         await fsPromises.writeFile(resolved, content, 'utf8');
         if (!runtimeMounted) {
@@ -1861,7 +1903,7 @@ function resolveWorkspacePathForRequest(req, targetPath, { requireEdit = false }
       workspace,
     });
     if (mappedPath) {
-      return { workspace, accessRole, resolvedPath: mappedPath, runtimeMounted: true };
+      return { workspace, accessRole, ...mappedPath, runtimeMounted: true };
     }
 
     const validation = validatePathInProject(workspace.path, targetPath || '');
@@ -1870,7 +1912,7 @@ function resolveWorkspacePathForRequest(req, targetPath, { requireEdit = false }
         error.statusCode = 403;
         throw error;
     }
-    return { workspace, accessRole, resolvedPath: validation.resolved, runtimeMounted: false };
+    return { workspace, accessRole, resolvedPath: validation.resolved, boundaryRoot: workspace.path, runtimeMounted: false };
 }
 
 function createRequestAbortSignal(req, res) {
@@ -1951,6 +1993,7 @@ app.post('/api/projects/:projectName/files/create', authenticateToken, async (re
             // Doesn't exist, which is what we want
         }
 
+        assertGenericFileMutation(workspace.path, [resolvedPath]);
         // Create file or directory
         if (type === 'directory') {
             await fsPromises.mkdir(resolvedPath, { recursive: false });
@@ -2048,6 +2091,7 @@ app.put('/api/projects/:projectName/files/rename', authenticateToken, async (req
             // Doesn't exist, which is what we want
         }
 
+        assertGenericFileMutation(workspace.path, [resolvedOldPath, resolvedNewPath]);
         // Rename
         await fsPromises.rename(resolvedOldPath, resolvedNewPath);
         await applyWorkspaceOwnership({
@@ -2097,6 +2141,7 @@ app.put('/api/projects/:projectName/files/move', authenticateToken, async (req, 
         }
 
         const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: true });
+        assertGenericFileMutation(workspace.path, [sourcePath, path.join(targetDirectory || '', path.basename(sourcePath))]);
         const result = await moveWorkspaceItem({
             workspaceRoot: workspace.path,
             sourcePath,
@@ -2167,6 +2212,7 @@ app.delete('/api/projects/:projectName/files', authenticateToken, async (req, re
             return res.status(403).json({ error: 'Cannot delete project root directory' });
         }
 
+        assertGenericFileMutation(workspace.path, [resolvedPath]);
         // Delete based on type
         if (stats.isDirectory()) {
             await fsPromises.rm(resolvedPath, { recursive: true, force: true });
@@ -2334,6 +2380,7 @@ const uploadFilesHandler = async (req, res) => {
                     continue;
                 }
 
+                assertGenericFileMutation(workspace.path, [destPath]);
                 // Ensure parent directory exists (for nested files from folder upload)
                 const parentDir = path.dirname(destPath);
                 try {
@@ -3865,7 +3912,10 @@ async function gracefulShutdown(signal) {
     isServerReady = false;
     console.log(`[Shutdown] Received ${signal}; draining active work before exit`);
 
+    await skillCreationService.stop();
+    await skillEvaluationService.stopWorker();
     runtimeSweeper.stop();
+    aiUsageService.stop();
     codeHubMrPoller.stop();
     mcpLoopService.stop();
     closeHttpServer().catch((error) => {
@@ -3895,6 +3945,9 @@ async function startServer() {
     try {
         // Initialize authentication database
         await initializeDatabase();
+        aiUsageService.start();
+        await skillCreationService.ready();
+        skillEvaluationService.startWorker();
         runtimeSweeper.start();
         scheduledSessionTasks.start();
         codeHubMrPoller.start();
@@ -3955,6 +4008,9 @@ async function startServer() {
 
         // Clean up plugin processes on shutdown
         const shutdownPlugins = async () => {
+            aiUsageService.stop();
+            await skillCreationService.stop();
+            await skillEvaluationService.stopWorker();
             runtimeSweeper.stop();
             scheduledSessionTasks.stop();
             codeHubMrPoller.stop();

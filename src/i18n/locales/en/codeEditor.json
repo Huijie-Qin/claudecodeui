@@ -14,6 +14,7 @@
     "showingChanges": "Showing changes"
   },
   "actions": {
+    "refreshHtml": "Refresh HTML preview",
     "download": "Download file",
     "save": "Save",
     "saving": "Saving...",
@@ -38,6 +39,20 @@
   "binaryFile": {
     "title": "Binary File",
     "message": "The file \"{{fileName}}\" cannot be displayed in the text editor because it is a binary file."
+  },
+  "tabs": {
+    "list": "Open files",
+    "unsaved": "Unsaved",
+    "closeFile": "Close {{fileName}}",
+    "menu": "File tab actions",
+    "closeCurrent": "Close current",
+    "closeOthers": "Close others",
+    "closeAll": "Close all",
+    "back": "Back",
+    "collapsePreview": "Collapse file preview",
+    "saveFailed": "Could not save {{fileName}}. Its changes remain in the file tab.",
+    "hiddenSaveFailed": "A file in {{scope}} could not be saved. Its tab has been kept.",
+    "retrySave": "Retry save"
   },
   "skillMarket": {
     "loadFailed": "Failed to load skill publish state.",

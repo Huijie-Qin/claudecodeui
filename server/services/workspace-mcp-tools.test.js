@@ -138,6 +138,28 @@ test('workspace mcp tools catalog lists only published presets and redacts confi
   assert.equal(Object.hasOwn(catalog.presets[0], 'config'), false);
 });
 
+test('insertion catalog mode reads cached tools and user preferences without probing or writing workspace files', async (t) => {
+  const database = createTestDb();
+  const { workspacePath, cleanup } = await createWorkspacePath();
+  t.after(async () => { database.close(); await cleanup(); });
+  const { multitenancy, tenant, workspace, userId, published } = seedWorkspaceAndPresets(database);
+  multitenancy.mcpInstalls.upsertInstall({ workspaceId: workspace.id, presetId: published.id, installedByUserId: userId,
+    probeStatus: 'healthy', toolCount: 1, tools: [{ name: 'search_docs' }] });
+  const service = createWorkspaceMcpToolsService({ multitenancy,
+    probeHttpMcpServer: () => assert.fail('opening insertion must not contact MCP servers'),
+    resolveHelperConfig: () => assert.fail('opening insertion must not run credential helpers'),
+  });
+  service.updateWorkspaceMcpToolPreference({ tenantId: tenant.id, workspaceId: workspace.id, userId, presetId: published.id, allowedToolNames: [] });
+  const before = multitenancy.mcpInstalls.listInstallsForWorkspace({ workspaceId: workspace.id });
+  const catalog = await service.listWorkspaceMcpPresetCatalog({ tenantId: tenant.id, workspaceId: workspace.id,
+    userId, workspacePath, refreshProbes: false });
+  assert.equal(catalog.presets[0].installed, true);
+  assert.deepEqual(catalog.presets[0].tools.map((tool) => tool.name), ['search_docs']);
+  assert.deepEqual(catalog.presets[0].allowedToolNames, []);
+  assert.deepEqual(multitenancy.mcpInstalls.listInstallsForWorkspace({ workspaceId: workspace.id }), before);
+  assert.deepEqual(await fs.readdir(workspacePath), []);
+});
+
 test('workspace mcp tools catalog defaults to all tools and returns the current user selection', async () => {
   const database = createTestDb();
   const { multitenancy, tenant, workspace, userId, published } = seedWorkspaceAndPresets(database);

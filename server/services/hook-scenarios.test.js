@@ -597,6 +597,7 @@ const FULL_MATRIX_SCRIPT_OUTPUTS = Object.freeze([
 ]);
 
 const SCRIPT_API_METHODS_EXERCISED = Object.freeze([
+  'workspace.sha256',
   'workspace.readText',
   'workspace.writeText',
   'workspace.readJson',
@@ -611,6 +612,7 @@ const JAVASCRIPT_FULL_API_SCRIPT = `export async function run(event, ccui) {
   const base = 'matrix/' + event.hook_event_name + '-javascript';
   await ccui.workspace.writeText(base + '.txt', event.hook_event_name);
   const text = await ccui.workspace.readText(base + '.txt');
+  if ((await ccui.workspace.sha256(base + '.txt')).length !== 64) throw new Error('Missing fingerprint');
   await ccui.workspace.writeJson(base + '.json', { eventName: event.hook_event_name, language: 'javascript' });
   const json = await ccui.workspace.readJson(base + '.json');
   const exists = await ccui.workspace.exists(base + '.txt');
@@ -624,6 +626,8 @@ const PYTHON_FULL_API_SCRIPT = `async def run(event, ccui):
     base = "matrix/" + event["hook_event_name"] + "-python"
     await ccui.workspace.write_text(base + ".txt", event["hook_event_name"])
     text = await ccui.workspace.read_text(base + ".txt")
+    if len(await ccui.workspace.sha256(base + ".txt")) != 64:
+        raise ValueError("Missing fingerprint")
     await ccui.workspace.write_json(base + ".json", {"eventName": event["hook_event_name"], "language": "python"})
     json_value = await ccui.workspace.read_json(base + ".json")
     exists = await ccui.workspace.exists(base + ".txt")
@@ -771,6 +775,7 @@ async function executePublishedMatrixHook({
   enqueueSkillRecovery,
   enqueueAgentMessage = enqueueSkillRecovery,
   enqueueMcpLoop = async () => ({ scheduled: true, jobId: 'matrix-loop', status: 'queued' }),
+  reviewCompletion = async () => ({ complete: true, reason: '任务已完成', nextStep: '' }),
   eventOverrides = {},
 }) {
   const runtime = createHookRuntimeSession({
@@ -788,6 +793,7 @@ async function executePublishedMatrixHook({
     enqueueSkillRecovery,
     enqueueAgentMessage,
     enqueueMcpLoop,
+    reviewCompletion,
     database,
   });
   const compiled = runtime.hooks[hook.eventName];
@@ -838,6 +844,7 @@ test('every Hook event publishes and executes every behavior allowed by its capa
     invokeSkill: 0,
     sendAgentMessage: 0,
     requestConfirmation: 0,
+    reviewCompletion: 0,
     claudeOutputs: 0,
   };
   const executedHookIds = new Set();
@@ -894,6 +901,24 @@ test('every Hook event publishes and executes every behavior allowed by its capa
       }
 
       for (const actionType of allowedPostActions(eventName)) {
+        if (actionType === 'review_completion') {
+          const hook = publishBoundMatrixHook(service, eventName, 'action-review-completion', {
+            includeSubagents: false,
+            postActions: [{ id: 'review', type: 'review_completion',
+              config: { maxReviews: 3, model: '' } }],
+          });
+          const { execution, output } = await executePublishedMatrixHook({
+            database, hook, workspaceRoot, mcpServers, enqueueSkillRecovery,
+          });
+          assert.deepEqual(output, { decision: 'approve', reason: '任务已完成' });
+          assert.deepEqual(JSON.parse(execution.actions_json), { review: { output: {
+            complete: true, reason: '任务已完成', nextStep: '',
+            reviewNumber: 1, maxReviews: 3, failed: false,
+          } } });
+          coverage.reviewCompletion += 1;
+          executedHookIds.add(hook.id);
+          continue;
+        }
         if (actionType === 'call_mcp_tool') {
           const inputs = {
             event_name: { source: 'reference', path: 'event.hook_event_name' },
@@ -1176,10 +1201,11 @@ test('every Hook event publishes and executes every behavior allowed by its capa
       invokeSkill: 2,
       sendAgentMessage: 2,
       requestConfirmation: 1,
+      reviewCompletion: 1,
       claudeOutputs: expectedClaudeOutputs,
     });
     assert.equal(recoveries.length, 4);
-    assert.equal(executedHookIds.size, (HOOK_EVENTS.length * 4) + 6 + expectedClaudeOutputs);
+    assert.equal(executedHookIds.size, (HOOK_EVENTS.length * 4) + 7 + expectedClaudeOutputs);
 
     const publishedCounts = database.prepare(`
       SELECT COUNT(*) AS total,

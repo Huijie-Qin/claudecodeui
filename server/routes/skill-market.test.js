@@ -268,6 +268,8 @@ test('POST /skills/:name/download requires edit access and imports to Files', as
 
   assert.equal(response.status, 201);
   assert.deepEqual(seen.downloadArgs, {
+    tenantId: 2,
+    userId: 7,
     workspaceId: 10,
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
@@ -299,6 +301,8 @@ test('POST /skills/:name/submit submits the complete imported skill', async () =
 
   assert.equal(response.status, 200);
   assert.deepEqual(seen.submitArgs, {
+    tenantId: 2,
+    userId: 7,
     workspaceId: 10,
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
@@ -328,6 +332,8 @@ test('POST /skills/:name/publish forwards the confirmed local content hash', asy
 
   assert.equal(response.status, 200);
   assert.deepEqual(publishArgs, {
+    tenantId: 2,
+    userId: 7,
     workspaceId: 10,
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
@@ -360,6 +366,8 @@ test('DELETE /skills/:name/import removes the imported runtime skill and refresh
 
   assert.equal(response.status, 200);
   assert.deepEqual(seen.removeArgs, {
+    tenantId: 2,
+    userId: 7,
     workspaceId: 10,
     workspacePath: '/tmp/workspace',
     name: 'bug-hunter',
@@ -396,6 +404,8 @@ test('POST /skills/:name/unpublish forwards identity and exact confirmation to t
   assert.equal(payload.unpublished, 'my-skill');
   assert.equal(payload.localFilesRetained, true);
   assert.deepEqual(seenArgs, {
+    tenantId: 2,
+    userId: 7,
     workspaceId: 10,
     workspacePath: '/tmp/workspace',
     name: 'my-skill',

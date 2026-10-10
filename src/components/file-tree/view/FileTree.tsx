@@ -11,8 +11,9 @@ import { useFileTreeSearch } from '../hooks/useFileTreeSearch';
 import { useFileTreeViewMode } from '../hooks/useFileTreeViewMode';
 import { useFileTreeUpload } from '../hooks/useFileTreeUpload';
 import { useWorkspaceStorageQuota } from '../hooks/useWorkspaceStorageQuota';
-import type { FileTreeImageSelection, FileTreeNode } from '../types/types';
-import { formatFileSize, formatRelativeTime, isImageFile } from '../utils/fileTreeUtils';
+import type { FileTreeImageSelection, FileTreeNode, FileTreeSort, FileTreeSortField } from '../types/types';
+import { formatFileSize, isImageFile } from '../utils/fileTreeUtils';
+import { nextFileTreeSort, sortFileTree } from '../utils/fileTreeSort';
 import { Project } from '../../../types/app';
 import { ScrollArea, Input } from '../../../shared/view/ui';
 import { api } from '../../../utils/api';
@@ -33,6 +34,7 @@ type FileTreeProps = {
   presentation?: 'default' | 'data-agent';
   activePath?: string | null;
   beforeFileMutation?: (paths: string[]) => Promise<boolean>;
+  openImagesInEditor?: boolean;
 };
 
 export default function FileTree({
@@ -42,9 +44,11 @@ export default function FileTree({
   presentation = 'default',
   activePath,
   beforeFileMutation,
+  openImagesInEditor = false,
 }: FileTreeProps) {
   const { t } = useTranslation();
   const [selectedImage, setSelectedImage] = useState<FileTreeImageSelection | null>(null);
+  const [sort, setSort] = useState<FileTreeSort>({ field: 'name', direction: 'asc' });
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [focusedDirectoryPath, setFocusedDirectoryPath] = useState<string | null>(null);
@@ -70,7 +74,7 @@ export default function FileTree({
     }
   }, [toast]);
 
-  const { files, loading, error: filesError, refreshFiles } = useFileTreeData(selectedProject);
+  const { files, loading, initialLoading, error: filesError, refreshFiles } = useFileTreeData(selectedProject);
   const { quota, loading: quotaLoading, refreshQuota } = useWorkspaceStorageQuota(selectedProject);
   const { viewMode, changeViewMode } = useFileTreeViewMode(presentation === 'data-agent'
     ? { defaultMode: 'detailed', storageKey: 'data-agent-file-tree-view-mode' }
@@ -81,6 +85,8 @@ export default function FileTree({
     files,
     expandDirectories,
   });
+  const sortedFiles = useMemo(() => sortFileTree(filteredFiles, sort), [filteredFiles, sort]);
+  const changeSort = (field: FileTreeSortField) => setSort((current) => nextFileTreeSort(current, field));
 
   const allItemsByPath = useMemo(() => {
     const result = new Map<string, FileTreeNode>();
@@ -176,24 +182,20 @@ export default function FileTree({
         return;
       }
 
-      if (presentation !== 'data-agent' && isImageFile(item.name) && selectedProject) {
+      if (!openImagesInEditor && presentation !== 'data-agent' && isImageFile(item.name) && selectedProject) {
         setSelectedImage({
           name: item.name,
           path: item.path,
           projectPath: selectedProject.path,
           projectName: selectedProject.name,
+          workspaceId: selectedProject.workspaceId,
         });
         return;
       }
 
       onFileOpen?.(item.path);
     },
-    [onFileOpen, presentation, selectedProject, toggleDirectory],
-  );
-
-  const formatRelativeTimeLabel = useCallback(
-    (date?: string) => formatRelativeTime(date, t),
-    [t],
+    [onFileOpen, openImagesInEditor, presentation, selectedProject, toggleDirectory],
   );
 
   const handleSelectionChange = useCallback((item: FileTreeNode) => {
@@ -321,7 +323,7 @@ export default function FileTree({
     void moveItems(draggedItemsRef.current, getFileTreeDisplayPath(item.path, selectedProject));
   }, [moveItems, selectedProject]);
 
-  if (loading) {
+  if (initialLoading) {
     return <FileTreeLoadingState />;
   }
 
@@ -422,7 +424,9 @@ export default function FileTree({
         onChange={upload.handleFileInputChange}
       />
 
-      {effectiveViewMode === 'detailed' && filteredFiles.length > 0 && <FileTreeDetailedColumns />}
+      {effectiveViewMode === 'detailed' && filteredFiles.length > 0 && (
+        <FileTreeDetailedColumns sort={sort} onSortChange={changeSort} />
+      )}
 
       <ScrollArea className="flex-1 px-2 py-1">
         <div className="min-h-full" onClick={() => setFocusedDirectoryPath(null)}>
@@ -444,7 +448,7 @@ export default function FileTree({
 
         <FileTreeBody
           files={files}
-          filteredFiles={filteredFiles}
+          filteredFiles={sortedFiles}
           searchQuery={searchQuery}
           activePath={activePath}
           showSelectionControls={presentation === 'data-agent' && !isReadOnly}
@@ -464,7 +468,6 @@ export default function FileTree({
           onItemClick={handleItemClick}
           renderFileIcon={renderFileIcon}
           formatFileSize={formatFileSize}
-          formatRelativeTime={formatRelativeTimeLabel}
           onRename={isReadOnly ? undefined : operations.handleStartRename}
           onDelete={isReadOnly ? undefined : operations.handleStartDelete}
           onNewFile={isReadOnly ? undefined : (path) => operations.handleStartCreate(path, 'file')}

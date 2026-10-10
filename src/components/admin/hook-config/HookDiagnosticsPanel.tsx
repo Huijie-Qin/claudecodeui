@@ -83,6 +83,26 @@ function JsonSection({ title, value }: { title: string; value: unknown }) {
   );
 }
 
+function findRawReviewOutput(actions: Record<string, unknown> | null) {
+  if (!actions) return null;
+  for (const action of Object.values(actions)) {
+    if (!action || typeof action !== 'object' || Array.isArray(action)) continue;
+    const output = (action as { output?: unknown }).output;
+    if (!output || typeof output !== 'object' || Array.isArray(output)) continue;
+    const raw = (output as { rawReviewOutput?: unknown }).rawReviewOutput;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const value = raw as { text?: unknown; source?: unknown; totalChars?: unknown; truncated?: unknown };
+    if (typeof value.text !== 'string') continue;
+    return {
+      text: value.text,
+      source: typeof value.source === 'string' ? value.source : 'unknown',
+      totalChars: typeof value.totalChars === 'number' ? value.totalChars : value.text.length,
+      truncated: value.truncated === true,
+    };
+  }
+  return null;
+}
+
 function loopAttemptVariant(attempt: McpLoopAttempt) {
   if (attempt.scriptStatus === 'failed' || attempt.terminationOutcome === 'failed') return 'destructive' as const;
   if (attempt.terminationOutcome === 'succeeded') return 'outline' as const;
@@ -161,6 +181,7 @@ function HookExecutionDetail({
   onRefresh: () => void;
 }) {
   const { t, i18n } = useTranslation('admin');
+  const rawReviewOutput = execution ? findRawReviewOutput(execution.actions) : null;
   return (
     <Dialog open={Boolean(execution)} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="max-h-[90vh] max-w-4xl overflow-hidden p-0">
@@ -233,6 +254,29 @@ function HookExecutionDetail({
                 </section>
               ) : null}
               <McpLoopAttemptsSection attempts={execution.mcpLoopAttempts || []} />
+              {rawReviewOutput ? (
+                <section className="overflow-hidden rounded-xl border border-border">
+                  <div className="flex items-center gap-2 border-b border-border bg-muted/20 px-3 py-2">
+                    <h4 className="min-w-0 flex-1 text-xs font-semibold text-foreground">
+                      {t('hooks.diagnostics.rawReviewOutput')}
+                    </h4>
+                    <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[11px]"
+                      onClick={() => void navigator.clipboard?.writeText(rawReviewOutput.text)}>
+                      <Copy className="h-3.5 w-3.5" />
+                      {t('hooks.diagnostics.copy')}
+                    </Button>
+                  </div>
+                  <p className="px-3 pt-2 text-[11px] text-muted-foreground">
+                    {t('hooks.diagnostics.rawReviewOutputMeta', {
+                      source: rawReviewOutput.source, length: rawReviewOutput.totalChars,
+                    })}
+                    {rawReviewOutput.truncated ? ` · ${t('hooks.diagnostics.rawReviewOutputTruncated')}` : ''}
+                  </p>
+                  <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words p-3 text-[11px] leading-5 text-foreground">
+                    {rawReviewOutput.text}
+                  </pre>
+                </section>
+              ) : null}
               <JsonSection title={t('hooks.diagnostics.input')} value={execution.input} />
               <JsonSection title={t('hooks.diagnostics.scriptOutput')} value={execution.scriptOutput} />
               <JsonSection title={t('hooks.diagnostics.actions')} value={execution.actions} />
@@ -247,15 +291,23 @@ function HookExecutionDetail({
   );
 }
 
+export type HookDiagnosticsApi = {
+  list: (filters: Record<string, unknown>) => Promise<Response>;
+  get: (executionId: string) => Promise<Response>;
+};
+
 export default function HookDiagnosticsPanel({
   hook,
   hooks = [],
+  executionApi,
 }: {
   hook?: HookConfig | null;
   hooks?: HookConfig[];
+  executionApi?: HookDiagnosticsApi;
 }) {
   const { t, i18n } = useTranslation('admin');
   const requestSequence = useRef(0);
+  const detailSequence = useRef(0);
   const [executions, setExecutions] = useState<HookExecution[]>([]);
   const [totalGroups, setTotalGroups] = useState(0);
   const [executionTotal, setExecutionTotal] = useState(0);
@@ -288,7 +340,7 @@ export default function HookDiagnosticsPanel({
         limit: pageSize,
         offset: page * pageSize,
       };
-      const response = hook
+      const response = executionApi ? await executionApi.list(filters) : hook
         ? await api.admin.hookExecutions(hook.id, filters)
         : await api.admin.allHookExecutions(filters);
       if (!response.ok) throw new Error(t('hooks.diagnostics.loadError'));
@@ -299,15 +351,30 @@ export default function HookDiagnosticsPanel({
       setExecutionTotal(Number(payload.executionTotal || 0));
     } catch (caughtError) {
       if (requestId !== requestSequence.current) return;
+      setExecutions([]);
+      setTotalGroups(0);
+      setExecutionTotal(0);
+      detailSequence.current++;
+      setDetailLoading(false);
+      setSelected(null);
       setError(caughtError instanceof Error ? caughtError.message : t('hooks.diagnostics.loadError'));
     } finally {
       if (requestId === requestSequence.current) setLoading(false);
     }
-  }, [eventName, hook, hookId, hookKind, outcome, page, pageSize, searchQuery, status, t]);
+  }, [eventName, hook, hookId, hookKind, outcome, page, pageSize, searchQuery, status, t, executionApi]);
 
   useEffect(() => {
     void load();
+    const sequence = requestSequence;
+    return () => { sequence.current++; };
   }, [load]);
+
+  useEffect(() => {
+    const sequence = detailSequence;
+    setSelected(null);
+    setDetailLoading(false);
+    return () => { sequence.current++; };
+  }, [hook, executionApi]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -330,17 +397,21 @@ export default function HookDiagnosticsPanel({
     if (page >= totalPages) setPage(totalPages - 1);
   }, [page, totalPages]);
   const openExecution = async (execution: HookExecution) => {
+    const requestId = ++detailSequence.current;
     setSelected(execution);
     setDetailLoading(true);
     try {
-      const response = await api.admin.hookExecution(execution.id);
+      const response = executionApi ? await executionApi.get(execution.id) : await api.admin.hookExecution(execution.id);
       if (!response.ok) throw new Error(t('hooks.diagnostics.loadDetailError'));
       const payload = await response.json() as { execution?: HookExecution };
+      if (requestId !== detailSequence.current) return;
       if (payload.execution) setSelected(payload.execution);
     } catch (caughtError) {
+      if (requestId !== detailSequence.current) return;
+      setSelected(null);
       setError(caughtError instanceof Error ? caughtError.message : t('hooks.diagnostics.loadDetailError'));
     } finally {
-      setDetailLoading(false);
+      if (requestId === detailSequence.current) setDetailLoading(false);
     }
   };
 
@@ -631,6 +702,7 @@ export default function HookDiagnosticsPanel({
           if (selected) void openExecution(selected);
         }}
         onClose={() => {
+          detailSequence.current++;
           setSelected(null);
           setDetailLoading(false);
         }}

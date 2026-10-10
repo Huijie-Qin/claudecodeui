@@ -1,4 +1,19 @@
 {
+  "hookResultViewer": {
+    "view": "View result",
+    "collapse": "Collapse result",
+    "loading": "Loading result…",
+    "error": "Unable to load result. Collapse and try again.",
+    "limit": "Preview limited to the first 100 lines or 20 KB. Content is redacted."
+  },
+  "fork": {
+    "action": "Branch to a new chat",
+    "creating": "Creating branch…",
+    "unavailableWhileRunning": "Wait for this chat to finish before branching.",
+    "failed": "Could not branch this chat. Please retry.",
+    "viewParent": "View original chat",
+    "sameWorkspace": "This branch uses the same workspace."
+  },
   "codeBlock": {
     "copy": "Copy",
     "copied": "Copied",
@@ -504,6 +519,7 @@
       "ariaLabel": "Subagent execution timeline",
       "title": "Activity",
       "waiting": "Waiting for the first tool call…",
+      "syncing": "Loading subagent activity…",
       "noActivity": "No tool activity was recorded."
     },
     "activity": {
@@ -522,5 +538,63 @@
   },
   "tasks": {
     "nextTaskPrompt": "Start the next task"
+  },
+  "execution": {
+    "status": {
+      "running": "Running",
+      "waiting": "Needs attention",
+      "completed": "Completed",
+      "failed": "Failed",
+      "stopped": "Stopped",
+      "unknown": "Status unavailable"
+    },
+    "kind": {
+      "background": "Background task"
+    },
+    "tabs": {
+      "overview": "Overview",
+      "activity": "Activity",
+      "result": "Result"
+    },
+    "outputFile": "Output file",
+    "close": "Close task details",
+    "details": "Task details",
+    "exitCode": "Exit code: {{code}}",
+    "locateSource": "Locate in conversation",
+    "openParent": "Open parent subagent",
+    "detailSections": "Task detail sections",
+    "latestProgress": "Latest progress",
+    "noProgress": "The runtime has not reported progress details yet.",
+    "startedAt": "Started",
+    "updatedAt": "Last update",
+    "completedAt": "Finished",
+    "command": "Command",
+    "input": "Task input",
+    "usage": "Usage reported by runtime",
+    "identifiers": "Task identifiers",
+    "taskId": "Task ID",
+    "toolId": "Tool call ID",
+    "activityNotice": "The status above shows the task’s current state. These records show its execution history.",
+    "noEvents": "No execution events have been recorded for this task.",
+    "eventOutput": "View reported output",
+    "reportedResult": "Reported result",
+    "noResult": "No result body has been reported. Check the activity records or output file for available details.",
+    "outputOutsideWorkspace": "This file belongs to the execution runtime and cannot be previewed here. Reported output is available in Result.",
+    "sourceUnavailable": "The source message is not in the loaded history.",
+    "activity": {
+      "started": "Started",
+      "progress": "Progress reported",
+      "waiting": "Wait recorded",
+      "completed": "Execution completed",
+      "failed": "Execution failed",
+      "stopped": "Execution stopped",
+      "unknown": "Execution recorded",
+      "result": "Result queried",
+      "output": "Output reported"
+    },
+    "completionSummary": "Completion summary",
+    "emptyResult": "The runtime reported an empty result body. Check the activity records or output file for available details.",
+    "noResultCompleted": "The task completed, but the runtime did not provide a result body. Check the activity records or output file for available details.",
+    "noResultEnded": "The task ended, but the runtime did not provide a result body. Check the activity records or output file for available details."
   }
 }

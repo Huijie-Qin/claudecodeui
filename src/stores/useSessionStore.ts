@@ -41,6 +41,8 @@ export type MessageKind =
 
 export interface NormalizedMessage {
   id: string;
+  sourceMessageUuid?: string;
+  canFork?: boolean;
   sessionId: string;
   timestamp: string;
   provider: LLMProvider;
@@ -389,7 +391,9 @@ export function useSessionStore() {
       const refreshOptions = slot.fetchedAt === 0 || slot.hasMore
         ? {
             ...opts,
-            limit: Math.max(slot.serverMessages.length, 20),
+            // Include the live tail so repeated refreshes retain the loaded
+            // Agent card even as newer parent messages are persisted.
+            limit: Math.max(slot.merged.length, slot.serverMessages.length, 20),
             offset: 0,
           }
         : opts;

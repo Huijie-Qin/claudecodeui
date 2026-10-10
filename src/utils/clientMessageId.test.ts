@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { createClientMessageId } from './clientMessageId';
 
-test('client message IDs are distinct UUIDs on both HTTPS and HTTP origins', (t) => {
+test('client IDs remain valid and distinct with native UUIDs, HTTP crypto and no crypto API', (t) => {
   const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
   const browserCrypto = globalThis.crypto;
   t.after(() => {
@@ -11,7 +11,7 @@ test('client message IDs are distinct UUIDs on both HTTPS and HTTP origins', (t)
   });
   for (const cryptoApi of [browserCrypto, {
     getRandomValues: browserCrypto.getRandomValues.bind(browserCrypto),
-  }]) {
+  }, {}, undefined]) {
     Object.defineProperty(globalThis, 'crypto', { configurable: true, value: cryptoApi });
     const ids = Array.from({ length: 20 }, createClientMessageId);
     assert.equal(new Set(ids).size, ids.length);

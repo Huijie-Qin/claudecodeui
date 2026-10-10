@@ -1,5 +1,6 @@
+import { REPORT_QUALITY_HOOK_EXAMPLE } from './report-quality-hook.js';
+
 const SQL_EXTRACTION_SCRIPT_LINES = [
-  "  const message = String(event.last_assistant_message || '');",
   "  const sqlKeywords = '(?:WITH|SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|MERGE|REPLACE|UPSERT|TRUNCATE|EXPLAIN|SHOW|DESCRIBE|PRAGMA|GRANT|REVOKE|CALL|EXECUTE|VALUES|VACUUM)';",
   "  const sqlStartPattern = new RegExp('^\\\\s*' + sqlKeywords + '\\\\b', 'i');",
   '  const stripLeadingComments = (value) => {',
@@ -83,6 +84,7 @@ const SQL_EXTRACTION_SCRIPT_LINES = [
 
 const SQL_METRICS_SCRIPT = [
   'export async function run(event, ccui) {',
+  "  const message = String(event.last_assistant_message || '');",
   ...SQL_EXTRACTION_SCRIPT_LINES,
   '  if (snippets.length === 0) {',
   '    return { output: { detected: false, sqlBlockCount: 0, sqlLineCount: 0, statementCount: 0 } };',
@@ -111,6 +113,12 @@ const SQL_METRICS_SCRIPT = [
 
 const SQL_DETECTION_SCRIPT = [
   'export async function run(event) {',
+  "  if (event.hook_event_name !== 'PreToolUse' || event.tool_name !== 'Write') {",
+  "    return { output: { detected: false, sql: '' } };",
+  '  }',
+  "  if (typeof event.tool_input?.content !== 'string') throw new Error('Write content must be a string');",
+  '  const message = event.tool_input.content;',
+  "  if (/\\.sql$/i.test(String(event.tool_input.file_path || ''))) return { output: { detected: Boolean(message.trim()), sql: message.trim() } };",
   ...SQL_EXTRACTION_SCRIPT_LINES,
   "  return { output: { detected: snippets.length > 0, sql: snippets.join('\\n\\n') } };",
   '}',
@@ -123,6 +131,66 @@ const HTTP_200_RECOVERY_SCRIPT = [
   '}',
 ].join('\n');
 
+// Replace both paths and the field checks when adapting this draft to a real deliverable.
+const REPORT_DATA_VALIDATION_SCRIPT = [
+  'export async function run(_event, ccui) {',
+  "  const reportPath = 'reports/report.html';",
+  "  const dataPath = 'data/metrics.json';",
+  '  const issues = [];',
+  '  const evidence = { reportPath, dataPath, reportExists: false, dataExists: false, checkedMetricRows: 0 };',
+  '  try {',
+  '    evidence.reportExists = await ccui.workspace.exists(reportPath);',
+  "    if (!evidence.reportExists) issues.push('缺少报告文件：' + reportPath);",
+  '  } catch (error) {',
+  "    issues.push('无法检查报告文件：' + String(error?.message || error));",
+  '  }',
+  '  try {',
+  '    evidence.dataExists = await ccui.workspace.exists(dataPath);',
+  "    if (!evidence.dataExists) issues.push('缺少数据文件：' + dataPath);",
+  '  } catch (error) {',
+  "    issues.push('无法检查数据文件：' + String(error?.message || error));",
+  '  }',
+  '  if (evidence.dataExists) {',
+  '    try {',
+  '      const data = await ccui.workspace.readJson(dataPath);',
+  '      if (!data || typeof data !== "object" || Array.isArray(data)) {',
+  "        issues.push('数据根节点必须是对象');",
+  '      } else {',
+  "        if (typeof data.period !== 'string' || !data.period.trim()) issues.push('period 必须是非空字符串');",
+  '        if (!Array.isArray(data.metrics) || data.metrics.length === 0) {',
+  "          issues.push('metrics 必须是非空数组');",
+  '        } else {',
+  '          evidence.checkedMetricRows = data.metrics.length;',
+  '          const names = new Set();',
+  '          for (let index = 0; index < data.metrics.length; index += 1) {',
+  '            const row = data.metrics[index];',
+  '            const prefix = "metrics[" + index + "]";',
+  '            if (!row || typeof row !== "object" || Array.isArray(row)) {',
+  "              if (issues.length < 20) issues.push(prefix + ' 必须是对象');",
+  '              continue;',
+  '            }',
+  "            if (typeof row.name !== 'string' || !row.name.trim()) {",
+  "              if (issues.length < 20) issues.push(prefix + '.name 必须是非空字符串');",
+  '            } else if (names.has(row.name.trim())) {',
+  "              if (issues.length < 20) issues.push(prefix + '.name 重复：' + row.name.trim());",
+  '            } else names.add(row.name.trim());',
+  "            if (typeof row.value !== 'number' || !Number.isFinite(row.value)) {",
+  "              if (issues.length < 20) issues.push(prefix + '.value 必须是有限数字');",
+  '            }',
+  "            if (typeof row.unit !== 'string' || !row.unit.trim()) {",
+  "              if (issues.length < 20) issues.push(prefix + '.unit 必须是非空字符串');",
+  '            }',
+  '          }',
+  '        }',
+  '      }',
+  '    } catch (error) {',
+  "      issues.push('数据文件无法读取或不是合法 JSON：' + String(error?.message || error));",
+  '    }',
+  '  }',
+  '  return { output: { validation: { passed: issues.length === 0, issues, evidence } } };',
+  '}',
+].join('\n');
+
 const SQL_CHECK_TOOL_NAME = 'mcp__sql-syntax-checker__check_sql_syntax';
 const NOTIFICATION_SKILL_ID = 'builtin:hook-notification';
 const NOTIFICATION_SKILL_NAME = 'hook-notification';
@@ -131,12 +199,14 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
   {
     id: 'sql-check-enforcement',
     name: 'SQL Check 强制校验',
-    description: '检测模型输出中的 SQL，并调用 SQL Check MCP Tool 执行强制语法校验。',
-    eventName: 'Stop',
-    matcher: {},
+    description: 'Write 写入前使用当前项目规则校验 SQL；校验不通过或服务异常时拒绝写入。',
+    eventName: 'PreToolUse',
+    includeSubagents: false,
+    matcher: { value: '^Write$' },
     extensionLogic: {
       language: 'javascript',
       code: SQL_DETECTION_SCRIPT,
+      failClosed: true,
       outputs: [
         { name: 'detected', type: 'boolean' },
         { name: 'sql', type: 'string' },
@@ -158,7 +228,10 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
         },
       },
     ],
-    claudeResponse: { bindings: {} },
+    claudeResponse: { bindings: {
+      'hookSpecificOutput.permissionDecision': { source: 'reference', path: 'actions.check-sql-syntax.output.permissionDecision' },
+      'hookSpecificOutput.permissionDecisionReason': { source: 'reference', path: 'actions.check-sql-syntax.output.permissionDecisionReason' },
+    } },
   },
   {
     id: 'sql-line-record',
@@ -202,6 +275,52 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
         },
       },
     ],
+    claudeResponse: { bindings: {} },
+  },
+  {
+    id: 'independent-completion-review',
+    name: '独立模型任务完成度复核',
+    description: '主代理准备结束时，由全新会话的审查模型依据任务与执行证据判断是否完成；未完成则让原主循环继续。可按需填写验收标准和交付物路径。',
+    eventName: 'Stop',
+    includeSubagents: false,
+    matcher: {},
+    extensionLogic: null,
+    postActions: [{
+      id: 'review-main-task-completion',
+      type: 'review_completion',
+      position: 0,
+      config: { maxReviews: 3, model: '', criteria: '', artifactPaths: [] },
+    }],
+    claudeResponse: { bindings: {} },
+  },
+  {
+    id: 'report-data-deliverable-review',
+    name: '报告与数据交付验收（程序校验示例）',
+    description: '先用 Hook 脚本检查示例 JSON 字段和交付文件，再由独立模型核对报告内容；发布前请修改路径和字段要求。',
+    eventName: 'Stop',
+    includeSubagents: false,
+    matcher: {},
+    extensionLogic: {
+      language: 'javascript',
+      code: REPORT_DATA_VALIDATION_SCRIPT,
+      outputs: [{ name: 'validation', type: 'object' }],
+    },
+    postActions: [{
+      id: 'review-report-data-deliverables',
+      type: 'review_completion',
+      position: 0,
+      config: {
+        maxReviews: 3,
+        model: '',
+        criteria: [
+          '以当前用户任务为准，实际读取 reports/report.html 和 data/metrics.json 后再判断。确认报告覆盖用户要求的章节、结论和数据说明，不存在占位文字或缺失模块。',
+          '结合程序校验结果，核对报告中的 period、指标名称、数值和单位与 data/metrics.json 是否一致；程序校验仅检查示例 JSON 结构，不代表内容一致。',
+          '只有证据覆盖全部明确要求时才通过；缺少文件、无法读取或无法核实的项目要列出具体缺口与下一步。不要仅凭主代理的完成声明通过。',
+        ].join('\n'),
+        artifactPaths: ['reports/report.html', 'data/metrics.json'],
+        validationResultPath: 'script.output.validation',
+      },
+    }],
     claudeResponse: { bindings: {} },
   },
   {
@@ -270,6 +389,7 @@ export const REQUESTED_HOOK_EXAMPLES = Object.freeze([
     }],
     claudeResponse: { bindings: {} },
   },
+  REPORT_QUALITY_HOOK_EXAMPLE,
 ]);
 
 function cloneExample(example) {

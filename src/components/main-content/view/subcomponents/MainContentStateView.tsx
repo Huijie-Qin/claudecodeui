@@ -9,7 +9,7 @@ export default function MainContentStateView({ mode, isMobile, onMenuClick }: Ma
   const isLoading = mode === 'loading';
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-w-0 flex-1 flex-col">
       {isMobile && (
         <div className="pwa-header-safe flex-shrink-0 border-b border-border/50 bg-background/80 p-2 backdrop-blur-sm sm:p-3">
           <MobileMenuButton onMenuClick={onMenuClick} compact />

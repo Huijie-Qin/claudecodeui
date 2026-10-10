@@ -58,6 +58,7 @@ test('normalizeAgentGraph rejects Relations that reference missing Agents', () =
 
 test('generateTopSkill runs expanded skill-creator instructions without persisting a provider session', async () => {
   const seen = {};
+  const sessionContexts = [];
   const runtimeManager = {
     prepareClaudeRuntime: async (options) => {
       seen.runtimeOptions = options;
@@ -109,6 +110,7 @@ test('generateTopSkill runs expanded skill-creator instructions without persisti
     runtimeManager,
     runQuery,
     mapOptions: (options) => ({ ...options }),
+    skillContextRecorder: { recordSession: (input) => sessionContexts.push(input) },
     expand: async ({ prompt }) => ({ prompt: `expanded skill-creator\n${prompt}`, expanded: true, namespace: 'project-skill' }),
   });
 
@@ -121,6 +123,55 @@ test('generateTopSkill runs expanded skill-creator instructions without persisti
   assert.deepEqual(seen.query.options.tools, []);
   assert.equal(seen.idleRuntimeId, 'runtime-one');
   assert.equal(seen.failedRuntimeId, undefined);
+  assert.deepEqual(sessionContexts, []);
+});
+
+test('Top Skill generation and optimization mark only observed session identity once', async () => {
+  const input = {
+    name: 'Evidence Agent', workingDescription: 'Analyze evidence.', businessContext: '', skills: [], tools: [],
+  };
+  const topSkill = buildSkillCreatorFallback(input);
+  for (const runner of [generateTopSkill, optimizeTopSkill]) {
+    const contexts = [];
+    const result = await runner({
+      workspacePath: '/tmp/workspace', tenantId: 1, userId: 2, workspaceId: 3,
+      input: { ...input, currentTopSkill: topSkill, optimizationPrompt: 'Keep the output concise.' },
+      expand: async ({ prompt }) => ({ prompt, expanded: false }),
+      mapOptions: () => ({}),
+      runtimeManager: { prepareClaudeRuntime: async () => ({ cwd: '/tmp/workspace' }) },
+      skillContextRecorder: { recordSession: (context) => contexts.push(context) },
+      runQuery: async function* ({ options }) {
+        assert.equal(options.persistSession, false);
+        assert.deepEqual(options.tools, []);
+        assert.deepEqual(options.allowedTools, []);
+        yield { type: 'system', session_id: 'top-skill-session' };
+        yield { type: 'result', session_id: 'top-skill-session', result: topSkill };
+      },
+    });
+    assert.equal(result.generator, 'skill-creator');
+    assert.deepEqual(contexts, [{
+      tenantId: 1, userId: 2, workspaceId: 3, provider: 'claude', sessionId: 'top-skill-session',
+      contextId: 'session:top-skill-session', requestId: null, origin: 'top_skill', skillName: null,
+    }]);
+  }
+});
+
+test('Top Skill session provenance is optional and cannot break existing scope-less callers', async () => {
+  const input = {
+    name: 'Evidence Agent', workingDescription: 'Analyze evidence.', businessContext: '', skills: [], tools: [],
+  };
+  const result = await generateTopSkill({
+    workspacePath: '/tmp/workspace', input,
+    expand: async ({ prompt }) => ({ prompt, expanded: false }),
+    mapOptions: () => ({}),
+    runtimeManager: { prepareClaudeRuntime: async () => ({ cwd: '/tmp/workspace' }) },
+    skillContextRecorder: { recordSession: () => { throw new Error('fixture recorder unavailable'); } },
+    runQuery: async function* () {
+      yield { type: 'result', session_id: 'optional-session', result: buildSkillCreatorFallback(input) };
+    },
+  });
+  assert.equal(result.generator, 'skill-creator');
+  assert.match(result.topSkill, /## Role/);
 });
 
 test('generateTopSkill falls back to the built-in skill-creator template when Claude is not logged in', async () => {

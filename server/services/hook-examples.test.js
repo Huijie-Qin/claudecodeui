@@ -33,7 +33,7 @@ function createHarness(initialHooks = []) {
   };
 }
 
-test('requested Hook presets create five ready-to-edit drafts with configured resources', () => {
+test('requested Hook presets create ready-to-edit drafts with configured resources', () => {
   const harness = createHarness();
   const result = createRequestedHookExamples({
     hookConfigs: harness.hookConfigs,
@@ -41,9 +41,9 @@ test('requested Hook presets create five ready-to-edit drafts with configured re
     exampleIds: REQUESTED_HOOK_EXAMPLES.map((example) => example.id),
   });
 
-  assert.equal(result.createdCount, 5);
+  assert.equal(result.createdCount, REQUESTED_HOOK_EXAMPLES.length);
   assert.equal(result.skippedCount, 0);
-  assert.deepEqual(result.visibleEvents, ['Stop', 'StopFailure']);
+  assert.deepEqual(result.visibleEvents, ['Stop', 'PreToolUse', 'StopFailure']);
   assert.equal(result.hooks.every((hook) => hook.status === 'draft'), true);
 
   const sqlCheckExample = result.hooks.find((hook) => hook.name.includes('SQL Check'));
@@ -52,6 +52,9 @@ test('requested Hook presets create five ready-to-edit drafts with configured re
   const failureExample = result.hooks.find((hook) => hook.name === '失败通知');
   const recoveryExample = result.hooks.find((hook) => hook.name.includes('HTTP 200'));
 
+  assert.equal(sqlCheckExample.eventName, 'PreToolUse');
+  assert.deepEqual(sqlCheckExample.matcher, { value: '^Write$' });
+  assert.equal(sqlCheckExample.includeSubagents, false);
   assert.deepEqual(sqlCheckExample.extensionLogic.outputs.map((output) => output.name), ['detected', 'sql']);
   assert.equal(sqlCheckExample.extensionLogic.outputs.every((output) => (
     Object.keys(output).sort().join(',') === 'name,type'
@@ -82,15 +85,21 @@ test('requested Hook presets create five ready-to-edit drafts with configured re
   });
 });
 
-async function runSqlExample(example, message) {
+async function runSqlExample(example, message, eventOverrides = {}) {
   return executeHookScript({
     hookId: example.id,
     language: example.extensionLogic.language,
     code: example.extensionLogic.code,
     event: {
-      hook_event_name: 'Stop',
+      hook_event_name: example.eventName,
       session_id: 'sql-return-matrix',
       last_assistant_message: message,
+      ...(example.id === 'sql-check-enforcement' ? {
+        tool_name: 'Write',
+        tool_input: { file_path: '/workspace/report.md', content: message },
+        tool_use_id: 'write-sql-check-test',
+      } : {}),
+      ...eventOverrides,
     },
     env: { sessionId: 'sql-return-matrix' },
     workspaceRoot: process.cwd(),
@@ -186,6 +195,36 @@ test('SQL Hook presets ignore prose and non-SQL code', async () => {
   }
 });
 
+test('SQL Check reads only pending Write input and checks SQL files verbatim', async () => {
+  const example = REQUESTED_HOOK_EXAMPLES.find((hook) => hook.id === 'sql-check-enforcement');
+  for (const filePath of ['/workspace/report.md', '/workspace/query.txt']) {
+    const result = await runSqlExample(example, 'SELECT 999;', {
+      tool_input: { file_path: filePath, content: 'Report\n```sql\nSELECT 42 AS written;\n```' },
+      tool_response: { content: 'SELECT 888;' },
+    });
+    assert.deepEqual(result.output, { detected: true, sql: 'SELECT 42 AS written;' });
+  }
+  for (const content of ['SELEC invalid;', 'SELECT `id` FROM `users`;']) {
+    assert.deepEqual((await runSqlExample(example, '', { tool_input: { file_path: '/workspace/query.SQL', content } })).output, { detected: true, sql: content });
+  }
+  for (const tool_input of [null, {}, { content: { sql: 'SELECT 1;' } }]) {
+    await assert.rejects(runSqlExample(example, 'SELECT 999;', { tool_input }), /Write content must be a string/);
+  }
+  const skippedEvents = [
+    { hook_event_name: 'Stop' },
+    { hook_event_name: 'PostToolUse' },
+    { hook_event_name: 'PostToolUseFailure' },
+    { tool_name: 'Edit' },
+    { tool_name: 'Bash' },
+    { tool_name: 'NotebookWrite' },
+    { tool_input: { content: 'Plain text without SQL.' } },
+  ];
+  for (const event of skippedEvents) {
+    const result = await runSqlExample(example, 'SELECT 999;', event);
+    assert.deepEqual(result.output, { detected: false, sql: '' }, JSON.stringify(event));
+  }
+});
+
 test('creating Hook examples is idempotent and never overwrites an existing example', () => {
   const existing = {
     ...JSON.parse(JSON.stringify(REQUESTED_HOOK_EXAMPLES[0])),
@@ -199,11 +238,11 @@ test('creating Hook examples is idempotent and never overwrites an existing exam
   const first = createRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9, exampleIds });
   const second = createRequestedHookExamples({ hookConfigs: harness.hookConfigs, userId: 9, exampleIds });
 
-  assert.equal(first.createdCount, 4);
+  assert.equal(first.createdCount, REQUESTED_HOOK_EXAMPLES.length - 1);
   assert.equal(first.skippedCount, 1);
   assert.equal(second.createdCount, 0);
-  assert.equal(second.skippedCount, 5);
-  assert.equal(harness.hooks.length, 5);
+  assert.equal(second.skippedCount, REQUESTED_HOOK_EXAMPLES.length);
+  assert.equal(harness.hooks.length, REQUESTED_HOOK_EXAMPLES.length);
   assert.equal(harness.hooks[0].description, '管理员已经修改的说明');
 });
 

@@ -4,6 +4,7 @@ import { FileText, MoreHorizontal, X } from 'lucide-react';
 import CodeEditor, { type CodeEditorHandle } from '../../components/code-editor/view/CodeEditor';
 import { getFileIconData } from '../../components/file-tree/constants/fileIcons';
 import ImageViewer from '../../components/file-tree/view/ImageViewer';
+import SpreadsheetPreview from '../../components/file-preview/SpreadsheetPreview';
 import type { Project } from '../../types/app';
 
 import type { FileEditorTab } from './fileEditorTabs';
@@ -190,9 +191,12 @@ export default function DataAgentFileTabs({
                     path: tab.file.path,
                     projectName: tab.file.projectName || project.name,
                     projectPath: project.path,
+                    workspaceId: tab.file.workspaceId ?? project.workspaceId,
                   }}
                   onClose={() => closeTab(tab.id)}
                 />
+              ) : tab.kind === 'spreadsheet' ? (
+                <SpreadsheetPreview file={tab.file} projectPath={project.name} />
               ) : (
                 <CodeEditor
                   ref={(handle: CodeEditorHandle | null) => manager.registerEditor(tab.id, handle)}

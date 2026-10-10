@@ -5,11 +5,14 @@ import { useTranslation } from 'react-i18next';
 import type { ChatMessage } from '../../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
+import type { ExecutionTask } from '../../execution/types';
+import { executionTaskForMessage, indexExecutionTaskMessages } from '../../execution/messageTasks';
 
 import MessageComponent from './MessageComponent';
 import ProviderSelectionEmptyState from './ProviderSelectionEmptyState';
 
 interface ChatMessagesPaneProps {
+  creationMode?: boolean;
   scrollContainerRef: RefObject<HTMLDivElement>;
   onWheel: () => void;
   onTouchMove: () => void;
@@ -41,6 +44,12 @@ interface ChatMessagesPaneProps {
   createDiff: any;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onOpenSubagent?: (toolId: string) => void;
+  executionTasks?: ExecutionTask[];
+  onOpenExecutionTask?: (taskId: string) => void;
+  locatedExecutionSource?: { messageId?: string; toolUseId?: string } | null;
+  onForkMessage?: (message: ChatMessage) => void;
+  forkingMessageUuid?: string | null;
+  forkDisabled?: boolean;
   onShowSettings?: () => void;
   onGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
   autoExpandTools?: boolean;
@@ -51,6 +60,7 @@ interface ChatMessagesPaneProps {
 }
 
 function ChatMessagesPane({
+  creationMode = false,
   scrollContainerRef,
   onWheel,
   onTouchMove,
@@ -82,6 +92,12 @@ function ChatMessagesPane({
   createDiff,
   onFileOpen,
   onOpenSubagent,
+  executionTasks,
+  onOpenExecutionTask,
+  locatedExecutionSource,
+  onForkMessage,
+  forkingMessageUuid,
+  forkDisabled,
   onShowSettings,
   onGrantToolPermission,
   autoExpandTools,
@@ -91,10 +107,14 @@ function ChatMessagesPane({
   selectedProject,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
+  const executionTaskIndex = useMemo(() => indexExecutionTaskMessages(executionTasks || []), [executionTasks]);
   const keyedVisibleMessages = useMemo(() => {
     const occurrenceCounts = new Map<string, number>();
 
-    return visibleMessages.filter((message) => !(hideToolMessages && message.isToolUse)).map((message, index) => {
+    return visibleMessages.filter((message) => !(hideToolMessages && message.isToolUse)
+      || Boolean(executionTaskForMessage(executionTaskIndex, message))
+      || (Boolean(locatedExecutionSource?.messageId) && message.id === locatedExecutionSource?.messageId)
+      || (Boolean(locatedExecutionSource?.toolUseId) && message.toolId === locatedExecutionSource?.toolUseId)).map((message, index) => {
       const baseKey = getIntrinsicMessageKey(message) || `message-fallback-${index}`;
       const occurrenceIndex = occurrenceCounts.get(baseKey) || 0;
       occurrenceCounts.set(baseKey, occurrenceIndex + 1);
@@ -104,7 +124,7 @@ function ChatMessagesPane({
         key: occurrenceIndex === 0 ? baseKey : `${baseKey}-duplicate-${occurrenceIndex}`,
       };
     });
-  }, [hideToolMessages, visibleMessages]);
+  }, [executionTaskIndex, hideToolMessages, locatedExecutionSource, visibleMessages]);
 
   return (
     <div
@@ -119,6 +139,11 @@ function ChatMessagesPane({
             <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-gray-400" />
             <p>{t('session.loading.sessionMessages')}</p>
           </div>
+        </div>
+      ) : chatMessages.length === 0 && creationMode ? (
+        <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+          <h2 className="text-xl font-semibold">{t('skillCreation.emptyTitle', { ns: 'common' })}</h2>
+          <p className="mt-3 max-w-md text-sm leading-6 text-muted-foreground">{t('skillCreation.emptyDescription', { ns: 'common' })}</p>
         </div>
       ) : chatMessages.length === 0 ? (
         <ProviderSelectionEmptyState
@@ -175,6 +200,11 @@ function ChatMessagesPane({
                 createDiff={createDiff}
                 onFileOpen={onFileOpen}
                 onOpenSubagent={onOpenSubagent}
+                executionTask={executionTaskForMessage(executionTaskIndex, message)}
+                onOpenExecutionTask={onOpenExecutionTask}
+                onForkMessage={onForkMessage}
+                isForking={Boolean(forkingMessageUuid && forkingMessageUuid === message.sourceMessageUuid)}
+                forkDisabled={forkDisabled}
                 onShowSettings={onShowSettings}
                 onGrantToolPermission={onGrantToolPermission}
                 autoExpandTools={autoExpandTools}

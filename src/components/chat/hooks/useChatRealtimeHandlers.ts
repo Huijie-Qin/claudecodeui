@@ -83,6 +83,7 @@ interface UseChatRealtimeHandlersArgs {
   onSessionProcessing?: (sessionId?: string | null) => void;
   onSessionNotProcessing?: (sessionId?: string | null) => void;
   onReplaceTemporarySession?: (sessionId?: string | null) => void;
+  onSessionAdopted?: (sessionId: string) => void;
   onNavigateToSession?: (sessionId: string) => void;
   onWebSocketReconnect?: () => void;
   addMessage?: (message: ChatMessage) => void;
@@ -110,6 +111,7 @@ export function createChatRealtimeMessageHandler({
   onSessionProcessing,
   onSessionNotProcessing,
   onReplaceTemporarySession,
+  onSessionAdopted,
   onNavigateToSession,
   onWebSocketReconnect,
   addMessage,
@@ -391,6 +393,7 @@ lastProcessedMessageRef: MutableRefObject<LatestChatMessage | null> = { current:
 
         if (shouldAdoptSession) {
           onReplaceTemporarySession?.(newSessionId);
+          onSessionAdopted?.(newSessionId);
           sessionStorage.setItem('pendingSessionId', newSessionId);
           if (pendingViewSessionRef.current) {
             pendingViewSessionRef.current.sessionId = newSessionId;

@@ -50,6 +50,8 @@ export type NormalizedMessage = {
   content?: string;
   clientMessageId?: string;
   assistantMessageId?: string;
+  sourceMessageUuid?: string;
+  canFork?: boolean;
   displayAfterAssistantId?: string;
   supplementSequence?: number;
   queueStatus?: 'queued' | 'processing' | 'failed';

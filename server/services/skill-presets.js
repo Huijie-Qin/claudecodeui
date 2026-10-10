@@ -537,15 +537,31 @@ export function createSkillPresetService({
       ?.listInstallsForWorkspace?.({ workspaceId: normalizedWorkspaceId, includeRemoved: true }) || [];
     const existingPresetInstall = workspaceInstalls.find((install) => Number(install.preset_id) === Number(preset.id));
 
-    let attemptedSkillName = preset.name;
+    // Retain the actual path in failure records too, including failures before download.
+    let attemptedSkillName = existingPresetInstall?.skill_name || preset.name;
     try {
       const remoteSkill = await marketService.fetchRemoteSkillDetail(
         preset.remote_id || preset.skill_id || preset.name,
         { tenantCode, accountId, ...(skillSourceId(preset) ? { exactId: true } : {}) },
       );
+      const metadata = await readSkillsMetadata(workspacePath);
+      const legacyOwnedName = Object.entries(metadata.skills || {}).find(([, entry]) => (
+        entry?.managedBy === 'admin-skill-preset'
+        && String(entry.adminPresetId || '') === String(preset.id)
+      ))?.[0];
+      // A failed update may have rolled its files back. Its import record still
+      // identifies the installed package, unlike a failed first-time installation.
+      const previousImport = existingPresetInstall?.status === 'failed'
+        ? multitenancy.skillMarketImports?.listForWorkspace?.({ workspaceId: normalizedWorkspaceId })
+          ?.find((entry) => entry.name === existingPresetInstall.skill_name
+            && isSameSkillPresetSource({ remoteId: entry.id, skillId: entry.skillId }, preset))
+        : null;
+      const retainRecordedPath = existingPresetInstall?.status === 'installed'
+        || (previousImport && await pathExists(path.join(workspacePath, '.claude', 'skills', previousImport.name, 'SKILL.md')));
+      const retainedName = (retainRecordedPath && existingPresetInstall.skill_name) || legacyOwnedName;
       // Independent configuration records can still refer to the exact same installed
       // package. Do not duplicate or overwrite files when a tenant preset already installed it.
-      const reusableInstall = !overwrite && workspaceInstalls.find((install) => install.status === 'installed'
+      const reusableInstall = !retainedName && !overwrite && workspaceInstalls.find((install) => install.status === 'installed'
         && Number(install.preset_id) !== Number(preset.id)
         && Number(install.tenant_id) === normalizedTenantId
         && isSameSkillPresetSource(install, preset)
@@ -569,17 +585,22 @@ export function createSkillPresetService({
       const downloadedSkill = normalizeDownloadedSkillPackage(
         await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
       );
-      // Retain the preset's collision-safe name, and the path of legacy installs.
-      attemptedSkillName = existingPresetInstall?.skill_name || preset.name;
+      // The preset name is a database identifier shared across configuration scopes.
+      // New workspaces use the package's original name; existing installs keep their path.
+      const originalName = resolveRemoteSkillPresetName(remoteSkill, downloadedSkill);
+      attemptedSkillName = retainedName || originalName;
       const occupiedByOtherPresets = new Set(workspaceInstalls
-        .filter((install) => install.status === 'installed' && Number(install.preset_id) !== Number(preset.id))
+        .filter((install) => install.status === 'installed' && Number(install.preset_id) !== Number(preset.id)
+          // Two configuration records may deliberately share this exact installed package.
+          && !(retainedName === install.skill_name && Number(install.tenant_id) === normalizedTenantId
+            && isSameSkillPresetSource(install, preset)))
         .map((install) => install.skill_name.toLowerCase()));
       // A multi-tenant template can include two independently named presets.
       if (occupiedByOtherPresets.has(attemptedSkillName.toLowerCase())) {
         const { runtimeRoot, sourceRoot } = getWorkspaceSkillsPaths(workspacePath);
         let attempt = 0;
         do {
-          attemptedSkillName = disambiguateSkillName(preset.name, `${normalizedTenantId}:${skillSourceId(preset)}`, ++attempt);
+          attemptedSkillName = disambiguateSkillName(originalName, `${normalizedTenantId}:${skillSourceId(preset)}`, ++attempt);
         } while (occupiedByOtherPresets.has(attemptedSkillName.toLowerCase())
           || await pathExists(path.join(runtimeRoot, attemptedSkillName))
           || await pathExists(path.join(sourceRoot, attemptedSkillName)));
@@ -591,7 +612,7 @@ export function createSkillPresetService({
         preset,
         remoteSkill,
         overwrite,
-        allowExistingRuntime: existingPresetInstall?.status === 'installed'
+        allowExistingRuntime: Boolean(retainRecordedPath)
           && existingPresetInstall?.skill_name === attemptedSkillName,
         now,
       });

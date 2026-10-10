@@ -176,3 +176,16 @@ test('mapWorkspaceRowsToProjects exposes scheduled task folders and groups run s
   assert.equal(projects[0].sessions[0].isScheduledTaskSession, true);
   assert.equal(projects[0].sessions[0].scheduledTask.id, 42);
 });
+
+test('pending sessions with persisted skill creation remain visible without exposing other pending sessions', () => {
+  const projects = mapWorkspaceRowsToProjects([{ id: 10, tenant_id: 2, owner_user_id: 7, slug: 'repo', path: '/tmp/repo', accessRole: 'owner' }], {
+    tenantId: 2, userId: 7, listScheduledTasks: () => [], getScheduledTaskMap: () => new Map(),
+    listSessions: () => [
+      { provider: 'claude', provider_session_id: 'pending:creation', metadata_json: JSON.stringify({ skillCreation: true }) },
+      { provider: 'claude', provider_session_id: 'pending:ordinary', metadata_json: '{}' },
+      { provider: 'claude', provider_session_id: 'pending:invalid', metadata_json: 'invalid' },
+      { provider: 'claude', provider_session_id: 'skill-creation:durable', metadata_json: '{}' },
+    ],
+  });
+  assert.deepEqual(projects[0].sessions.map(s => s.id), ['pending:creation', 'skill-creation:durable']);
+});

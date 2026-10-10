@@ -12,6 +12,9 @@ import {
 import { CollapsibleSection } from './CollapsibleSection';
 
 interface SubagentContainerProps {
+  children?: React.ReactNode;
+  expanded?: boolean;
+  onExpandedChange?: (open: boolean) => void;
   toolId?: string;
   toolInput: unknown;
   toolResult?: ToolResult | null;
@@ -59,6 +62,9 @@ const getCompactToolDisplay = (toolName: string, toolInput: unknown): string => 
 
 export const SubagentContainer: React.FC<SubagentContainerProps> = ({
   toolId,
+  children,
+  expanded,
+  onExpandedChange,
   toolInput,
   toolResult,
   completionTime,
@@ -98,6 +104,8 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
     <div className="my-1 border-l-2 border-l-purple-500 py-0.5 pl-3 dark:border-l-purple-400">
       <CollapsibleSection
         title={title}
+        expanded={expanded}
+        onExpandedChange={onExpandedChange}
         toolName="Task"
         open={false}
         meta={completionTime}
@@ -161,7 +169,7 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
         )}
 
         {/* Tool history (collapsed) */}
-        {childTools.length > 0 && !isDetailsAlias && (
+        {children ?? (childTools.length > 0 && !isDetailsAlias && (
           <Collapsible className="mt-2" defaultOpen={hasTaskOutputHistory}>
             <CollapsibleTrigger className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
               <svg
@@ -215,10 +223,10 @@ export const SubagentContainer: React.FC<SubagentContainerProps> = ({
               </div>
             </CollapsibleContent>
           </Collapsible>
-        )}
+        ))}
 
         {/* Final result */}
-        {isComplete && toolResult && !isDetailsAlias && (
+        {!children && isComplete && toolResult && !isDetailsAlias && (
           !hasTaskOutputHistory || toolResult.resultSource !== 'task_output'
         ) && (
           <div className="mt-2 text-xs text-muted-foreground">
