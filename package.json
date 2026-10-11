@@ -157,7 +157,7 @@
     "undici": "^6.21.3",
     "web-push": "^3.6.7",
     "ws": "^8.14.2",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "xlsx": "0.20.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
