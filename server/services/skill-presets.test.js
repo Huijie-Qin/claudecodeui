@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 import Database from 'better-sqlite3';
+import JSZip from 'jszip';
+import { utils as xlsxUtils, write as writeXlsx, read as readXlsx } from 'xlsx';
 
 import { DATABASE_SCHEMA_SQL } from '../database/schema.js';
 import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
@@ -115,6 +119,89 @@ test('admin Skill market search requests the complete inventory when configured'
   assert.equal(seenOptions.completeInventory, true);
   assert.equal(seenOptions.includePageInfo, true);
   assert.equal(result.skills[0].id, 'later-page-skill');
+});
+
+test('market ZIP preset installation and reinstallation preserve Excel and binary assets', async (t) => {
+  const database = createTestDb();
+  const multitenancy = createMultitenancyDb(database);
+  const workspacePath = await makeWorkspace();
+  t.after(async () => {
+    database.close();
+    await fs.rm(workspacePath, { recursive: true, force: true });
+  });
+  const { adminId, userId, tenant, workspace } = seedTenantWorkspace({ database, multitenancy, workspacePath });
+  const workbook = xlsxUtils.book_new();
+  xlsxUtils.book_append_sheet(workbook, xlsxUtils.aoa_to_sheet([
+    ['项目', '数量'], ['技能中的 Excel 🌏', 42],
+  ]), '报表');
+  const originalFiles = {
+    'SKILL.md': Buffer.from('---\nname: code-reviewer\ndescription: Binary assets regression.\n---\n'),
+    'templates/中文报表.xlsx': writeXlsx(workbook, { type: 'buffer', bookType: 'xlsx', compression: true }),
+    'assets/raw.bin': Buffer.from(Array.from({ length: 256 }, (_, index) => index)),
+    'references/说明.md': Buffer.from('文本内容也必须保持原样。\r\n'),
+    'assets/empty.bin': Buffer.alloc(0),
+  };
+  const archive = new JSZip();
+  for (const [name, bytes] of Object.entries(originalFiles)) archive.file(`code-reviewer/${name}`, bytes);
+  const zip = await archive.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  const requests = [];
+  const market = http.createServer((req, res) => {
+    req.resume();
+    requests.push(req.url);
+    if (req.url === '/data-agent/api/skill/download') {
+      res.writeHead(200, { 'Content-Type': 'application/zip' });
+      res.end(zip);
+    } else if (req.url === '/data-agent/api/skill/skillList') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ code: 0, data: [{ ...REMOTE_SKILL, skillName: 'code-reviewer' }] }));
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  await new Promise((resolve) => market.listen(0, '127.0.0.1', resolve));
+  const envKeys = ['SKILL_MARKET_API_URL', 'SKILL_MARKET_BASE_URL', 'SKILL_MARKET_AUTH_APPID', 'SKILL_MARKET_AUTH_KEY'];
+  const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+  t.after(async () => {
+    for (const key of envKeys) {
+      if (previousEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = previousEnv[key];
+    }
+    await new Promise((resolve) => market.close(resolve));
+  });
+  for (const key of envKeys) delete process.env[key];
+  process.env.SKILL_MARKET_API_URL = `http://127.0.0.1:${market.address().port}`;
+
+  // Use the real market HTTP client and ZIP reader, not a string-only market stub.
+  const service = createSkillPresetService({ multitenancy });
+  const scope = { tenantId: tenant.id, userId: adminId, tenantCode: tenant.code, accountId: 'admin' };
+  const preset = await service.createPreset({ ...scope, input: { sourceRef: REMOTE_SKILL.id, preinstall: true } });
+  const validation = await service.validatePreset({ ...scope, presetId: preset.id });
+  assert.equal(validation.validation.status, 'healthy');
+  service.publishPreset({ ...scope, presetId: preset.id });
+
+  for (const overwrite of [false, true]) {
+    const installed = await service.installWorkspaceSkillPreset({
+      ...scope, userId, workspaceId: workspace.id, workspacePath, presetId: preset.id, overwrite,
+    });
+    const runtimePath = installed.installed.skill.runtimePath;
+    assert.equal(runtimePath, path.join(workspacePath, '.claude', 'skills', 'code-reviewer'));
+    for (const [name, original] of Object.entries(originalFiles)) {
+      const actual = await fs.readFile(path.join(runtimePath, name));
+      const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+      assert.equal(actual.length, original.length, `${name}: installed size changed`);
+      assert.equal(digest(actual), digest(original), `${name}: installed bytes changed`);
+    }
+    const installedExcel = await fs.readFile(path.join(runtimePath, 'templates/中文报表.xlsx'));
+    await JSZip.loadAsync(installedExcel, { checkCRC32: true });
+    assert.equal(readXlsx(installedExcel, { type: 'buffer' }).Sheets['报表'].B2.v, 42);
+    if (!overwrite) {
+      // Reproduce an existing installation made by the old UTF-8 conversion;
+      // reinstalling from the intact market archive must repair the file.
+      await fs.writeFile(path.join(runtimePath, 'templates/中文报表.xlsx'), String(installedExcel));
+    }
+  }
+  assert.equal(requests.filter((url) => url.endsWith('/download')).length, 4);
 });
 
 test('admin skill presets install only into the Claude workspace skill directory', async () => {
