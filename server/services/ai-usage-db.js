@@ -11,6 +11,7 @@ import { clearSplitStaging, publishSplitCandidate } from './ai-dashboard-split.j
 import { publishSessionSummaryCandidate } from './ai-session-summary.js';
 import { SESSION_REPORT_VERSION } from './ai-usage-session-report.js';
 import { validateReportSessionUsageCandidate } from './ai-usage-session-source.js';
+import { publishSessionConflictIssues, validateSessionConflictCandidate } from './ai-usage-session-conflicts.js';
 
 export function createAiUsageStore(database, { clock = () => new Date() } = {}) {
   const dirty = database.prepare(`INSERT INTO ai_usage_dirty_partitions(tenant_id,dataset,stat_date,generation)
@@ -92,6 +93,7 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
         database.prepare('DELETE FROM ai_session_summary_staging WHERE batch_id=?').run(batch.id);
         database.prepare('DELETE FROM ai_usage_batch_files WHERE batch_id=?').run(batch.id);
         database.prepare('DELETE FROM ai_usage_skill_work_items WHERE batch_id=?').run(batch.id);
+        database.prepare('DELETE FROM ai_usage_batch_session_exclusions WHERE batch_id=?').run(batch.id);
         const targetThrough = localInstant(shiftDate(localParts(batch.target_through, batch.time_zone).date,
           oldLagDays - newLagDays), '00:00', config.timeZone);
         const coverageJson = JSON.stringify({ dataLagDays: newLagDays });
@@ -147,6 +149,9 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
       if (!progress.stagingInitialized || progress.stage !== 'publish') throw new Error('AI_USAGE_REPORT_NOT_READY');
       if (!progress.integration?.ready) throw new Error('AI_INTEGRATION_NOT_READY');
       if (!progress.split?.ready || progress.split.version !== SPLIT_SCHEMA_VERSION) throw new Error('AI_SPLIT_NOT_READY');
+      // Validate every retained session identity under the publication write lock,
+      // including SQL/Skill-only sessions that have no session_usage row.
+      if (progress.sessionConflicts?.ready) validateSessionConflictCandidate(database, batch);
       if (coverage.sessionSummaryVersion != null || progress.sessionSummary?.ready) {
         if (!progress.reportSessionUsage?.ready || progress.reportSessionUsage.version !== SESSION_REPORT_VERSION) {
           throw new Error('SESSION_REPORT_USAGE_NOT_READY');
@@ -167,6 +172,7 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
       if ((coverage.sessionSummaryVersion != null || progress.sessionSummary?.ready)
         && (!progress.sessionSummary?.ready || progress.sessionSummary.version !== SESSION_SUMMARY_VERSION)) throw new Error('SESSION_SUMMARY_NOT_READY');
       if (progress.sessionSummary?.ready) publishSessionSummaryCandidate(database, batch);
+      if (progress.sessionConflicts?.ready) publishSessionConflictIssues(database, batch, now);
       assertLease(batch);
       database.prepare(`UPDATE ai_usage_batches SET status='published',completed_at=?,coverage_json=?,lease_until=NULL WHERE id=?`)
         .run(now.toISOString(), JSON.stringify(integrationCoverage({ ...coverage,

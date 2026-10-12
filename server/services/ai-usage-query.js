@@ -59,6 +59,31 @@ export function createAiUsageQueryService({ db, getScheduleStatus = () => ({}) }
       ? Object.fromEntries(['sessions', 'duration', 'skillPublications', 'skillInvocations', 'activeUsers', 'hooks', 'hookExecutions', 'templates', 'integrationVersion', 'generatedSql', 'submittedCode', 'reasons']
         .filter((key) => rawCoverage[key] !== undefined).map((key) => [key, rawCoverage[key]]))
       : { ...rawCoverage };
+    if (batch && (rawCoverage.sessionScope !== undefined || rawCoverage.excludedSessionCount !== undefined)) {
+      if (access.scope === 'self') {
+        // Old published batches can outlive the migration. Never fall back to
+        // their tenant-wide count when a per-user count cannot be established.
+        const hasExclusions = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_usage_batch_session_exclusions'").get();
+        if (hasExclusions) {
+          const count = db.prepare(`SELECT COUNT(*) AS count FROM ai_usage_batch_session_exclusions
+            WHERE batch_id=@batch AND tenant_id=@tenant AND CASE WHEN json_valid(session_key) THEN
+              json_type(session_key)='array' AND json_array_length(session_key)=5
+              AND json_type(session_key,'$[0]')='integer' AND json_extract(session_key,'$[0]')=@tenant
+              AND json_type(session_key,'$[1]')='integer' AND json_extract(session_key,'$[1]') BETWEEN 1 AND 9007199254740991
+              AND json_type(session_key,'$[2]')='integer' AND json_extract(session_key,'$[2]')=@user
+              AND json_type(session_key,'$[3]')='text' AND json_type(session_key,'$[4]')='text'
+              AND json_extract(session_key,'$[4]')<>'' AND json_extract(session_key,'$[4]') NOT LIKE 'pending:%'
+              ELSE 0 END`).get({ batch: batch.id, tenant: access.tenantId, user: access.userId }).count;
+          coverage.excludedSessionCount = count;
+          coverage.sessionScope = count > 0 ? 'partial' : 'complete';
+        }
+      } else {
+        const count = Number.isSafeInteger(rawCoverage.excludedSessionCount) && rawCoverage.excludedSessionCount >= 0
+          ? rawCoverage.excludedSessionCount : 0;
+        coverage.excludedSessionCount = count;
+        coverage.sessionScope = count > 0 ? 'partial' : 'complete';
+      }
+    }
     coverage.status = !batch ? 'unavailable' : Object.values(coverage).some((value) => value === 'partial' || value === 'unavailable') ? 'partial' : 'complete';
     return { ...schedule, tenantId: access.tenantId, scope: access.scope, batchId: batch?.id ?? null,
       timeZone: batch?.time_zone || schedule.timeZone || 'Asia/Shanghai', dataThrough: batch?.target_through ?? null,

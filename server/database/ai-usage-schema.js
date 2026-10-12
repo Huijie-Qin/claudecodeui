@@ -5,6 +5,7 @@ import { migrateAiUsageSkillContext } from './ai-usage-skill-context-schema.js';
 import { AI_USAGE_REPORT_SCHEMA_SQL, migrateAiUsageReportRows } from './ai-usage-report-schema.js';
 import { AI_DASHBOARD_INTEGRATION_SCHEMA_SQL, migrateIntegrationId } from './ai-dashboard-integration-schema.js';
 import { AI_SESSION_SUMMARY_SCHEMA_SQL, migrateAiSessionSummarySchema } from './ai-session-summary-schema.js';
+import { AI_USAGE_SESSION_CONFLICT_SCHEMA_SQL } from './ai-usage-session-conflict-schema.js';
 
 
 export const AI_USAGE_SCHEMA_SQL = `
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS ai_usage_suppressed_rows (
 ${AI_USAGE_REPORT_SCHEMA_SQL}
 ${AI_DASHBOARD_INTEGRATION_SCHEMA_SQL}
 ${AI_SESSION_SUMMARY_SCHEMA_SQL}
+${AI_USAGE_SESSION_CONFLICT_SCHEMA_SQL}
 CREATE TABLE IF NOT EXISTS ai_skill_publications (
   operation_id TEXT PRIMARY KEY, tenant_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
   skill_id TEXT, skill_name TEXT, first_published_at TEXT, status TEXT NOT NULL,
