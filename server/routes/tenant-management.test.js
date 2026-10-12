@@ -8,10 +8,12 @@ import express from 'express';
 import Database from 'better-sqlite3';
 
 import { MULTITENANCY_SCHEMA_SQL } from '../database/multitenancy-schema.js';
+import { createMultitenancyDb } from '../database/multitenancy-db.js';
 import { HOOK_CONFIG_SCHEMA_SQL, migrateHookConfigurationModel } from '../database/hook-config-schema.js';
 import { createHookConfigService } from '../services/hook-configs.js';
 import { createAgentTemplateService } from '../services/agent-templates.js';
 import { createAgentTemplateFolderAssetStore } from '../services/agent-template-folder-assets.js';
+import { createSkillPresetService } from '../services/skill-presets.js';
 
 import { createTenantManagementRouter } from './tenant-management.js';
 
@@ -20,7 +22,35 @@ const hookInput = (name = '租户记录 Hook') => ({ name, description: '', even
   postActions: [], claudeResponse: { bindings: {} } });
 const templateInput = (name = '租户 Agent', tenantId = 10) => ({ name, category: '业务助手', summary: '', claudeMarkdown: '# 租户助手', guideText: '', tenantIds: [tenantId], skillPresetRefs: [], mcpPresetRefs: [], hookRefs: [], claudeFolders: [] });
 
-async function fixture(t, { skills } = {}) {
+const MARKET_SKILL = {
+  id: 'remote-code-reviewer', skillId: 'code-reviewer', name: 'code-reviewer',
+  displayName: 'Code Reviewer', description: 'Review code changes.',
+  nspPath: 'mock://skills/code-reviewer', createUserId: 'market-author', version: 7,
+};
+
+function createFakeMarketService() {
+  const calls = [];
+  return {
+    calls,
+    listSkillMarket: async (options) => {
+      calls.push({ method: 'listSkillMarket', options });
+      return { skills: [{ ...MARKET_SKILL }], pageInfo: { page: options.page, pageSize: options.pageSize, total: 1 } };
+    },
+    fetchRemoteSkillDetail: async (skillRef, requestContext) => {
+      calls.push({ method: 'fetchRemoteSkillDetail', skillRef, requestContext });
+      return { ...MARKET_SKILL };
+    },
+    downloadRemoteSkillFiles: async (skill, requestContext) => {
+      calls.push({ method: 'downloadRemoteSkillFiles', skillRef: skill.id, requestContext });
+      return { skillName: skill.name, files: {
+        'SKILL.md': '---\nname: code-reviewer\ndescription: Review code changes.\n---\n',
+        'references/checklist.md': 'Check behavior and tenant boundaries.\n',
+      } };
+    },
+  };
+}
+
+async function fixture(t, { skills, marketService = createFakeMarketService() } = {}) {
   const database = new Database(':memory:');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tenant-management-test-'));
   database.pragma('foreign_keys = ON');
@@ -35,10 +65,12 @@ async function fixture(t, { skills } = {}) {
   const values = new Map();
   const hooks = createHookConfigService({ database, configStore: { get: (key) => values.get(key), set: (key, value) => values.set(key, value) }, hookMcpCatalog: { listServers: () => [], listToolResources: () => [] } });
   const templates = createAgentTemplateService(database, { folderAssets: createAgentTemplateFolderAssetStore({ rootPath: root }) });
+  const multitenancy = createMultitenancyDb(database);
+  const skillPresets = createSkillPresetService({ multitenancy, marketService });
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { req.user = { id: Number(req.get('x-test-user') || 2), is_system_admin: 1 }; next(); }); // deliberately stale/forged JWT role
-  app.use('/api/tenant-management', createTenantManagementRouter({ database, hooks, templates, skills: skills || { listConfigurationSkills: async () => ({ skills: [] }) } }));
+  app.use((req, _res, next) => { req.user = { id: Number(req.get('x-test-user') || 2), username: 'forged-account', is_system_admin: 1 }; next(); }); // deliberately stale/forged JWT role and account
+  app.use('/api/tenant-management', createTenantManagementRouter({ database, hooks, templates, skillPresets, skills: skills || { listConfigurationSkills: async () => ({ skills: [] }) } }));
   const server = await new Promise((resolve) => { const instance = app.listen(0, '127.0.0.1', () => resolve(instance)); });
   t.after(async () => { await new Promise((resolve) => server.close(resolve)); database.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const request = async (resource, { method = 'GET', body, user = 2, tenant = 10 } = {}) => {
@@ -46,7 +78,7 @@ async function fixture(t, { skills } = {}) {
     const payload = await response.json();
     return { status: response.status, ...payload };
   };
-  return { database, hooks, templates, request };
+  return { database, hooks, templates, multitenancy, skillPresets, marketService, request };
 }
 
 test('live roles: edit permission is not tenant administration; inactive/revoked access fails closed', async (t) => {
@@ -226,6 +258,195 @@ test('authorization is rechecked after asynchronous resource loading before publ
   revoke = () => f.database.prepare("UPDATE tenant_users SET role='member' WHERE user_id=2 AND tenant_id=10").run();
   assert.equal((await f.request(`/agent-templates/${template.id}/publish`, { method: 'POST' })).status, 403);
   assert.equal(f.templates.getTemplate(template.id).status, 'draft');
+});
+
+test('tenant Skill market uses live tenant/account context and market pagination even without presets', async (t) => {
+  const { request, database, marketService } = await fixture(t);
+  assert.deepEqual((await request('/skill-presets')).presets, []);
+  assert.deepEqual((await request('/agent-templates/preset-catalog')).skills, []);
+  const market = await request('/skill-presets/market?searchContent=review&page=2&pageSize=5&complete=true&tenantId=20&tenantCode=beta&accountId=root');
+  assert.equal(market.status, 200);
+  assert.equal(market.skills[0].id, MARKET_SKILL.id);
+  assert.deepEqual(market.pageInfo, { page: 2, pageSize: 5, total: 1 });
+  assert.deepEqual(marketService.calls[0], { method: 'listSkillMarket', options: {
+    searchContent: 'review', page: 2, pageSize: 5, completeInventory: true,
+    tenantCode: 'alpha', accountId: 'tenant-admin', includePageInfo: true,
+  } });
+  database.prepare('UPDATE users SET username=? WHERE id=2').run('renamed-tenant-admin');
+  assert.equal((await request('/skill-presets/market?q=check&complete=false')).status, 200);
+  assert.deepEqual(marketService.calls[1].options, {
+    searchContent: 'check', page: 1, pageSize: 20, completeInventory: false,
+    tenantCode: 'alpha', accountId: 'renamed-tenant-admin', includePageInfo: true,
+  });
+  for (const query of ['page=0', 'page=bad', 'pageSize=-1', 'pageSize=1.5']) {
+    assert.equal((await request(`/skill-presets/market?${query}`)).status, 400, query);
+  }
+  assert.equal(marketService.calls.length, 2, 'invalid pagination must not reach the market');
+});
+
+test('a new market Skill can be prepared and published into a tenant Agent template without platform preinstallation', async (t) => {
+  const { request, database, marketService, templates } = await fixture(t);
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM tenant_skill_presets').get().count, 0);
+  const created = await request('/skill-presets', { method: 'POST', body: {
+    sourceRef: MARKET_SKILL.id, tenantId: 20, userId: 1, createdByUserId: 1,
+    tenantCode: 'beta', accountId: 'root', preinstall: true, preinstallScope: 'all_workspaces', status: 'published',
+    skill: { id: 'forged-id', name: 'forged-name', displayName: '伪造名称', nspPath: 'mock://untrusted' },
+  } });
+  assert.equal(created.status, 200);
+  const { preset } = created;
+  assert.equal(preset.tenantId, 10);
+  assert.equal(preset.createdByUserId, 2);
+  assert.equal(preset.name, MARKET_SKILL.name);
+  assert.equal(preset.remoteId, MARKET_SKILL.id);
+  assert.equal(preset.nspPath, MARKET_SKILL.nspPath);
+  assert.equal(preset.status, 'draft');
+  assert.equal(preset.preinstall, false);
+  assert.equal(preset.preinstallScope, 'none');
+  assert.equal((await request(`/skill-presets/${preset.id}/publish`, { method: 'POST' })).status, 400);
+  const validated = await request(`/skill-presets/${preset.id}/validate`, { method: 'POST', body: { tenantId: 20, tenantCode: 'beta', accountId: 'root' } });
+  assert.equal(validated.status, 200);
+  assert.equal(validated.validation.status, 'healthy');
+  const published = await request(`/skill-presets/${preset.id}/publish`, { method: 'POST' });
+  assert.equal(published.status, 200);
+  assert.equal(published.preset.status, 'published');
+  assert.equal(published.preset.preinstall, false);
+  for (const call of marketService.calls) {
+    assert.deepEqual(call.requestContext, { tenantCode: 'alpha', accountId: 'tenant-admin', ...(call.method === 'fetchRemoteSkillDetail' ? { exactId: true } : {}) });
+    assert.equal(call.skillRef, MARKET_SKILL.id);
+  }
+  const duplicate = await request('/skill-presets', { method: 'POST', body: { skill: { id: MARKET_SKILL.id } } });
+  assert.equal(duplicate.status, 200);
+  assert.equal(duplicate.preset.id, preset.id);
+  assert.equal(duplicate.preset.status, 'published');
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM tenant_skill_presets').get().count, 1);
+  assert.equal((await request('/agent-templates/preset-catalog')).skills[0].id, preset.id);
+  const skillPresetRefs = [{ tenantId: 10, presetId: preset.id }];
+  const saved = await request('/agent-templates', { method: 'POST', body: { ...templateInput('市场技能模板'), skillPresetRefs } });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.template.skillPresetRefs, skillPresetRefs);
+  const publishedTemplate = await request(`/agent-templates/${saved.template.id}/publish`, { method: 'POST' });
+  assert.equal(publishedTemplate.status, 200);
+  assert.equal(publishedTemplate.template.status, 'published');
+  assert.ok(templates.listAvailableTemplates({ tenantId: 10 }).some((item) => item.id === saved.template.id));
+  assert.ok(!templates.listAvailableTemplates({ tenantId: 20 }).some((item) => item.id === saved.template.id));
+});
+
+test('tenant Skill endpoints reject members and isolate preset IDs across tenants', async (t) => {
+  const { request, skillPresets, database, marketService } = await fixture(t);
+  const foreign = await skillPresets.createPreset({ tenantId: 20, userId: 4, input: { sourceRef: MARKET_SKILL.id }, tenantCode: 'beta', accountId: 'other-admin' });
+  const own = (await request('/skill-presets', { method: 'POST', body: { sourceRef: MARKET_SKILL.id } })).preset;
+  assert.deepEqual((await request('/skill-presets?tenantId=20')).presets.map((preset) => preset.id), [own.id]);
+  assert.deepEqual((await request('/skill-presets', { tenant: 20, user: 4 })).presets.map((preset) => preset.id), [foreign.id]);
+  const callsBefore = marketService.calls.length;
+  const rowsBefore = database.prepare('SELECT * FROM tenant_skill_presets ORDER BY id').all();
+  for (const action of ['validate', 'publish']) {
+    assert.equal((await request(`/skill-presets/${foreign.id}/${action}`, { method: 'POST', body: { tenantId: 20 } })).status, 404);
+    assert.equal((await request(`/skill-presets/${own.id}/${action}`, { method: 'POST', tenant: 20, user: 4 })).status, 404);
+  }
+  for (const operation of [
+    { path: '/skill-presets/market' }, { path: '/skill-presets' },
+    { path: '/skill-presets', method: 'POST', body: { sourceRef: MARKET_SKILL.id } },
+    { path: `/skill-presets/${own.id}/validate`, method: 'POST' },
+    { path: `/skill-presets/${own.id}/publish`, method: 'POST' },
+  ]) {
+    assert.equal((await request(operation.path, { ...operation, user: 3 })).status, 403);
+    assert.equal((await request(operation.path, { ...operation, tenant: 20 })).status, 403);
+  }
+  assert.equal(marketService.calls.length, callsBefore);
+  assert.deepEqual(database.prepare('SELECT * FROM tenant_skill_presets ORDER BY id').all(), rowsBefore);
+});
+
+test('tenant market preparation cannot mutate platform, disabled, or auto-preinstalled presets', async (t) => {
+  const { request, multitenancy, database, marketService } = await fixture(t);
+  const variants = [
+    { name: 'platform-draft', createdByUserId: 1, status: 'draft', preinstallScope: 'none' },
+    { name: 'platform-disabled', createdByUserId: 1, status: 'disabled', preinstallScope: 'none' },
+    { name: 'own-disabled', createdByUserId: 2, status: 'disabled', preinstallScope: 'none' },
+    { name: 'own-preinstalled', createdByUserId: 2, status: 'draft', preinstallScope: 'all_workspaces' },
+    { name: 'platform-preinstalled-published', createdByUserId: 1, status: 'published', preinstallScope: 'all_workspaces' },
+    { name: 'peer-draft', createdByUserId: 4, status: 'draft', preinstallScope: 'none' },
+  ];
+  for (const variant of variants) {
+    const preset = multitenancy.skillPresets.createPreset({ tenantId: 10, displayName: variant.name,
+      skillId: variant.name, remoteId: variant.name, ...variant });
+    const before = database.prepare('SELECT * FROM tenant_skill_presets WHERE id=?').get(preset.id);
+    for (const action of ['validate', 'publish']) {
+      assert.equal((await request(`/skill-presets/${preset.id}/${action}`, { method: 'POST', body: { createdByUserId: 2, preinstall: false, status: 'draft' } })).status, variant.preinstallScope === 'all_workspaces' ? 404 : 409, `${variant.name}: ${action}`);
+    }
+    assert.deepEqual(database.prepare('SELECT * FROM tenant_skill_presets WHERE id=?').get(preset.id), before);
+  }
+  assert.equal(marketService.calls.length, 0, 'protected presets never trigger market downloads');
+  assert.ok((await request('/skill-presets?usage=tenant')).presets.every((preset) => preset.preinstallScope === 'none'),
+    'template skill listings never expose tenant preinstallation records');
+
+  const own = (await request('/skill-presets', { method: 'POST', body: { sourceRef: MARKET_SKILL.id } })).preset;
+  await request(`/skill-presets/${own.id}/validate`, { method: 'POST' });
+  await request(`/skill-presets/${own.id}/publish`, { method: 'POST' });
+  const before = database.prepare('SELECT * FROM tenant_skill_presets WHERE id=?').get(own.id);
+  const callCount = marketService.calls.length;
+  for (const action of ['validate', 'publish']) {
+    assert.equal((await request(`/skill-presets/${own.id}/${action}`, { method: 'POST' })).status, 200);
+  }
+  assert.deepEqual(database.prepare('SELECT * FROM tenant_skill_presets WHERE id=?').get(own.id), before);
+  assert.equal(marketService.calls.length, callCount, 'published presets are idempotent and do not revalidate');
+});
+
+test('market failures do not create unusable presets or allow failed validation to publish', async (t) => {
+  const { request, database, marketService } = await fixture(t);
+  const originalDetail = marketService.fetchRemoteSkillDetail;
+  const originalDownload = marketService.downloadRemoteSkillFiles;
+  marketService.listSkillMarket = async () => { throw Object.assign(new Error('Market unavailable'), { statusCode: 503 }); };
+  const search = await request('/skill-presets/market');
+  assert.equal(search.status, 503);
+  assert.equal(search.error, 'Market unavailable');
+  for (const method of ['fetchRemoteSkillDetail', 'downloadRemoteSkillFiles']) {
+    marketService[method] = async () => { throw Object.assign(new Error('Market download failed'), { statusCode: 502 }); };
+    const result = await request('/skill-presets', { method: 'POST', body: { sourceRef: MARKET_SKILL.id } });
+    assert.equal(result.status, 502, method);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM tenant_skill_presets').get().count, 0);
+    marketService.fetchRemoteSkillDetail = originalDetail;
+    marketService.downloadRemoteSkillFiles = originalDownload;
+  }
+  const own = (await request('/skill-presets', { method: 'POST', body: { sourceRef: MARKET_SKILL.id } })).preset;
+  marketService.downloadRemoteSkillFiles = async () => { throw new Error('Skill package is unreadable'); };
+  const validation = await request(`/skill-presets/${own.id}/validate`, { method: 'POST' });
+  assert.equal(validation.status, 200);
+  assert.equal(validation.validation.status, 'failed');
+  assert.equal(validation.preset.lastValidationError, 'Skill package is unreadable');
+  assert.equal((await request(`/skill-presets/${own.id}/publish`, { method: 'POST' })).status, 400);
+  assert.equal(database.prepare('SELECT status FROM tenant_skill_presets WHERE id=?').get(own.id).status, 'draft');
+  assert.deepEqual((await request('/agent-templates/preset-catalog')).skills, []);
+});
+
+test('revoking access during remote Skill loading prevents creation and validation writes', async (t) => {
+  for (const action of ['create', 'validate', 'failed-validation']) {
+    await t.test(action, async (t) => {
+      const { request, database, marketService } = await fixture(t);
+      const preset = action === 'create' ? null
+        : (await request('/skill-presets', { method: 'POST', body: { sourceRef: MARKET_SKILL.id } })).preset;
+      const rowsBefore = database.prepare('SELECT * FROM tenant_skill_presets').all();
+      const originalDownload = marketService.downloadRemoteSkillFiles;
+      let started;
+      let release;
+      const loading = new Promise((resolve) => { started = resolve; });
+      const released = new Promise((resolve) => { release = resolve; });
+      marketService.downloadRemoteSkillFiles = async (...args) => {
+        started();
+        await released;
+        if (action === 'failed-validation') throw new Error('Download failed after access revocation');
+        return originalDownload(...args);
+      };
+      const pending = request(action === 'create' ? '/skill-presets' : `/skill-presets/${preset.id}/validate`, {
+        method: 'POST', body: { sourceRef: MARKET_SKILL.id },
+      });
+      await loading;
+      database.prepare("UPDATE tenant_users SET role='member' WHERE tenant_id=10 AND user_id=2").run();
+      release();
+      assert.equal((await pending).status, 403);
+      assert.deepEqual(database.prepare('SELECT * FROM tenant_skill_presets').all(), rowsBefore,
+        'no preset, validation error, or audit timestamp may be written after access is revoked');
+    });
+  }
 });
 
 test('legacy Hook ownership migration is additive and idempotent', () => {

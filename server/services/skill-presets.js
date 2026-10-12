@@ -694,13 +694,15 @@ export function createSkillPresetService({
       }).map(toAdminSkillPreset);
     },
 
-    createPreset: async ({ tenantId, userId, input, tenantCode, accountId }) => {
+    createPreset: async ({ tenantId, userId, input, tenantCode, accountId, beforeWrite }) => {
       const normalizedTenantId = requirePositiveInteger(tenantId, 'tenantId');
       const remoteSkill = await resolveRemoteSkill(input, { tenantCode, accountId, marketService });
       const downloadedSkill = requireDownloadedSkillFiles(
         await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
       );
       const normalized = normalizeRemotePresetInput(input, remoteSkill, downloadedSkill);
+      // Tenant management rechecks live access after the remote download.
+      beforeWrite?.();
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const { existing, name } = resolvePresetIdentity(normalizedTenantId, normalized);
         if (existing) return toAdminSkillPreset(existing);
@@ -745,8 +747,9 @@ export function createSkillPresetService({
       return toAdminSkillPreset(preset);
     },
 
-    validatePreset: async ({ tenantId, presetId, userId, tenantCode, accountId }) => {
+    validatePreset: async ({ tenantId, presetId, userId, tenantCode, accountId, beforeWrite }) => {
       const preset = getExistingPreset({ tenantId, presetId });
+      let validation;
       try {
         const remoteSkill = await marketService.fetchRemoteSkillDetail(
           preset.remote_id || preset.skill_id || preset.name,
@@ -755,38 +758,27 @@ export function createSkillPresetService({
         requireDownloadedSkillFiles(
           await marketService.downloadRemoteSkillFiles(remoteSkill, { tenantCode, accountId }),
         );
-        const validated = multitenancy.skillPresets.recordValidation({
-          tenantId: requirePositiveInteger(tenantId, 'tenantId'),
-          presetId: requirePositiveInteger(presetId, 'presetId'),
+        validation = {
           status: 'healthy',
-          error: null,
-          updatedByUserId: requirePositiveInteger(userId, 'userId'),
-        });
-        return {
-          preset: toAdminSkillPreset(validated),
-          validation: {
-            status: 'healthy',
-            displayName: remoteSkill.displayName || remoteSkill.name || preset.display_name || preset.name,
-            description: remoteSkill.description || preset.description || '',
-          },
+          displayName: remoteSkill.displayName || remoteSkill.name || preset.display_name || preset.name,
+          description: remoteSkill.description || preset.description || '',
         };
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to validate skill preset';
-        const failed = multitenancy.skillPresets.recordValidation({
-          tenantId: requirePositiveInteger(tenantId, 'tenantId'),
-          presetId: requirePositiveInteger(presetId, 'presetId'),
+        validation = {
           status: 'failed',
-          error: message,
-          updatedByUserId: requirePositiveInteger(userId, 'userId'),
-        });
-        return {
-          preset: toAdminSkillPreset(failed),
-          validation: {
-            status: 'failed',
-            error: message,
-          },
+          error: error instanceof Error ? error.message : 'Failed to validate skill preset',
         };
       }
+      // Authorization failures must escape without recording a failed validation.
+      beforeWrite?.();
+      const validated = multitenancy.skillPresets.recordValidation({
+        tenantId: requirePositiveInteger(tenantId, 'tenantId'),
+        presetId: requirePositiveInteger(presetId, 'presetId'),
+        status: validation.status,
+        error: validation.error || null,
+        updatedByUserId: requirePositiveInteger(userId, 'userId'),
+      });
+      return { preset: toAdminSkillPreset(validated), validation };
     },
 
     publishPreset: ({ tenantId, presetId, userId }) => {
