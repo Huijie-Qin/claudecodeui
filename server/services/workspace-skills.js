@@ -1428,6 +1428,28 @@ export async function syncManagedSkillAfterMutation(context, workspacePath) {
   }
 }
 
+export async function syncManagedSkillAfterGenericFileMutation(workspacePath, targetPaths) {
+  const { runtimeRoot, sourceRoot } = getWorkspaceSkillsPaths(workspacePath);
+  const affected = new Map();
+  for (const targetPath of targetPaths) {
+    const fullPath = path.resolve(workspacePath, targetPath);
+    for (const root of [runtimeRoot, sourceRoot]) {
+      const relative = path.relative(root, fullPath);
+      if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+      const [name, ...entryParts] = relative.split(path.sep);
+      if (!name || entryParts.length === 0) continue;
+      affected.set(name.toLowerCase(), { name, root });
+    }
+  }
+  for (const { name, root } of affected.values()) {
+    const context = await resolveWorkspaceSkillContext({ workspacePath, name });
+    if (!context.managedEntry) continue;
+    const editedRoot = path.join(root, context.name);
+    if (!await pathExists(editedRoot)) continue;
+    await syncManagedSkillAfterMutation({ ...context, rootPath: editedRoot }, workspacePath);
+  }
+}
+
 async function replaceSkillDirectory(sourcePath, destinationPath) {
   const stagePath = `${destinationPath}.${process.pid}.${Date.now()}.stage`;
   const backupPath = `${destinationPath}.${process.pid}.${Date.now()}.backup`;

@@ -10,6 +10,22 @@ const json = value => { try { return JSON.parse(value); } catch { return null; }
 const hash = value => createHash('sha256').update(value).digest('hex');
 const exists = (db, table) => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table));
 
+export class SessionSourceScopeConflictError extends Error {
+  constructor(scope, actual) {
+    super('SESSION_SUMMARY_SOURCE_SCOPE_CONFLICT');
+    this.name = 'SessionSourceScopeConflictError';
+    this.code = 'SESSION_SUMMARY_SOURCE_SCOPE_CONFLICT';
+    this.scope = { tenant_id: scope.tenant_id, workspace_id: scope.workspace_id,
+      user_id: scope.user_id, provider: scope.provider, session_id: scope.session_id,
+      session_key: scope.session_key || scope.key
+        || JSON.stringify([scope.tenant_id, scope.workspace_id, scope.user_id, scope.provider, scope.session_id]) };
+    this.expected = { tenant_id: scope.tenant_id, workspace_id: scope.workspace_id };
+    this.actual = actual.map(original => ({ tenant_id: original.tenant_id, workspace_id: original.workspace_id }));
+  }
+}
+
+export const isSessionSourceScopeConflict = error => error instanceof SessionSourceScopeConflictError;
+
 export function scopeValidator(db) {
   // provider_session_id alone is not globally unique. Resolve the original
   // session using the SAME owner/provider identity as session_index's key.
@@ -17,11 +33,13 @@ export function scopeValidator(db) {
     FROM session_index WHERE provider=? AND provider_session_id=? AND user_id=? LIMIT 2`) : null;
   const workspace = exists(db, 'workspaces') ? db.prepare('SELECT tenant_id FROM workspaces WHERE id=?') : null;
   return row => {
-    const originals = session?.all(row.provider, row.session_id, row.user_id) || [];
-    if (originals.length > 1 || originals.some(original => original.tenant_id !== row.tenant_id
-      || original.workspace_id !== row.workspace_id)) throw new Error('SESSION_SUMMARY_SOURCE_SCOPE_CONFLICT');
+    // A broken workspace tenant boundary is never downgraded to an otherwise
+    // recoverable disagreement with current session metadata.
     const originalWorkspace = workspace?.get(row.workspace_id);
     if (originalWorkspace && originalWorkspace.tenant_id !== row.tenant_id) throw new Error('SESSION_SUMMARY_WORKSPACE_SCOPE_CONFLICT');
+    const originals = session?.all(row.provider, row.session_id, row.user_id) || [];
+    if (originals.length > 1 || originals.some(original => original.tenant_id !== row.tenant_id
+      || original.workspace_id !== row.workspace_id)) throw new SessionSourceScopeConflictError(row, originals);
     // Older sessions may only have trusted captured facts/runtime bindings.
     // Missing metadata must not be invented or silently used to reassign them.
   };

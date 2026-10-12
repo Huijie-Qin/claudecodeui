@@ -59,10 +59,10 @@ import {createAiUsageService} from './services/ai-usage-scheduler.js';
 import workspacesRoutes from './routes/workspaces.js';
 import skillMarketRoutes from './routes/skill-market.js';
 import workspaceSkillsRoutes from './routes/workspace-skills.js';
+import { syncManagedSkillAfterGenericFileMutation } from './services/workspace-skills.js';
 import skillEvaluationRoutes from './routes/skill-evaluations.js';
 import skillCreationRoutes from './routes/skill-creation.js';
 import { skillCreationService } from './services/skill-creation/index.js';
-import { assertGenericFileMutation } from './services/skill-evals/files.js';
 import { skillEvaluationService } from './services/skill-evals/index.js';
 import workspaceMcpToolsRoutes from './routes/workspace-mcp-tools.js';
 import workspaceToolsRoutes from './routes/workspace-tools.js';
@@ -1794,9 +1794,9 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             runtimeMounted,
         } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: true });
 
-        assertGenericFileMutation(workspace.path, [resolved]);
         // Write the new content
         await fsPromises.writeFile(resolved, content, 'utf8');
+        await syncManagedSkillAfterGenericFileMutation(workspace.path, [resolved]);
         if (!runtimeMounted) {
             await applyWorkspaceOwnership({
                 workspaceRoot: workspace.path,
@@ -1993,7 +1993,6 @@ app.post('/api/projects/:projectName/files/create', authenticateToken, async (re
             // Doesn't exist, which is what we want
         }
 
-        assertGenericFileMutation(workspace.path, [resolvedPath]);
         // Create file or directory
         if (type === 'directory') {
             await fsPromises.mkdir(resolvedPath, { recursive: false });
@@ -2007,6 +2006,7 @@ app.post('/api/projects/:projectName/files/create', authenticateToken, async (re
             }
             await fsPromises.writeFile(resolvedPath, '', 'utf8');
         }
+        await syncManagedSkillAfterGenericFileMutation(workspace.path, [resolvedPath]);
         await applyWorkspaceOwnership({
             workspaceRoot: projectRoot,
             targetPaths: [resolvedPath],
@@ -2091,9 +2091,9 @@ app.put('/api/projects/:projectName/files/rename', authenticateToken, async (req
             // Doesn't exist, which is what we want
         }
 
-        assertGenericFileMutation(workspace.path, [resolvedOldPath, resolvedNewPath]);
         // Rename
         await fsPromises.rename(resolvedOldPath, resolvedNewPath);
+        await syncManagedSkillAfterGenericFileMutation(workspace.path, [resolvedOldPath, resolvedNewPath]);
         await applyWorkspaceOwnership({
             workspaceRoot: projectRoot,
             targetPaths: [resolvedNewPath],
@@ -2141,12 +2141,12 @@ app.put('/api/projects/:projectName/files/move', authenticateToken, async (req, 
         }
 
         const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: true });
-        assertGenericFileMutation(workspace.path, [sourcePath, path.join(targetDirectory || '', path.basename(sourcePath))]);
         const result = await moveWorkspaceItem({
             workspaceRoot: workspace.path,
             sourcePath,
             targetDirectory: targetDirectory || '',
         });
+        await syncManagedSkillAfterGenericFileMutation(workspace.path, [result.oldPath, result.newPath]);
 
         res.json({
             success: true,
@@ -2212,13 +2212,13 @@ app.delete('/api/projects/:projectName/files', authenticateToken, async (req, re
             return res.status(403).json({ error: 'Cannot delete project root directory' });
         }
 
-        assertGenericFileMutation(workspace.path, [resolvedPath]);
         // Delete based on type
         if (stats.isDirectory()) {
             await fsPromises.rm(resolvedPath, { recursive: true, force: true });
         } else {
             await fsPromises.unlink(resolvedPath);
         }
+        await syncManagedSkillAfterGenericFileMutation(workspace.path, [resolvedPath]);
 
         res.json({
             success: true,
@@ -2380,7 +2380,6 @@ const uploadFilesHandler = async (req, res) => {
                     continue;
                 }
 
-                assertGenericFileMutation(workspace.path, [destPath]);
                 // Ensure parent directory exists (for nested files from folder upload)
                 const parentDir = path.dirname(destPath);
                 try {
@@ -2392,6 +2391,7 @@ const uploadFilesHandler = async (req, res) => {
                 // Move file (copy + unlink to handle cross-device scenarios)
                 await fsPromises.copyFile(file.path, destPath);
                 await fsPromises.unlink(file.path);
+                await syncManagedSkillAfterGenericFileMutation(workspace.path, [destPath]);
 
                 uploadedFiles.push({
                     name: fileName,
