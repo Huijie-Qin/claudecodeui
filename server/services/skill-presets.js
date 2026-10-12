@@ -260,7 +260,8 @@ async function writeDownloadedFiles(skillDirectory, files) {
   for (const [filePath, content] of entries) {
     const targetPath = resolveSkillFilePath(skillDirectory, filePath);
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.writeFile(targetPath, typeof content === 'string' ? content : String(content ?? ''), 'utf8');
+    // ZIP entries are Buffers; decoding them as UTF-8 corrupts binary assets.
+    await fs.writeFile(targetPath, Buffer.isBuffer(content) ? content : String(content ?? ''));
   }
 }
 

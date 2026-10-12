@@ -59,7 +59,13 @@ import {createAiUsageService} from './services/ai-usage-scheduler.js';
 import workspacesRoutes from './routes/workspaces.js';
 import skillMarketRoutes from './routes/skill-market.js';
 import workspaceSkillsRoutes from './routes/workspace-skills.js';
-import { syncManagedSkillAfterGenericFileMutation } from './services/workspace-skills.js';
+import {
+    checkGenericWorkspaceSkillMutation,
+    classifyWorkspaceSkillFilePath,
+    deleteLocalWorkspaceSkill,
+    syncManagedSkillAfterGenericFileMutation,
+    updateWorkspaceSkillFile,
+} from './services/workspace-skills.js';
 import skillEvaluationRoutes from './routes/skill-evaluations.js';
 import skillCreationRoutes from './routes/skill-creation.js';
 import { skillCreationService } from './services/skill-creation/index.js';
@@ -1794,10 +1800,22 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             runtimeMounted,
         } = resolveWorkspacePathForRequest(req, filePath, { requireEdit: true });
 
-        // Write the new content
-        await fsPromises.writeFile(resolved, content, 'utf8');
-        await syncManagedSkillAfterGenericFileMutation(workspace.path, [resolved]);
-        if (!runtimeMounted) {
+        const skillTarget = await checkGenericWorkspaceSkillMutation({
+            workspacePath: workspace.path,
+            operation: 'save',
+            targetPath: resolved,
+        });
+        if (skillTarget?.kind === 'entry') {
+            await updateWorkspaceSkillFile({
+                workspacePath: workspace.path,
+                name: skillTarget.name,
+                filePath: skillTarget.entryPath,
+                content,
+            });
+        } else {
+            await fsPromises.writeFile(resolved, content, 'utf8');
+        }
+        if (!runtimeMounted && skillTarget?.kind !== 'entry') {
             await applyWorkspaceOwnership({
                 workspaceRoot: workspace.path,
                 targetPaths: [resolved],
@@ -1993,6 +2011,12 @@ app.post('/api/projects/:projectName/files/create', authenticateToken, async (re
             // Doesn't exist, which is what we want
         }
 
+        await checkGenericWorkspaceSkillMutation({
+            workspacePath: workspace.path,
+            operation: 'create',
+            targetPath: resolvedPath,
+            content: '',
+        });
         // Create file or directory
         if (type === 'directory') {
             await fsPromises.mkdir(resolvedPath, { recursive: false });
@@ -2091,6 +2115,20 @@ app.put('/api/projects/:projectName/files/rename', authenticateToken, async (req
             // Doesn't exist, which is what we want
         }
 
+        await checkGenericWorkspaceSkillMutation({
+            workspacePath: workspace.path,
+            operation: 'rename',
+            targetPath: resolvedOldPath,
+            nextPath: resolvedNewPath,
+        });
+        if (classifyWorkspaceSkillFilePath(workspace.path, resolvedNewPath)) {
+            await checkGenericWorkspaceSkillMutation({
+                workspacePath: workspace.path,
+                operation: 'move',
+                targetPath: resolvedNewPath,
+                nextPath: resolvedOldPath,
+            });
+        }
         // Rename
         await fsPromises.rename(resolvedOldPath, resolvedNewPath);
         await syncManagedSkillAfterGenericFileMutation(workspace.path, [resolvedOldPath, resolvedNewPath]);
@@ -2212,13 +2250,23 @@ app.delete('/api/projects/:projectName/files', authenticateToken, async (req, re
             return res.status(403).json({ error: 'Cannot delete project root directory' });
         }
 
-        // Delete based on type
-        if (stats.isDirectory()) {
-            await fsPromises.rm(resolvedPath, { recursive: true, force: true });
+        const skillTarget = classifyWorkspaceSkillFilePath(workspace.path, resolvedPath);
+        if (skillTarget?.kind === 'skill') {
+            await deleteLocalWorkspaceSkill({ workspacePath: workspace.path, name: skillTarget.name });
         } else {
-            await fsPromises.unlink(resolvedPath);
+            await checkGenericWorkspaceSkillMutation({
+                workspacePath: workspace.path,
+                operation: 'delete',
+                targetPath: resolvedPath,
+            });
+            // Delete based on type
+            if (stats.isDirectory()) {
+                await fsPromises.rm(resolvedPath, { recursive: true, force: true });
+            } else {
+                await fsPromises.unlink(resolvedPath);
+            }
+            await syncManagedSkillAfterGenericFileMutation(workspace.path, [resolvedPath]);
         }
-        await syncManagedSkillAfterGenericFileMutation(workspace.path, [resolvedPath]);
 
         res.json({
             success: true,
@@ -2380,6 +2428,37 @@ const uploadFilesHandler = async (req, res) => {
                     continue;
                 }
 
+                const uploadSkillTarget = classifyWorkspaceSkillFilePath(workspace.path, destPath);
+                const uploadContent = uploadSkillTarget?.kind === 'entry'
+                    && ['SKILL.md', 'evals/evals.json'].includes(uploadSkillTarget.entryPath)
+                    ? await fsPromises.readFile(file.path, 'utf8')
+                    : undefined;
+                const uploadExists = await fsPromises.access(destPath).then(() => true, () => false);
+                await checkGenericWorkspaceSkillMutation({
+                    workspacePath: workspace.path,
+                    operation: 'upload',
+                    targetPath: destPath,
+                    content: uploadContent,
+                    exists: uploadExists,
+                });
+                if (uploadSkillTarget?.kind === 'entry'
+                    && uploadSkillTarget.entryPath === 'SKILL.md'
+                    && uploadExists) {
+                    await updateWorkspaceSkillFile({
+                        workspacePath: workspace.path,
+                        name: uploadSkillTarget.name,
+                        filePath: 'SKILL.md',
+                        content: uploadContent,
+                    });
+                    await fsPromises.unlink(file.path);
+                    uploadedFiles.push({
+                        name: fileName,
+                        path: destPath,
+                        size: file.size,
+                        mimeType: file.mimetype,
+                    });
+                    continue;
+                }
                 // Ensure parent directory exists (for nested files from folder upload)
                 const parentDir = path.dirname(destPath);
                 try {
