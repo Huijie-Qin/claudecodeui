@@ -62,6 +62,7 @@ import workspaceSkillsRoutes from './routes/workspace-skills.js';
 import {
     checkGenericWorkspaceSkillMutation,
     classifyWorkspaceSkillFilePath,
+    deleteLocalWorkspaceSkill,
     syncManagedSkillAfterGenericFileMutation,
     updateWorkspaceSkillFile,
 } from './services/workspace-skills.js';
@@ -2178,21 +2179,6 @@ app.put('/api/projects/:projectName/files/move', authenticateToken, async (req, 
         }
 
         const { workspace } = resolveWorkspaceForRequest(req, { requireEdit: true });
-        const moveTargetPath = path.join(targetDirectory || '', path.basename(sourcePath));
-        await checkGenericWorkspaceSkillMutation({
-            workspacePath: workspace.path,
-            operation: 'move',
-            targetPath: sourcePath,
-            nextPath: moveTargetPath,
-        });
-        if (classifyWorkspaceSkillFilePath(workspace.path, moveTargetPath)) {
-            await checkGenericWorkspaceSkillMutation({
-                workspacePath: workspace.path,
-                operation: 'move',
-                targetPath: moveTargetPath,
-                nextPath: sourcePath,
-            });
-        }
         const result = await moveWorkspaceItem({
             workspaceRoot: workspace.path,
             sourcePath,
@@ -2264,18 +2250,23 @@ app.delete('/api/projects/:projectName/files', authenticateToken, async (req, re
             return res.status(403).json({ error: 'Cannot delete project root directory' });
         }
 
-        await checkGenericWorkspaceSkillMutation({
-            workspacePath: workspace.path,
-            operation: 'delete',
-            targetPath: resolvedPath,
-        });
-        // Delete based on type
-        if (stats.isDirectory()) {
-            await fsPromises.rm(resolvedPath, { recursive: true, force: true });
+        const skillTarget = classifyWorkspaceSkillFilePath(workspace.path, resolvedPath);
+        if (skillTarget?.kind === 'skill') {
+            await deleteLocalWorkspaceSkill({ workspacePath: workspace.path, name: skillTarget.name });
         } else {
-            await fsPromises.unlink(resolvedPath);
+            await checkGenericWorkspaceSkillMutation({
+                workspacePath: workspace.path,
+                operation: 'delete',
+                targetPath: resolvedPath,
+            });
+            // Delete based on type
+            if (stats.isDirectory()) {
+                await fsPromises.rm(resolvedPath, { recursive: true, force: true });
+            } else {
+                await fsPromises.unlink(resolvedPath);
+            }
+            await syncManagedSkillAfterGenericFileMutation(workspace.path, [resolvedPath]);
         }
-        await syncManagedSkillAfterGenericFileMutation(workspace.path, [resolvedPath]);
 
         res.json({
             success: true,

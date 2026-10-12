@@ -1431,14 +1431,27 @@ export async function syncManagedSkillAfterMutation(context, workspacePath) {
 export async function syncManagedSkillAfterGenericFileMutation(workspacePath, targetPaths) {
   const { runtimeRoot, sourceRoot } = getWorkspaceSkillsPaths(workspacePath);
   const affected = new Map();
+  const removedSkillRoots = new Set();
   for (const targetPath of targetPaths) {
     const fullPath = path.resolve(workspacePath, targetPath);
+    const target = classifyWorkspaceSkillFilePath(workspacePath, fullPath);
+    if (target?.kind === 'skill' && !await pathExists(fullPath)) {
+      removedSkillRoots.add(target.name.toLowerCase());
+    }
     for (const root of [runtimeRoot, sourceRoot]) {
       const relative = path.relative(root, fullPath);
-      if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
       const [name, ...entryParts] = relative.split(path.sep);
       if (!name || entryParts.length === 0) continue;
       affected.set(name.toLowerCase(), { name, root });
+    }
+  }
+  if (removedSkillRoots.size > 0) {
+    const metadata = await readSkillsMetadata(workspacePath);
+    for (const [name, entry] of Object.entries(metadata.skills)) {
+      if (removedSkillRoots.has(name.toLowerCase()) && entry.enabled !== false) {
+        await setSkillEnabled({ workspacePath, name, enabled: false });
+      }
     }
   }
   for (const { name, root } of affected.values()) {
@@ -1463,7 +1476,7 @@ export function classifyWorkspaceSkillFilePath(workspacePath, targetPath) {
     return { kind: 'container' };
   }
   const relative = path.relative(runtimeRoot, fullPath);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
   const [name, ...entryParts] = relative.split(path.sep);
   return entryParts.length
     ? { kind: 'entry', name, entryPath: entryParts.join('/') }

@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import JSZip from 'jszip';
+import { moveWorkspaceItem } from './workspace-file-operations.js';
 
 import {
   createWorkspaceSkill,
@@ -1037,6 +1038,47 @@ test('file manager edits to a managed skill stay in sync with its source copy', 
   assert.equal(await fs.readFile(runtimeFile, 'utf8'), '# Edited source');
 });
 
+test('moving a managed skill directory out of skills disables its runtime copy', async () => {
+  const workspacePath = await makeWorkspace();
+  const sourceRoot = path.join(workspacePath, '.cloudcli', 'skills', 'sources');
+  const runtimeRoot = path.join(workspacePath, '.claude', 'skills');
+  const runtimePath = await writeSkill(runtimeRoot, 'grill-me', '# Current');
+  await writeSkill(sourceRoot, 'grill-me', '# Current');
+  await writeSkillsMetadata(workspacePath, {
+    version: 1,
+    skills: { 'grill-me': { name: 'grill-me', enabled: true, sourceType: 'github' } },
+  });
+
+  const destination = path.join(workspacePath, 'archive', 'grill-me');
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.rename(runtimePath, destination);
+  await syncManagedSkillAfterGenericFileMutation(workspacePath, [runtimePath, destination]);
+
+  assert.equal((await readSkillsMetadata(workspacePath)).skills['grill-me'].enabled, false);
+  assert.equal(await fs.readFile(path.join(destination, 'SKILL.md'), 'utf8'), '# Current');
+  await reconcileManagedSkills(workspacePath);
+  await assert.rejects(fs.access(runtimePath));
+});
+
+test('file manager can move files into, between, and out of skill directories', async () => {
+  const workspacePath = await makeWorkspace();
+  const skillRoot = path.join(workspacePath, '.claude', 'skills');
+  await writeSkill(skillRoot, 'first', '# First');
+  await writeSkill(skillRoot, 'second', '# Second');
+  await fs.writeFile(path.join(workspacePath, 'notes.md'), 'notes');
+
+  for (const [sourcePath, targetDirectory] of [
+    ['/workspace/notes.md', '/workspace/.claude/skills/first'],
+    ['/workspace/.claude/skills/first/notes.md', '/workspace/.claude/skills/second'],
+    ['/workspace/.claude/skills/second/notes.md', '/workspace'],
+  ]) {
+    const result = await moveWorkspaceItem({ workspaceRoot: workspacePath, sourcePath, targetDirectory });
+    await syncManagedSkillAfterGenericFileMutation(workspacePath, [result.oldPath, result.newPath]);
+  }
+
+  assert.equal(await fs.readFile(path.join(workspacePath, 'notes.md'), 'utf8'), 'notes');
+});
+
 test('file manager skill path checks leave ordinary files alone and protect skill structure', async () => {
   const workspacePath = await makeWorkspace();
   const ordinaryPath = path.join(workspacePath, 'notes.md');
@@ -1046,6 +1088,11 @@ test('file manager skill path checks leave ordinary files alone and protect skil
   assert.deepEqual(classifyWorkspaceSkillFilePath(workspacePath, skillFile), {
     kind: 'entry',
     name: 'grill-me',
+    entryPath: 'SKILL.md',
+  });
+  assert.deepEqual(classifyWorkspaceSkillFilePath(workspacePath, path.join(workspacePath, '.claude', 'skills', '..example', 'SKILL.md')), {
+    kind: 'entry',
+    name: '..example',
     entryPath: 'SKILL.md',
   });
   await assert.rejects(
