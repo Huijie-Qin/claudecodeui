@@ -1450,6 +1450,86 @@ export async function syncManagedSkillAfterGenericFileMutation(workspacePath, ta
   }
 }
 
+export function classifyWorkspaceSkillFilePath(workspacePath, targetPath) {
+  const fullPath = path.resolve(workspacePath, targetPath);
+  const { runtimeRoot } = getWorkspaceSkillsPaths(workspacePath);
+  const claudeRoot = path.join(workspacePath, '.claude');
+  const cloudcliRoot = path.join(workspacePath, '.cloudcli');
+  const internalRoot = path.join(workspacePath, '.cloudcli', 'skills');
+  if (fullPath === cloudcliRoot || fullPath === internalRoot || fullPath.startsWith(`${internalRoot}${path.sep}`)) {
+    return { kind: 'internal' };
+  }
+  if (fullPath === claudeRoot || fullPath === runtimeRoot) {
+    return { kind: 'container' };
+  }
+  const relative = path.relative(runtimeRoot, fullPath);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  const [name, ...entryParts] = relative.split(path.sep);
+  return entryParts.length
+    ? { kind: 'entry', name, entryPath: entryParts.join('/') }
+    : { kind: 'skill', name };
+}
+
+export async function checkGenericWorkspaceSkillMutation({
+  workspacePath,
+  operation,
+  targetPath,
+  nextPath,
+  content,
+  exists = false,
+}) {
+  const target = classifyWorkspaceSkillFilePath(workspacePath, targetPath);
+  if (!target) return null;
+  if (target.kind === 'internal') {
+    throw createHttpError('请在「技能」→「我的技能」中管理技能源文件和配置。', 409);
+  }
+  if (target.kind !== 'entry') {
+    if (operation === 'create') return target;
+    throw createHttpError('请在「技能」→「我的技能」中管理技能目录。', 409);
+  }
+  if (operation === 'save') return target;
+  if (operation === 'rename' || operation === 'move') {
+    const next = classifyWorkspaceSkillFilePath(workspacePath, nextPath);
+    if (next?.kind !== 'entry' || next.name !== target.name) {
+      throw createHttpError('请在同一个技能目录内移动文件。', 409);
+    }
+    if (target.entryPath === 'SKILL.md' || next.entryPath === 'SKILL.md') {
+      throw createHttpError('不可移动或重命名技能入口 SKILL.md。', 409);
+    }
+    await checkSkillMutation({
+      workspacePath,
+      name: target.name,
+      operation: 'renameWorkspaceSkillEntry',
+      entryPath: target.entryPath,
+      nextPath: next.entryPath,
+    });
+    return target;
+  }
+  if (operation === 'delete') {
+    if (target.entryPath === 'SKILL.md') {
+      throw createHttpError('不可删除技能入口 SKILL.md。', 409);
+    }
+    await checkSkillMutation({
+      workspacePath,
+      name: target.name,
+      operation: 'deleteWorkspaceSkillEntry',
+      entryPath: target.entryPath,
+    });
+    return target;
+  }
+  if (operation === 'create' || operation === 'upload') {
+    await checkSkillMutation({
+      workspacePath,
+      name: target.name,
+      operation: exists ? 'updateWorkspaceSkillFile' : 'createWorkspaceSkillEntry',
+      entryPath: target.entryPath,
+      filePath: target.entryPath,
+      content,
+    });
+  }
+  return target;
+}
+
 async function replaceSkillDirectory(sourcePath, destinationPath) {
   const stagePath = `${destinationPath}.${process.pid}.${Date.now()}.stage`;
   const backupPath = `${destinationPath}.${process.pid}.${Date.now()}.backup`;

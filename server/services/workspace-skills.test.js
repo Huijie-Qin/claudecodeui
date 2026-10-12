@@ -9,6 +9,8 @@ import JSZip from 'jszip';
 import {
   createWorkspaceSkill,
   createWorkspaceSkillEntry,
+  checkGenericWorkspaceSkillMutation,
+  classifyWorkspaceSkillFilePath,
   deleteLocalWorkspaceSkill,
   deleteWorkspaceSkillEntry,
   getWorkspaceSkillDetail,
@@ -1033,6 +1035,43 @@ test('file manager edits to a managed skill stay in sync with its source copy', 
   await fs.writeFile(sourceFile, '# Edited source');
   await syncManagedSkillAfterGenericFileMutation(workspacePath, [sourceFile]);
   assert.equal(await fs.readFile(runtimeFile, 'utf8'), '# Edited source');
+});
+
+test('file manager skill path checks leave ordinary files alone and protect skill structure', async () => {
+  const workspacePath = await makeWorkspace();
+  const ordinaryPath = path.join(workspacePath, 'notes.md');
+  const skillFile = path.join(workspacePath, '.claude', 'skills', 'grill-me', 'SKILL.md');
+  const internalFile = path.join(workspacePath, '.cloudcli', 'skills', 'metadata.json');
+  assert.equal(classifyWorkspaceSkillFilePath(workspacePath, ordinaryPath), null);
+  assert.deepEqual(classifyWorkspaceSkillFilePath(workspacePath, skillFile), {
+    kind: 'entry',
+    name: 'grill-me',
+    entryPath: 'SKILL.md',
+  });
+  await assert.rejects(
+    checkGenericWorkspaceSkillMutation({
+      workspacePath,
+      operation: 'save',
+      targetPath: internalFile,
+    }),
+    /我的技能/,
+  );
+  await assert.rejects(
+    checkGenericWorkspaceSkillMutation({
+      workspacePath,
+      operation: 'delete',
+      targetPath: skillFile,
+    }),
+    /SKILL.md/,
+  );
+  await assert.rejects(
+    checkGenericWorkspaceSkillMutation({
+      workspacePath,
+      operation: 'delete',
+      targetPath: path.dirname(skillFile),
+    }),
+    /我的技能/,
+  );
 });
 
 test('uninstallManagedSkill deletes metadata, source, and materialized runtime copy', async () => {
