@@ -24,6 +24,7 @@ import {
   readWorkspaceSkillFile,
   renameWorkspaceSkillEntry,
   setSkillEnabled,
+  syncManagedSkillAfterGenericFileMutation,
   uninstallManagedSkill,
   updateWorkspaceSkillFile,
   writeSkillsMetadata,
@@ -1010,6 +1011,28 @@ test('setSkillEnabled materializes and removes only managed runtime copies', asy
   assert.equal(disabled.status, 'disabled');
   await assert.rejects(fs.access(path.join(runtimeRoot, 'grill-me')), /ENOENT/);
   assert.equal((await readSkillsMetadata(workspacePath)).skills['grill-me'].enabled, false);
+});
+
+test('file manager edits to a managed skill stay in sync with its source copy', async () => {
+  const workspacePath = await makeWorkspace();
+  const sourceRoot = path.join(workspacePath, '.cloudcli', 'skills', 'sources');
+  const runtimeRoot = path.join(workspacePath, '.claude', 'skills');
+  await writeSkill(sourceRoot, 'grill-me', '# Original');
+  await writeSkill(runtimeRoot, 'grill-me', '# Original');
+  await writeSkillsMetadata(workspacePath, {
+    version: 1,
+    skills: { 'grill-me': { name: 'grill-me', enabled: true, sourceType: 'github' } },
+  });
+
+  const runtimeFile = path.join(runtimeRoot, 'grill-me', 'SKILL.md');
+  const sourceFile = path.join(sourceRoot, 'grill-me', 'SKILL.md');
+  await fs.writeFile(runtimeFile, '# Edited in Files');
+  await syncManagedSkillAfterGenericFileMutation(workspacePath, [runtimeFile]);
+  assert.equal(await fs.readFile(sourceFile, 'utf8'), '# Edited in Files');
+
+  await fs.writeFile(sourceFile, '# Edited source');
+  await syncManagedSkillAfterGenericFileMutation(workspacePath, [sourceFile]);
+  assert.equal(await fs.readFile(runtimeFile, 'utf8'), '# Edited source');
 });
 
 test('uninstallManagedSkill deletes metadata, source, and materialized runtime copy', async () => {

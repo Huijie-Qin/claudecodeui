@@ -191,14 +191,3 @@ export function createEvalFiles({ repository }) {
   }
   return { load, mutate, snapshot, guard, protectPublished };
 }
-
-export function assertGenericFileMutation(workspacePath, targets) {
-  const workspace = path.resolve(workspacePath);
-  const roots = ['.claude/skills', '.cloudcli/skills'];
-  for (const target of targets) {
-    const full = path.resolve(workspace, target);
-    if (roots.some((root) => { const protectedRoot = path.join(workspace, root); return full === protectedRoot || full.startsWith(`${protectedRoot}${path.sep}`) || protectedRoot.startsWith(`${full}${path.sep}`); })) {
-      throw fail('Edit skill files through My Skills so cases and managed copies remain consistent', 'SKILL_USE_SKILL_EDITOR', 409);
-    }
-  }
-}
