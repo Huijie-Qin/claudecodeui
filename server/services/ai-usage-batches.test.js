@@ -54,12 +54,22 @@ test('ENV validates fixed daily time, explicit timezone, and a bounded window', 
   assert.throws(() => readAiUsageConfig({ AI_USAGE_RUN_AT: '25:00' }));
   assert.throws(() => readAiUsageConfig({ AI_USAGE_ENABLED: 'yes' }));
   assert.throws(() => readAiUsageConfig({ AI_USAGE_TIMEZONE: 'Invalid/Zone' }));
-  assert.throws(() => readAiUsageConfig({ AI_USAGE_MAX_CONCURRENCY: '5' }));
+  assert.equal(readAiUsageConfig({ AI_USAGE_MAX_CONCURRENCY: '5' }).concurrency, 5);
   assert.throws(() => readAiUsageConfig({ AI_USAGE_WINDOW_END: '02:00' }));
   assert.equal(getAiUsageSchedule(config, night()).scheduledFor, '2026-09-11T18:00:00.000Z');
   assert.equal(getAiUsageSchedule(config, night()).targetThrough, '2026-09-11T16:00:00.000Z');
   assert.equal(getAiUsageSchedule(config, new Date('2026-09-12T02:00:00Z')).inWindow, false);
   assert.equal(getAiUsageSchedule(config, new Date('2026-09-11T22:00:00Z')).inWindow, false);
+});
+
+test('concurrency accepts positive safe integers and rejects invalid pool sizes', () => {
+  assert.equal(readAiUsageConfig({}).concurrency, 1);
+  for (const value of ['1', '2', '5', String(Number.MAX_SAFE_INTEGER)]) {
+    assert.equal(readAiUsageConfig({ AI_USAGE_MAX_CONCURRENCY: value }).concurrency, Number(value));
+  }
+  for (const value of ['', ' ', '0', '-1', '1.5', 'abc', '1e2', '0x10', 'Infinity', '9007199254740992']) {
+    assert.throws(() => readAiUsageConfig({ AI_USAGE_MAX_CONCURRENCY: value }), /AI_USAGE_MAX_CONCURRENCY/);
+  }
 });
 
 test('cross-midnight windows and DST gap/fold are scheduled once per local day', () => {
@@ -120,6 +130,29 @@ test('scheduler exposes the configured lag and disables invalid settings without
   assert.match(invalid.getStatus().configurationError, /AI_USAGE_DATA_LAG_DAYS/);
   invalid.tick();
   assert.equal(messages.length, 1);
+});
+
+test('scheduler starts an enabled pool above one and exposes its effective concurrency', (t) => {
+  const db = fixture(t);
+  const messages = [];
+  const workers = [];
+  const service = createAiUsageService({ database: db, databasePath: '/tmp/fixture.db', now: night,
+    env: { AI_USAGE_ENABLED: 'true', AI_USAGE_MAX_CONCURRENCY: '5' },
+    logger: { error: (...args) => messages.push(args) },
+    workerFactory(options) {
+      workers.push(options);
+      return Object.assign(new EventEmitter(), { postMessage() {} });
+    } });
+  t.after(() => service.stop());
+  service.start();
+  service.tick();
+  assert.equal(service.getStatus().enabled, true);
+  assert.equal(service.getStatus().configurationError, null);
+  assert.equal(service.getStatus().maxConcurrency, 5);
+  assert.equal(service.getStatus().state, 'running');
+  assert.equal(workers.length, 1);
+  assert.equal(workers[0].workerData.config.concurrency, 5);
+  assert.deepEqual(messages, []);
 });
 
 test('per-request duration is 2+3=5 minutes, and actual midnight crossing is 2+3', () => {
