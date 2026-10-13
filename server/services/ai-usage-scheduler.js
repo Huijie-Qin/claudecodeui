@@ -19,7 +19,7 @@ export function createAiUsageService({ database, databasePath = database.name, e
 
   function getStatus() {
     return { enabled: config.enabled, runAt: config.runAt, windowEnd: config.windowEnd,
-      dataLagDays: config.dataLagDays,
+      dataLagDays: config.dataLagDays, maxConcurrency: config.concurrency,
       timeZone: config.timeZone, nextRunAt: config.enabled ? getAiUsageSchedule(config, now()).nextRunAt : null,
       state, configurationError };
   }
