@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rmdir, unlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -29,14 +29,16 @@ test('real statistics Worker publishes through its own SQLite connection and exi
   t.after(async () => {
     if (worker && !exited) await worker.terminate();
     database.close();
-    // The directory is freshly created and contains only this test's database/WAL files.
-    for (const filename of await readdir(directory)) await unlink(path.join(directory, filename));
-    await rmdir(directory);
+    // Only this test's database/WAL files and trusted main-session history live here.
+    await rm(directory, { recursive: true, force: true });
   });
   database.pragma('journal_mode = WAL');
   database.exec(`CREATE TABLE tenants(id INTEGER PRIMARY KEY, status TEXT);
     CREATE TABLE users(id INTEGER PRIMARY KEY, username TEXT);
     CREATE TABLE workspaces(id INTEGER PRIMARY KEY, tenant_id INTEGER, display_name TEXT, status TEXT);
+    CREATE TABLE session_index(tenant_id INTEGER,workspace_id INTEGER,user_id INTEGER,provider TEXT,provider_session_id TEXT);
+    CREATE TABLE agent_session_runtime(tenant_id INTEGER,workspace_id INTEGER,user_id INTEGER,provider TEXT,
+      provider_session_id TEXT,runtime_id TEXT,runtime_home_path TEXT);
     INSERT INTO tenants VALUES(1, 'active');
     INSERT INTO users VALUES(1, 'worker-smoke-user');
     INSERT INTO workspaces VALUES(10, 1, 'Worker smoke workspace', 'active');`);
@@ -52,6 +54,18 @@ test('real statistics Worker publishes through its own SQLite connection and exi
     VALUES(?, 1, 1, 10, 'worker-session', 'claude', ?, ?, 'completed', ?)`);
   insert.run('worker-request-1', iso(0), iso(2), iso(2));
   insert.run('worker-request-2', iso(30), iso(33), iso(33));
+  const home = path.join(directory, 'runtime');
+  const project = path.join(home, '.claude', 'projects', 'project');
+  await mkdir(project, { recursive: true });
+  database.exec("INSERT INTO session_index VALUES(1,10,1,'claude','worker-session')");
+  database.prepare("INSERT INTO agent_session_runtime VALUES(1,10,1,'claude','worker-session','worker-runtime',?)").run(home);
+  const history = [[0, 2], [30, 33]].flatMap(([start, end], index) => [
+    { uuid: `user-${index}`, type: 'user', timestamp: iso(start), sessionId: 'worker-session',
+      message: { role: 'user', content: 'Request' } },
+    { uuid: `assistant-${index}`, type: 'assistant', timestamp: iso(end), sessionId: 'worker-session',
+      message: { role: 'assistant', content: 'Reply', stop_reason: 'end_turn' } },
+  ]);
+  await writeFile(path.join(project, 'worker-session.jsonl'), history.map(entry => JSON.stringify(entry)).join('\n') + '\n');
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM ai_usage_batches').get().count, 0);
 
   worker = new Worker(new URL('./ai-usage-worker.js', import.meta.url), {

@@ -1,4 +1,4 @@
-import { localParts, normalizeTimestamp } from './ai-usage-config.js';
+import { localParts, normalizeTimestamp, normalizeUsageTimestamp } from './ai-usage-config.js';
 import { isInheritedUsageMessage } from './ai-usage-inheritance.js';
 
 const ORIGINS = new Set(['user', 'hook', 'agent_graph', 'top_skill', 'unknown']);
@@ -37,7 +37,7 @@ export function collectSkillEvidence(scope, message, {
   timeZone, fallbackId, fallbackTime, subagentId = null, state = {}, includeBoundaries = false,
 } = {}) {
   if (!message || typeof message !== 'object' || isInheritedUsageMessage(message)) return [];
-  const occurredAt = normalizeTimestamp(message.timestamp || fallbackTime);
+  const occurredAt = normalizeUsageTimestamp(message.timestamp || fallbackTime, timeZone);
   const id = identifier(message.uuid || message.id || fallbackId);
   const role = message.role || message.message?.role || message.type;
   const content = message.message?.content ?? message.content;

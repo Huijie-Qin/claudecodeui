@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile, appendFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,9 +17,13 @@ import { createAiUsageService } from './ai-usage-scheduler.js';
 
 const config = readAiUsageConfig({ AI_USAGE_ENABLED: 'true' });
 const night = () => new Date('2026-09-11T18:10:00Z'); // Sep 12 02:10 Shanghai
+const histories = new WeakMap();
 function fixture(t) {
   const db = new Database(':memory:');
-  t.after(() => db.close());
+  t.after(() => {
+    db.close();
+    for (const home of histories.get(db)?.values() || []) rmSync(home, { recursive: true, force: true });
+  });
   db.exec(`CREATE TABLE tenants(id INTEGER PRIMARY KEY,status TEXT);
     CREATE TABLE users(id INTEGER PRIMARY KEY,username TEXT);
     CREATE TABLE workspaces(id INTEGER PRIMARY KEY,tenant_id INTEGER,display_name TEXT,status TEXT);
@@ -42,6 +47,26 @@ function turn(db, key, start, end, tenant = 1, status = 'completed') {
   db.prepare(`INSERT INTO ai_usage_turn_facts(turn_key,tenant_id,user_id,workspace_id,session_key,provider,
     started_at,response_completed_at,terminal_status,updated_at) VALUES(?,?,?,?,?,'claude',?,?,?,?)`)
     .run(key, tenant, tenant, tenant * 10, 'session-a', start, end, status, end || start);
+  if (!histories.has(db)) histories.set(db, new Map());
+  const homes = histories.get(db);
+  if (!homes.has(tenant)) {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'ai-usage-batch-history-'));
+    homes.set(tenant, home);
+    mkdirSync(path.join(home, '.claude', 'projects', 'project'), { recursive: true });
+    db.prepare("INSERT INTO agent_session_runtime VALUES(?,?,?,'claude','session-a',?,?)")
+      .run(tenant, tenant * 10, tenant, `runtime-${tenant}`, home);
+    db.prepare("INSERT INTO session_index VALUES(?,?,?,'claude','session-a')").run(tenant, tenant * 10, tenant);
+  }
+  const file = path.join(homes.get(tenant), '.claude', 'projects', 'project', 'session-a.jsonl');
+  appendFileSync(file, JSON.stringify({ uuid: `${key}:user`, type: 'user', timestamp: start,
+    sessionId: 'session-a', message: { role: 'user', content: 'Request' } }) + '\n');
+  if (status === 'completed' && end) completeHistoryTurn(db, key, end, tenant);
+}
+
+function completeHistoryTurn(db, key, end, tenant = 1) {
+  const file = path.join(histories.get(db).get(tenant), '.claude', 'projects', 'project', 'session-a.jsonl');
+  appendFileSync(file, JSON.stringify({ uuid: `${key}:assistant`, type: 'assistant', timestamp: end,
+    sessionId: 'session-a', message: { role: 'assistant', content: 'Reply', stop_reason: 'end_turn' } }) + '\n');
 }
 
 function publishedRows(db, tenant = 1) {
@@ -269,6 +294,7 @@ test('late completion repairs the old day without inferring the end from another
   await runAiUsageWindow({ database: db, config, now: night });
   assert.equal(publishedRows(db).find((row) => row.dataset === 'turns').value.durationMs, null);
   db.prepare("UPDATE ai_usage_turn_facts SET terminal_status='completed',response_completed_at='2026-09-11T18:10:00Z' WHERE turn_key='late'").run();
+  completeHistoryTurn(db, 'late', '2026-09-11T18:10:00Z');
   await runAiUsageWindow({ database: db, config, now: () => new Date('2026-09-12T18:10:00Z') });
   const rows = publishedRows(db).filter((row) => row.dataset === 'turns');
   assert.equal(rows.find((row) => row.stat_date === '2026-09-11').value.durationMs, 120000);

@@ -3,7 +3,9 @@
 import { migrateAiUsageSchema } from '../database/ai-usage-schema.js';
 import { migrateAiUsageExportSchema } from '../database/ai-usage-export-schema.js';
 
-import { shiftDate } from './ai-usage-config.js';
+import { shiftDate, splitTurnByDate } from './ai-usage-config.js';
+import { createAiUsageStore } from './ai-usage-db.js';
+import { logicalSessionKey } from './ai-usage-parser.js';
 
 export const simulationNight = () => new Date('2026-09-12T18:10:00.000Z');
 export const simulationCounts = Object.freeze({ users: 43, skills: 30, requests: 600, toolMessages: 400, sqlMessages: 600, generatedSqlLines: 3300, hookExecutions: 1200, hookRecords: 1200, turns: 121, templates: 5, businessRows: 4156 });
@@ -61,6 +63,25 @@ export function seedAiUsageSimulation(db) {
     const session = db.prepare("INSERT INTO session_index VALUES(10,?,?,'claude',?)");
     const turn = db.prepare(`INSERT INTO ai_usage_turn_facts(turn_key,tenant_id,user_id,workspace_id,session_key,provider,started_at,
       response_completed_at,terminal_status,source,updated_at) VALUES(?,10,?,? ,?,'claude',?,?,'completed','user',?)`);
+    const store = createAiUsageStore(db);
+    function seedHistoryTurn(turnKey, userId, workspaceId, sessionId, startedAt, completedAt) {
+      // Retain captured requests as independent interaction/diagnostic fixtures.
+      // Duration is a standard history-derived fact, never read back from that table.
+      turn.run(turnKey, userId, workspaceId, sessionId, startedAt, completedAt, completedAt);
+      const sessionKey = logicalSessionKey({ tenant_id: 10, user_id: userId, workspace_id: workspaceId,
+        provider: 'claude', provider_session_id: sessionId });
+      const historyTurnKey = `fixture-history:${turnKey}`;
+      const rows = [...splitTurnByDate(startedAt, completedAt, 'Asia/Shanghai')].map(part => ({
+        dataset: 'turns', row_key: `${historyTurnKey}:${part.date}`, stat_date: part.date,
+        user_id: userId, workspace_id: workspaceId, session_key: sessionKey, occurred_at: startedAt,
+        value: { provider: 'claude', providerSessionId: sessionId, turnKey: historyTurnKey,
+          status: 'completed', requestStartedAt: startedAt, responseCompletedAt: completedAt,
+          durationMs: part.durationMs, source: 'session_history' },
+      }));
+      // Synthetic source key: no claim that a real file was opened. The nightly
+      // aggregator and all report projections still consume their normal input.
+      store.put(10, `fixture:history:${turnKey}`, rows);
+    }
     for (let i = 0; i < 600; i++) {
       const date = shiftDate('2026-08-14', i % 30); const at = `${date}T02:00:00.000Z`;
       const user = 100 + i % 40; const ws = 7 + i % 5; const sid = `sim-session-${i}`;
@@ -75,7 +96,7 @@ export function seedAiUsageSimulation(db) {
       }
       if (i < 120) {
         const end = new Date(Date.parse(at) + (i % 5 + 1) * 60000).toISOString();
-        turn.run(`turn-${i}`, user, ws, sid, at, end, end);
+        seedHistoryTurn(`turn-${i}`, user, ws, sid, at, end);
       }
       // Independent transcript evidence, deliberately different from Hook metrics.
       const replyAt = `${date}T02:00:05.000Z`;
@@ -84,7 +105,7 @@ export function seedAiUsageSimulation(db) {
       message.run(ws, user, sid, reply.uuid, replyAt, replyAt, JSON.stringify(reply), `runtime-${i}`, 3);
     }
     // One actual request spanning midnight: 2 + 3 minutes, no fabricated next-day user message.
-    turn.run('cross-midnight', 3, 7, 'cross-midnight', '2026-09-11T15:58:00.000Z', '2026-09-11T16:03:00.000Z', '2026-09-11T16:03:00.000Z');
+    seedHistoryTurn('cross-midnight', 3, 7, 'cross-midnight', '2026-09-11T15:58:00.000Z', '2026-09-11T16:03:00.000Z');
     const hooks = [
       { id: 'hook-session-a', name: '会话记录 Hook', action: 'record-summary', type: 'conversation_record', fields: [
         { key: 'recordCount', label: '归档条数', type: 'number' },

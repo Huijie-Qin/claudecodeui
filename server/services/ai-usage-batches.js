@@ -14,6 +14,7 @@ import { buildSplitCandidate, clearSplitStaging } from './ai-dashboard-split.js'
 import { buildSessionSummaryCandidate } from './ai-session-summary.js';
 import { mergeSessionReportFact, SESSION_REPORT_VERSION } from './ai-usage-session-report.js';
 import { buildReportSessionUsageCandidate } from './ai-usage-session-source.js';
+import { AiUsageDurationRecordError, durationSourceFilterSql, parseDurationFact } from './ai-usage-duration.js';
 import { isSessionSourceScopeConflict, prepareSessionConflicts, recordSessionConflict,
   sessionConflictCoverage } from './ai-usage-session-conflicts.js';
 
@@ -106,6 +107,20 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
       logger.info?.('[AI usage] batch_started', { batchId: batch.id, tenantId: batch.tenant_id });
       progress = JSON.parse(batch.progress_json || '{}');
       const batchConfig = { ...config, timeZone: batch.time_zone, calculationVersion: batch.calculation_version };
+      const onDurationAnomaly = ({ stage, reason, rowKey, sessionKey, sourceKey }) => {
+        progress.durationAnomalies ||= {};
+        const count = (progress.durationAnomalies[stage] || 0) + 1;
+        progress.durationAnomalies[stage] = count;
+        // Bound per-record output; the publication log includes the full count.
+        if (count <= 20) logger.warn?.('[AI usage] duration_record_skipped', {
+          batchId: batch.id, tenantId: batch.tenant_id, stage, reason, rowKey, sessionKey, sourceKey,
+        });
+      };
+      const skipDuration = (error, row) => {
+        if (!(error instanceof AiUsageDurationRecordError)) throw error;
+        onDurationAnomaly({ stage: 'partitions', reason: error.code,
+          rowKey: row.row_key, sessionKey: row.session_key, sourceKey: row.source_key });
+      };
       const checkpoint = async () => {
         checkWindow();
         store.checkpoint(batch, progress, config, now());
@@ -119,11 +134,18 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
           store.assertLease(batch, now());
           database.prepare(`UPDATE ai_usage_tenant_state SET bootstrapped=0,bootstrap_json='{}',time_zone=?,calculation_version=? WHERE tenant_id=?`)
             .run(batch.time_zone, batch.calculation_version, tenant.id);
+          // Rebuild retained facts too, including rows whose source did not change.
+          requeueAiUsageReport(database, tenant.id);
+          // Source switches must also retire orphaned old captures whose raw
+          // turn row no longer exists. Requeue first; the published snapshot
+          // remains intact until the replacement candidate is ready.
+          database.prepare("DELETE FROM ai_usage_fact_rows WHERE tenant_id=? AND dataset='turns' AND source_key LIKE 'turn:%'")
+            .run(tenant.id);
           // A timezone/definition change requires explicit night-time reindexing.
           database.prepare('UPDATE ai_usage_source_states SET offset=0,identity=NULL WHERE tenant_id=?').run(tenant.id);
         });
       }
-      const indexer = createAiUsageIndexer({ store, config: batchConfig, batch, checkpoint, checkWindow });
+      const indexer = createAiUsageIndexer({ store, config: batchConfig, batch, checkpoint, checkWindow, onDurationAnomaly });
       if (!progress.stage || progress.stage === 'bootstrap') {
         progress.stage = 'bootstrap';
         await indexer.bootstrap(progress);
@@ -176,13 +198,13 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
               while (true) {
                 checkWindow();
                 const rows = database.prepare(`WITH next_keys AS MATERIALIZED (
-                  SELECT DISTINCT row_key FROM ai_usage_fact_rows
-                  WHERE tenant_id=? AND dataset=? AND stat_date=? AND row_key>?
+                  SELECT DISTINCT row_key FROM ai_usage_fact_rows f
+                  WHERE tenant_id=? AND dataset=? AND stat_date=? AND row_key>? AND ${durationSourceFilterSql('f')}
                   ORDER BY row_key LIMIT ?
                 ) SELECT * FROM (
                   SELECT f.*,ROW_NUMBER() OVER(PARTITION BY f.row_key ORDER BY f.priority DESC,f.source_key) AS choice
                   FROM ai_usage_fact_rows f JOIN next_keys k ON k.row_key=f.row_key
-                  WHERE f.tenant_id=? AND f.dataset=? AND f.stat_date=?
+                  WHERE f.tenant_id=? AND f.dataset=? AND f.stat_date=? AND ${durationSourceFilterSql('f')}
                 ) WHERE choice=1 ORDER BY row_key`).all(tenant.id, part.dataset, part.stat_date, target.cursor,
                   config.batchSize, tenant.id, part.dataset, part.stat_date);
                 if (!rows.length) break;
@@ -196,14 +218,17 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
                     // Apply exclusions after source-priority selection, before ANY
                     // aggregate (including daily activity) sees this contribution.
                     if (sessionDatasets.has(row.dataset) && excluded.get(batch.id, tenant.id, row.session_key)) continue;
-                    const value = JSON.parse(row.value_json);
+                    let value;
+                    try { value = row.dataset === 'turns' ? parseDurationFact(row) : JSON.parse(row.value_json); }
+                    catch (error) { skipDuration(error, row); continue; }
                     let rowKey = row.row_key;
                     let output = value;
                     if (row.dataset === 'interactions' || row.dataset === 'turns') {
                       rowKey = JSON.stringify([row.dataset, row.session_key, row.user_id, row.workspace_id, value.templateId || null, value.status || null]);
                       const previous = readSummary.get(batch.id, row.dataset, row.stat_date, rowKey);
                       const earlier = previous ? JSON.parse(previous.value_json) : null;
-                      output = mergeSessionReportFact(row, earlier);
+                      try { output = mergeSessionReportFact(row, earlier); }
+                      catch (error) { skipDuration(error, row); continue; }
                       // Source cursor and summary updates commit together below;
                       // replay after a crash never increments the same input twice.
                       row.occurred_at = previous && previous.occurred_at < row.occurred_at ? previous.occurred_at : row.occurred_at;
@@ -283,16 +308,18 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
             await buildReportSessionUsageCandidate({ store, batch, progress, checkpoint, checkWindow });
           }
           if (progress.stage === 'publish' && (!progress.sessionSummary?.ready || progress.sessionSummary.version !== SESSION_SUMMARY_VERSION)) {
-            await buildSessionSummaryCandidate({ store, batch, progress, checkpoint, checkWindow });
+            if (progress.durationAnomalies) progress.durationAnomalies.session_summary = 0;
+            await buildSessionSummaryCandidate({ store, batch, progress, checkpoint, checkWindow, onDurationAnomaly });
           }
           checkWindow();
           const conflictCoverage = sessionConflictCoverage(database, batch);
+          const skippedDurationRecords = Object.values(progress.durationAnomalies || {}).reduce((sum, count) => sum + count, 0);
           store.publish(batch, { ...indexer.coverage(), ...conflictCoverage, activeUsers: 'partial', dataRevision: progress.dataRevision,
-            sessionSummaryVersion: SESSION_SUMMARY_VERSION,
+            sessionSummaryVersion: SESSION_SUMMARY_VERSION, skippedDurationRecords,
             hookNumericStatisticsVersion: /(?:^|_)hook_numbers_v5(?:_|$)/.test(batch.calculation_version) ? 1 : 0 }, now());
           published++;
           logger.info?.('[AI usage] batch_published', { batchId: batch.id, tenantId: batch.tenant_id,
-            excludedSessionCount: conflictCoverage.excludedSessionCount });
+            excludedSessionCount: conflictCoverage.excludedSessionCount, skippedDurationRecords });
           break;
         } catch (error) {
           if (!isSessionSourceScopeConflict(error)) throw error;
@@ -309,6 +336,10 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
             database.prepare('DELETE FROM ai_session_summary_staging WHERE batch_id=?').run(batch.id);
             for (const key of ['stagingInitialized', 'partition', 'activity', 'integration', 'split',
               'reportSessionUsage', 'sessionSummary', 'sessionConflicts']) delete progress[key];
+            if (progress.durationAnomalies) {
+              progress.durationAnomalies.partitions = 0;
+              progress.durationAnomalies.session_summary = 0;
+            }
             progress.stage = 'partitions';
             store.checkpoint(batch, progress, config, now());
           });

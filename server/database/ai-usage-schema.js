@@ -42,6 +42,11 @@ CREATE TABLE IF NOT EXISTS ai_usage_fact_rows (
 CREATE INDEX IF NOT EXISTS idx_ai_usage_facts_partition ON ai_usage_fact_rows(tenant_id,dataset,stat_date);
 CREATE INDEX IF NOT EXISTS idx_ai_usage_facts_cursor ON ai_usage_fact_rows(tenant_id,dataset,stat_date,row_key,priority DESC,source_key);
 CREATE INDEX IF NOT EXISTS idx_ai_usage_facts_session ON ai_usage_fact_rows(tenant_id,dataset,session_key,row_key,source_key);
+-- Keep this expression aligned with durationTurnKeySql. Invalid legacy JSON
+-- has no logical turn key and still reaches the per-record validation path.
+CREATE INDEX IF NOT EXISTS idx_ai_usage_turn_sources ON ai_usage_fact_rows(tenant_id,dataset,session_key,
+  CASE WHEN json_valid(value_json) THEN json_extract(value_json,'$.turnKey') END,priority DESC,source_key)
+  WHERE dataset='turns';
 CREATE INDEX IF NOT EXISTS idx_ai_usage_skill_boundaries ON ai_usage_fact_rows(tenant_id,session_key,occurred_at,row_key)
   WHERE dataset='skill_evidence' AND json_extract(value_json,'$.kind')='boundary';
 CREATE TABLE IF NOT EXISTS ai_usage_dirty_skill_sessions (
