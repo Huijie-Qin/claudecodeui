@@ -14,6 +14,7 @@ import { tokenTotal, createSessionTokenAccumulator } from './ai-session-tokens.j
 import { collectSessionSummaries, replaceSessionSummaries, buildSessionSummaryCandidate, publishSessionSummaryCandidate } from './ai-session-summary.js';
 import { collectReportSessionUsage, replaceReportSessionUsage, validateReportSessionUsageCandidate } from './ai-usage-session-source.js';
 import { mergeSessionReportFact } from './ai-usage-session-report.js';
+import { AiUsageDurationRecordError } from './ai-usage-duration.js';
 
 const through = '2026-09-17T16:00:00.000Z';
 const time = '2026-09-10T02:00:00.000Z';
@@ -78,7 +79,11 @@ function fixture(t) {
         rowKey = JSON.stringify([row.dataset,row.session_key,row.user_id,row.workspace_id,value.templateId || null,value.status || null]);
         const previous = db.prepare('SELECT * FROM ai_usage_report_rows WHERE tenant_id=? AND dataset=? AND stat_date=? AND row_key=?')
           .get(row.tenant_id,row.dataset,row.stat_date,rowKey);
-        output = mergeSessionReportFact(row, previous ? JSON.parse(previous.value_json) : null);
+        try { output = mergeSessionReportFact(row, previous ? JSON.parse(previous.value_json) : null); }
+        catch (error) {
+          if (!(error instanceof AiUsageDurationRecordError)) throw error;
+          continue;
+        }
         if (previous && previous.occurred_at < row.occurred_at) row.occurred_at = previous.occurred_at;
       }
       write.run(row.tenant_id,row.dataset,rowKey,row.stat_date,row.user_id,row.workspace_id,row.subject_id,
@@ -96,6 +101,14 @@ function fixture(t) {
     return collectSessionSummaries({ database: db, tenantId: 1, through });
   };
   return { db, fact, message, native, collect, materialize };
+}
+
+function reportTurn(db, id, value, { occurredAt = time, sessionKey = key } = {}) {
+  const [tenantId, workspaceId, userId] = JSON.parse(sessionKey);
+  db.prepare(`INSERT INTO ai_usage_report_rows
+    (tenant_id,dataset,row_key,stat_date,user_id,workspace_id,session_key,occurred_at,value_json)
+    VALUES(?,'turns',?,?,?,?,?,?,?)`).run(tenantId, id, occurredAt.slice(0, 10), userId, workspaceId,
+    sessionKey, occurredAt, typeof value === 'string' ? value : JSON.stringify(value));
 }
 
 test('provider-specific cache accounting, integer validation and known zero', () => {
@@ -440,4 +453,134 @@ test('published and candidate report snapshots never mix; keyset pagination incl
   assert.equal(candidate.length, 505);
   assert.ok(candidate.every(row => row.total_tokens === 9));
   assert.deepEqual(await collectSessionSummaries({ database: db, tenantId: 2, through, batchId }), []);
+});
+
+
+test('malformed duration rows preserve valid totals and emit metadata-only diagnostics', async t => {
+  const { db, fact, materialize } = fixture(t);
+  fact('interactions', 'first');
+  await materialize();
+  reportTurn(db, 'a-valid', { status: 'completed', durationByCompletion: { '2026-09-10T02:01:00Z': 60000 } });
+  for (const [id, value] of [['b-json', '{'], ['c-null', 'null'], ['d-array', []], ['e-scalar', '7']]) {
+    reportTurn(db, id, value);
+  }
+  reportTurn(db, 'f-valid', { status: 'completed', durationByCompletion: { '2026-09-10T02:02:00Z': 30000 } });
+  const anomalies = [];
+  const [row] = await collectSessionSummaries({ database: db, tenantId: 1, through,
+    onDurationAnomaly: anomaly => anomalies.push(anomaly) });
+  assert.equal(row.ai_active_duration_seconds, 90);
+  assert.equal(row.end_time, '2026-09-10 10:02:00');
+  assert.deepEqual(anomalies, ['b-json', 'c-null', 'd-array', 'e-scalar'].map(rowKey => ({
+    stage: 'session_summary', reason: 'SESSION_REPORT_INVALID_VALUE', rowKey, sessionKey: key,
+  })));
+});
+
+test('invalid completion buckets and malformed maps discard only their own duration', async t => {
+  const { db, fact, materialize } = fixture(t);
+  fact('interactions', 'first');
+  await materialize();
+  reportTurn(db, 'mixed', { status: 'completed', durationByCompletion: {
+    '2026-09-10T02:01:00Z': 60000,
+    'invalid-time': 2000,
+    '2026-09-10T01:59:00Z': 1000,
+    '2026-09-10T02:03:00Z': -1,
+    '2026-09-10T02:04:00Z': 1.5,
+    '2026-09-10T02:05:00Z': '1000',
+    '2026-09-10T02:06:00Z': Number.MAX_SAFE_INTEGER + 1,
+    '2026-09-10T02:02:00Z': 30000,
+    [through]: 90000,
+  } });
+  for (const [id, durationByCompletion] of [['null-map', null], ['array-map', []], ['string-map', 'invalid']]) {
+    reportTurn(db, id, { status: 'completed', durationByCompletion });
+  }
+  const anomalies = [];
+  const [row] = await collectSessionSummaries({ database: db, tenantId: 1, through,
+    onDurationAnomaly: anomaly => anomalies.push(anomaly) });
+  assert.equal(row.ai_active_duration_seconds, 90);
+  assert.equal(row.end_time, '2026-09-10 10:02:00');
+  assert.equal(anomalies.length, 9);
+  assert.ok(anomalies.every(anomaly => anomaly.reason === 'SESSION_REPORT_INVALID_DURATION'));
+});
+
+test('overflow does not poison prior duration or block later valid completion buckets', async t => {
+  const { db, fact, materialize } = fixture(t);
+  fact('interactions', 'first');
+  await materialize();
+  reportTurn(db, 'overflow', { status: 'completed', durationByCompletion: {
+    '2026-09-10T02:01:00Z': 1000,
+    '2026-09-10T02:03:00Z': Number.MAX_SAFE_INTEGER,
+    '2026-09-10T02:02:00Z': 2000,
+  } });
+  const anomalies = [];
+  const [row] = await collectSessionSummaries({ database: db, tenantId: 1, through,
+    onDurationAnomaly: anomaly => anomalies.push(anomaly) });
+  assert.equal(row.ai_active_duration_seconds, 3);
+  assert.equal(row.end_time, '2026-09-10 10:02:00');
+  assert.deepEqual(anomalies, [{ stage: 'session_summary', reason: 'SESSION_SUMMARY_DURATION_OVERFLOW',
+    rowKey: 'overflow', sessionKey: key }]);
+});
+
+test('discarding every duration bucket retains unknown while a valid zero remains known', async t => {
+  const { db, fact, materialize } = fixture(t);
+  fact('interactions', 'first');
+  await materialize();
+  reportTurn(db, 'bad', { status: 'completed', durationByCompletion: { '2026-09-10T02:01:00Z': -1 } });
+  const project = () => collectSessionSummaries({ database: db, tenantId: 1, through });
+  assert.equal((await project())[0].ai_active_duration_seconds, null);
+  reportTurn(db, 'zero', { status: 'completed', durationByCompletion: { [time]: 0 } });
+  assert.equal((await project())[0].ai_active_duration_seconds, 0);
+});
+
+test('duration isolation never conceals scope conflicts or corrupt non-duration values', async t => {
+  const { db, fact, materialize } = fixture(t);
+  fact('interactions', 'first');
+  await materialize();
+  reportTurn(db, 'bad', '{');
+  const project = () => collectSessionSummaries({ database: db, tenantId: 1, through });
+  db.exec("UPDATE ai_usage_report_rows SET workspace_id=20 WHERE dataset='turns'");
+  await assert.rejects(project(), /SESSION_SUMMARY_FACT_SCOPE_CONFLICT/);
+  db.exec("UPDATE ai_usage_report_rows SET workspace_id=10,user_id=4 WHERE dataset='turns'");
+  await assert.rejects(project(), /SESSION_SUMMARY_FACT_SCOPE_CONFLICT/);
+  db.prepare("UPDATE ai_usage_report_rows SET user_id=3,value_json=? WHERE dataset='turns'")
+    .run(JSON.stringify({ status: 'completed', provider: 'codex', durationByCompletion: {} }));
+  await assert.rejects(project(), /SESSION_SUMMARY_FACT_SCOPE_CONFLICT/);
+  db.exec("DELETE FROM ai_usage_report_rows WHERE dataset='turns'");
+  db.prepare("UPDATE ai_usage_report_rows SET value_json=? WHERE dataset='interactions'").run('{');
+  await assert.rejects(project(), /SESSION_REPORT_INVALID_VALUE/);
+});
+
+test('candidate forwards duration diagnostics while database, window and lease errors propagate', async t => {
+  const { db, fact, materialize } = fixture(t);
+  fact('interactions', 'first');
+  fact('turns', 'round', { status: 'completed', requestStartedAt: time, responseCompletedAt: '2026-09-10T02:01:00Z' });
+  const batch = { id: 'duration-diagnostics', tenant_id: 1, target_through: through };
+  await materialize(batch.id);
+  db.prepare("UPDATE ai_usage_report_staging SET value_json=? WHERE batch_id=? AND dataset='turns'")
+    .run(JSON.stringify({ status: 'completed', durationByCompletion: {
+      '2026-09-10T02:01:00Z': 60000, 'bad-time': 30000,
+    } }), batch.id);
+  const anomalies = [];
+  const store = { database: db, assertLease() {}, transaction: fn => db.transaction(fn)() };
+  const options = { store, batch, progress: {}, checkpoint: async () => {}, checkWindow() {},
+    onDurationAnomaly: anomaly => anomalies.push(anomaly) };
+  await buildSessionSummaryCandidate(options);
+  assert.equal(anomalies.length, 1);
+  assert.equal(anomalies[0].reason, 'SESSION_REPORT_INVALID_DURATION');
+  assert.equal(db.prepare('SELECT ai_active_duration_seconds FROM ai_session_summary_staging WHERE batch_id=?')
+    .get(batch.id).ai_active_duration_seconds, 60);
+  for (const code of ['SQLITE_BUSY', 'AI_USAGE_LEASE_LOST', 'AI_USAGE_WINDOW_CLOSED']) {
+    const error = Object.assign(new Error(code), { code });
+    if (code === 'SQLITE_BUSY') {
+      await assert.rejects(collectSessionSummaries({ database: { prepare() { throw error; } }, tenantId: 1, through }),
+        thrown => thrown === error);
+    } else if (code === 'AI_USAGE_LEASE_LOST') {
+      await assert.rejects(buildSessionSummaryCandidate({ ...options,
+        store: { ...store, assertLease() { throw error; } } }), thrown => thrown === error);
+    } else {
+      await assert.rejects(buildSessionSummaryCandidate({ ...options, checkWindow() { throw error; } }),
+        thrown => thrown === error);
+    }
+  }
+  assert.equal(db.prepare('SELECT ai_active_duration_seconds FROM ai_session_summary_staging WHERE batch_id=?')
+    .get(batch.id).ai_active_duration_seconds, 60);
 });

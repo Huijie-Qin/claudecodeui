@@ -5,11 +5,12 @@ import { createAiUsageAccessService, positiveId } from '../services/ai-usage-acc
 import { hookConfigService } from '../services/hook-configs.js';
 import { agentTemplateService } from '../services/agent-templates.js';
 import { createHookSkillCatalogService } from '../services/hook-skill-catalog.js';
+import { skillPresetService } from '../services/skill-presets.js';
 
 // Separate from /admin: every operation checks the live membership, and every
 // mutable resource has an immutable owner independent of its distribution list.
 export function createTenantManagementRouter({ database = db, hooks = hookConfigService,
-  templates = agentTemplateService, skills = createHookSkillCatalogService() } = {}) {
+  templates = agentTemplateService, skills = createHookSkillCatalogService(), skillPresets = skillPresetService } = {}) {
   const router = express.Router();
   const access = createAiUsageAccessService({ db: database });
   const authorize = (req) => access.resolve({ userId: req.user?.id, tenantId: req.params.tenantId, scope: 'tenant' });
@@ -41,6 +42,26 @@ export function createTenantManagementRouter({ database = db, hooks = hookConfig
     } catch {
       return { ...resources, skills: [] };
     }
+  };
+  const skillMarketContext = (context) => {
+    const tenant = database.prepare('SELECT code FROM tenants WHERE id = ?').get(context.tenantId);
+    const user = database.prepare('SELECT username FROM users WHERE id = ?').get(context.userId);
+    if (!tenant?.code || !user?.username) {
+      throw Object.assign(new Error('技能市场需要租户编码和用户账号'), { statusCode: 400 });
+    }
+    return { tenantCode: String(tenant.code), accountId: String(user.username) };
+  };
+  const selectableSkillPreset = (req, context) => {
+    const presetId = positiveId(req.params.presetId, 'presetId');
+    const preset = skillPresets.listAdminPresets({ tenantId: context.tenantId, preinstallScope: 'none' }).find((item) => item.id === presetId);
+    if (!preset) throw Object.assign(new Error('技能预置不存在或不属于当前租户'), { statusCode: 404 });
+    // Published resources can be referenced as-is. Importing a market skill
+    // must not reactivate disabled/platform presets or enable tenant preinstalls.
+    if (preset.status !== 'published' && (preset.status !== 'draft'
+      || preset.preinstallScope !== 'none' || Number(preset.createdByUserId) !== context.userId)) {
+      throw Object.assign(new Error('只能发布自己从技能市场添加的未预装草稿；已有技能需由原管理员维护'), { statusCode: 409 });
+    }
+    return preset;
   };
   const templateInput = (req, context) => {
     const input = req.body || {};
@@ -101,6 +122,52 @@ export function createTenantManagementRouter({ database = db, hooks = hookConfig
     owned(req, 'hooks', req.params.hookId);
     hooks.deleteHook(req.params.hookId);
     return { success: true };
+  }));
+  router.get('/:tenantId/skill-presets/market', route((req, context) => skillPresets.searchMarketSkills({
+    searchContent: req.query.searchContent ?? req.query.q ?? '',
+    page: req.query.page == null || req.query.page === '' ? 1 : positiveId(req.query.page, 'page'),
+    pageSize: req.query.pageSize == null || req.query.pageSize === '' ? 20 : positiveId(req.query.pageSize, 'pageSize'),
+    completeInventory: req.query.complete === 'true',
+    ...skillMarketContext(context),
+  })));
+  router.get('/:tenantId/skill-presets', route((_req, context) => ({
+    presets: skillPresets.listAdminPresets({ tenantId: context.tenantId, preinstallScope: 'none' }),
+  })));
+  router.post('/:tenantId/skill-presets', route(async (req, context) => ({
+    preset: await skillPresets.createPreset({
+      tenantId: context.tenantId,
+      userId: context.userId,
+      input: {
+        remoteId: req.body?.sourceRef || req.body?.skill?.id || req.body?.skill?.skillId || req.body?.skill?.name,
+        preinstall: false,
+        preinstallScope: 'none',
+        status: 'draft',
+      },
+      ...skillMarketContext(context),
+      beforeWrite: () => authorize(req),
+    }),
+  })));
+  router.post('/:tenantId/skill-presets/:presetId/validate', route((req, context) => {
+    const preset = selectableSkillPreset(req, context);
+    if (preset.status === 'published') return { preset };
+    return skillPresets.validatePreset({
+      tenantId: context.tenantId,
+      presetId: preset.id,
+      userId: context.userId,
+      ...skillMarketContext(context),
+      beforeWrite: () => {
+        const current = selectableSkillPreset(req, authorize(req));
+        if (current.status !== 'draft' || current.remoteId !== preset.remoteId || current.skillId !== preset.skillId
+          || current.version !== preset.version || current.nspPath !== preset.nspPath) {
+          throw Object.assign(new Error('技能预置已变化，请刷新后重新选择'), { statusCode: 409 });
+        }
+      },
+    });
+  }));
+  router.post('/:tenantId/skill-presets/:presetId/publish', route((req, context) => {
+    const preset = selectableSkillPreset(req, context);
+    if (preset.status === 'published') return { preset };
+    return { preset: skillPresets.publishPreset({ tenantId: context.tenantId, presetId: preset.id, userId: context.userId }) };
   }));
   router.get('/:tenantId/agent-templates', route(async (req) => {
     const hookResourceCatalog = await resourceCatalog();

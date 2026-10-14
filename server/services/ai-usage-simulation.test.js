@@ -10,12 +10,19 @@ import { readAiUsageConfig } from './ai-usage-config.js';
 import { createAiUsageQueryService } from './ai-usage-query.js';
 import { seedAiUsageSimulation, simulationCounts, simulationNight } from './ai-usage-simulation-fixture.js';
 
-test('3556 seeded business rows run through the real nightly pipeline and report queries', async (t) => {
+test('seeded business rows and history duration facts run through the real nightly pipeline and report queries', async (t) => {
   const db = new Database(':memory:'); t.after(() => db.close());
   const counts = seedAiUsageSimulation(db);
   const tables = ['agent_session_messages','hook_executions','hook_data_records','ai_usage_turn_facts','ai_skill_publications','workspace_agent_template_snapshots'];
   assert.equal(tables.reduce((n, table) => n + db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0), counts.businessRows);
   assert.ok(counts.businessRows >= 1000);
+  const history = db.prepare(`SELECT COUNT(*) AS slices,SUM(json_extract(value_json,'$.durationMs')) AS duration
+    FROM ai_usage_fact_rows WHERE dataset='turns' AND source_key LIKE 'fixture:history:%'`).get();
+  assert.deepEqual(history, { slices: counts.turns + 1, duration: 21900000 });
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ai_usage_turn_facts').get().n, counts.turns,
+    'captured requests remain available for interactions and capture diagnostics');
+  // Captured server boundaries no longer decide the published duration.
+  db.prepare("UPDATE ai_usage_turn_facts SET response_completed_at='2026-08-14T03:00:00.000Z' WHERE turn_key='turn-0'").run();
   assert.throws(() => seedAiUsageSimulation(db), /fresh empty database/);
   const started = performance.now();
   const config = readAiUsageConfig({ AI_USAGE_ENABLED: 'true' });
@@ -50,6 +57,8 @@ test('3556 seeded business rows run through the real nightly pipeline and report
   await t.test('DAU, MAU, cross-midnight duration and full-result sorting remain exact', () => {
     assert.equal(query.overview(access).sessionCount, 601);
     assert.equal(query.overview(access).activeDurationMs, 21900000);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ai_usage_fact_rows WHERE dataset='turns' AND source_key LIKE 'turn:%'").get().n, 0,
+      'the captured-request source must not add a second duration population');
     assert.equal(query.overview(access).dau, 4);
     assert.equal(query.overview(access).mau, 41);
     assert.equal(query.overview(self).activeDurationMs, 300000);

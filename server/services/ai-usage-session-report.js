@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { normalizeTimestamp } from './ai-usage-config.js';
+import { addDuration, parseDurationFact } from './ai-usage-duration.js';
 
 export const SESSION_REPORT_VERSION = 1;
 export const parseJson = value => { try { return JSON.parse(value); } catch { return null; } };
@@ -34,15 +35,16 @@ export function* sessionReportRows(db, tenantId, batchId) {
 // Keep completion buckets alongside existing day-sliced durationMs. The latter
 // may include a slice of a request that finishes AFTER a snapshot's cutoff.
 export function mergeSessionReportFact(row, earlier) {
-  const value = parseJson(row.value_json) || {};
+  const value = row.dataset === 'turns' ? parseDurationFact(row) : parseJson(row.value_json) || {};
   const completion = normalizeTimestamp(value.responseCompletedAt);
   const start = normalizeTimestamp(value.requestStartedAt);
   const durationByCompletion = { ...earlier?.durationByCompletion };
-  if (row.dataset === 'turns' && value.status === 'completed' && start && completion && completion >= start
-    && Number.isSafeInteger(value.durationMs) && value.durationMs >= 0) {
-    const duration = (durationByCompletion[completion] || 0) + value.durationMs;
-    if (!Number.isSafeInteger(duration)) throw new Error('SESSION_SUMMARY_DURATION_OVERFLOW');
-    durationByCompletion[completion] = duration;
+  let durationMs = null;
+  if (row.dataset === 'turns' && value.status === 'completed' && start && completion) {
+    // Validate both candidate sums before changing either. A rejected input
+    // leaves the previous report row and every valid contribution intact.
+    durationMs = addDuration(earlier?.durationMs ?? 0, value.durationMs);
+    durationByCompletion[completion] = addDuration(durationByCompletion[completion] ?? 0, value.durationMs);
   }
   return { provider: value.provider, providerSessionId: value.providerSessionId,
     userName: value.userName, workspaceName: value.workspaceName,
@@ -51,8 +53,7 @@ export function mergeSessionReportFact(row, earlier) {
       ? [earlier?.firstInteractionAt, row.occurred_at].filter(Boolean).sort()[0] : undefined,
     lastInteractionAt: row.dataset === 'interactions'
       ? [earlier?.lastInteractionAt, row.occurred_at].filter(Boolean).sort().at(-1) : undefined,
-    status: value.status, durationMs: value.status === 'completed'
-      ? (earlier?.durationMs || 0) + (value.durationMs || 0) : null,
+    status: value.status, durationMs,
     turnCount: row.dataset === 'turns' ? (earlier?.turnCount || 0) + 1 : undefined,
     durationByCompletion: row.dataset === 'turns' ? durationByCompletion : undefined,
   };

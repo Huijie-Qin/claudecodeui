@@ -2,18 +2,21 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { localParts, normalizeTimestamp, splitTurnByDate } from './ai-usage-config.js';
+import { localParts, normalizeTimestamp, normalizeUsageTimestamp } from './ai-usage-config.js';
 import { logicalSessionKey, parseUsageMessage, safeHookFields } from './ai-usage-parser.js';
 import { isInheritedUsageMessage } from './ai-usage-inheritance.js';
 import { collectSkillEvidence } from './ai-usage-skill-evidence.js';
 import { createAiUsageSkillIndexer } from './ai-usage-skill-indexer.js';
 import { createSkillPublisherResolver } from './ai-usage-skill-publishers.js';
 import { parseSqlGeneration } from './ai-usage-sql.js';
+import { createTranscriptDurationTracker, transcriptTurnRows } from './ai-usage-transcript-duration.js';
+import { readTranscriptCompletionMarkers } from './ai-usage-transcript-markers.js';
+import { durationSourceFilterSql } from './ai-usage-duration.js';
 
 const safeJson = (value, fallback = {}) => { try { return JSON.parse(value); } catch { return fallback; } };
 const MAX_LINE_BYTES = 2 * 1024 * 1024;
 
-export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWindow }) {
+export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWindow, onDurationAnomaly = () => {} }) {
   const db = store.database;
   const tenantId = batch.tenant_id;
   const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((row) => row.name));
@@ -112,8 +115,8 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
       if (!db.prepare('SELECT 1 FROM workspaces WHERE id=? AND tenant_id=?').get(row.workspace_id, tenantId)) return [];
     } else if (row.tenant_id !== tenantId) return [];
     if (source.type === 'code_submission' && row.status !== 'merged') return [];
-    const time = normalizeTimestamp(source.type === 'publication_event' ? row.published_at : source.type === 'code_submission' ? row.merged_at : source.type === 'hook_execution' && row.started_at_ms != null
-      ? row.started_at_ms : row.started_at || row.first_published_at || row.provider_timestamp || row.created_at);
+    const time = normalizeUsageTimestamp(source.type === 'publication_event' ? row.published_at : source.type === 'code_submission' ? row.merged_at : source.type === 'hook_execution' && row.started_at_ms != null
+      ? row.started_at_ms : row.started_at || row.first_published_at || row.provider_timestamp || row.created_at, config.timeZone);
     if (!time) return [];
     const base = { user_id: row.user_id ?? row.created_by_user_id ?? null, workspace_id: row.workspace_id ?? null,
       occurred_at: time, stat_date: localParts(time, config.timeZone).date, session_key: row.session_id || row.session_key || null };
@@ -141,19 +144,11 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
     if (source.type === 'turn') {
       if (!row.session_key) return [];
       const sessionKey = logicalSessionKey({ ...row, provider_session_id: row.session_key });
-      const value = { provider: row.provider, turnKey: row.turn_key, status: row.terminal_status,
-        requestStartedAt: row.started_at, responseCompletedAt: row.response_completed_at };
-      const rows = [{ ...base, dataset: 'interactions', row_key: `${sessionKey}:request:${row.turn_key}`, session_key: sessionKey,
+      // Live captures remain interaction evidence and operational diagnostics.
+      // Duration is reconstructed from retained transcripts for ALL dates, so
+      // captures must never be added on top of the same historical request.
+      return [{ ...base, dataset: 'interactions', row_key: `${sessionKey}:request:${row.turn_key}`, session_key: sessionKey,
         value: { provider: row.provider, providerSessionId: row.session_key, source: row.source } }];
-      if (row.terminal_status === 'completed' && row.response_completed_at) {
-        for (const part of splitTurnByDate(row.started_at, row.response_completed_at, config.timeZone)) {
-          checkWindow();
-          rows.push({ ...base, dataset: 'turns', row_key: `${row.turn_key}:${part.date}`, stat_date: part.date,
-            session_key: sessionKey, value: { ...value, durationMs: part.durationMs } });
-        }
-      } else rows.push({ ...base, dataset: 'turns', row_key: `${row.turn_key}:pending`, session_key: sessionKey,
-        value: { ...value, durationMs: null } });
-      return rows;
     }
     if (source.type === 'hook') {
       const hook = tables.has('hooks') ? db.prepare('SELECT name FROM hooks WHERE id=?').get(row.hook_id) : null;
@@ -244,6 +239,7 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
             { replace: true, ...(change.source_type === 'publication_event' ? { priority: 25 } : {}) });
           db.prepare('DELETE FROM ai_usage_source_changes WHERE tenant_id=? AND source_type=? AND source_key=? AND generation=?')
             .run(tenantId, change.source_type, change.source_key, change.generation);
+
         });
         progress.sourceCursor = [change.source_type, change.source_key];
       }
@@ -270,25 +266,38 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
       if (!stat.isFile()) return false;
       const identity = `${stat.dev}:${stat.ino}`;
       const previousState = safeJson(state?.state_json);
-      if (state && previousState.readable && stat.size === state.size && stat.mtimeMs === state.mtime_ms
+      const markers = !subagentId && !isDisplayCommands
+        ? await readTranscriptCompletionMarkers(file, { checkWindow }) : null;
+      const completionChanged = markers && previousState.completionFingerprint !== markers.fingerprint;
+      if (!completionChanged && state && previousState.readable && stat.size === state.size && stat.mtimeMs === state.mtime_ms
         && identity === state.identity && state.offset === stat.size) return true;
       let offset = state?.offset || 0;
       let skipLine = safeJson(state?.state_json).skipLine || false;
       let skillState = previousState.skillState || {};
+      let durationState = previousState.durationState || {};
       const prefix = Buffer.alloc(Math.min(4096, stat.size, Math.max(offset, 0)));
       if (prefix.length) await handle.read(prefix, 0, prefix.length, 0);
       const fingerprint = createHash('sha256').update(prefix).digest('hex');
-      const reset = state && (!previousState.readable || identity !== state.identity || stat.size < offset
+      const reset = state && (completionChanged || !previousState.readable || identity !== state.identity || stat.size < offset
         || (state.fingerprint && prefix.length === Math.min(offset, 4096) && fingerprint !== state.fingerprint)
         || (stat.size === state.size && stat.mtimeMs !== state.mtime_ms && offset === stat.size));
       if (reset) {
         store.transaction(() => { store.assertLease(batch); store.put(tenantId, sourceKey, [], { replace: true }); });
-        offset = 0; skipLine = false; skillState = {};
+        offset = 0; skipLine = false; skillState = {}; durationState = {};
       }
+      const turns = new Map();
+      const anomalies = [];
+      const duration = markers ? createTranscriptDurationTracker(scope, {
+        timeZone: config.timeZone, state: durationState, completedReplyUuids: markers.completedReplyUuids,
+        onTurn: turn => turns.set(turn.turnKey, turn),
+        onAnomaly: anomaly => anomalies.push({ stage: 'transcripts', sourceKey,
+          sessionKey: logicalSessionKey(scope), rowKey: anomaly.turnKey, reason: anomaly.reason }),
+      }) : null;
       let length = 256 * 1024;
       do {
         checkWindow();
-        const buffer = Buffer.alloc(Math.min(length, stat.size - offset));
+        // Reserve the delimiter byte so a line of exactly MAX_LINE_BYTES is valid.
+        const buffer = Buffer.alloc(Math.min(length + (length === MAX_LINE_BYTES ? 1 : 0), stat.size - offset));
         const { bytesRead } = buffer.length ? await handle.read(buffer, 0, buffer.length, offset) : { bytesRead: 0 };
         const bytes = buffer.subarray(0, bytesRead);
         let end = bytes.lastIndexOf(10);
@@ -299,13 +308,22 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
         let nextOffset = offset;
         if (end >= 0) {
           let start = 0;
-          if (skipLine) { start = bytes.indexOf(10) + 1; skipLine = false; }
+          if (skipLine) {
+            // An oversized tail may still be in flight. Only a closing newline
+            // proves a complete bad record; persist skipLine until that arrives.
+            duration?.invalidate('AI_USAGE_OVERSIZED_HISTORY_LINE');
+            start = bytes.indexOf(10) + 1; skipLine = false;
+          }
           const lines = bytes.subarray(start, end + 1).toString('utf8').split('\n');
           for (const line of lines) {
             if (!line.trim()) continue;
             const message = safeJson(line, null);
-            if (!message || isInheritedUsageMessage(message)
+            if (!message || typeof message !== 'object' || Array.isArray(message)) {
+              duration?.invalidate('AI_USAGE_INVALID_HISTORY_JSON'); continue;
+            }
+            if (isInheritedUsageMessage(message)
               || (message.sessionId && !subagentId && message.sessionId !== scope.provider_session_id)) continue;
+            duration?.observe(message);
             if (isDisplayCommands) {
               const command = typeof message.displayCommand === 'string'
                 ? message.displayCommand.trim().match(/^\/([^\s/<>]+)(?:\s|$)/) : null;
@@ -322,29 +340,34 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
             }).map(enrich));
           }
           nextOffset += end + 1;
-        } else if (bytesRead >= MAX_LINE_BYTES) {
+        } else if (bytesRead > MAX_LINE_BYTES) {
           nextOffset += bytesRead; skipLine = true;
         }
+        duration?.flush();
+        for (const turn of turns.values()) rows.push(...transcriptTurnRows(scope, turn, config.timeZone).map(enrich));
         const prefixLength = Math.min(nextOffset, 4096);
         const newPrefix = Buffer.alloc(prefixLength);
         if (prefixLength) await handle.read(newPrefix, 0, prefixLength, 0);
         const hash = createHash('sha256').update(newPrefix).digest('hex');
         store.transaction(() => {
           store.assertLease(batch);
-          store.put(tenantId, sourceKey, rows, { priority: 30 });
+          store.put(tenantId, sourceKey, rows, { priority: 30, replaceTurns: true });
           db.prepare(`INSERT INTO ai_usage_source_states(tenant_id,source_key,offset,size,mtime_ms,identity,fingerprint,state_json,updated_at)
             VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(tenant_id,source_key) DO UPDATE SET
             offset=excluded.offset,size=excluded.size,mtime_ms=excluded.mtime_ms,identity=excluded.identity,
             fingerprint=excluded.fingerprint,state_json=excluded.state_json,updated_at=excluded.updated_at`)
             .run(tenantId, sourceKey, nextOffset, stat.size, stat.mtimeMs, identity, hash,
               JSON.stringify({ sessionKey: logicalSessionKey(scope), readable: true,
-                isMain: !subagentId && !isDisplayCommands, skipLine, skillState }), new Date().toISOString());
+                isMain: !subagentId && !isDisplayCommands, isDisplayCommands, skipLine, skillState,
+                ...(markers ? { completionFingerprint: markers.fingerprint, durationState: duration.snapshot() } : {}) }), new Date().toISOString());
+          for (const anomaly of anomalies) onDurationAnomaly(anomaly);
           // Reconcile already-indexed DB copies, not just future message writes.
           // Persist with the first readable state so a crash cannot lose this work.
           if (!subagentId && !isDisplayCommands && !previousState.readable && offset === 0 && tables.has('agent_session_messages')) {
             queueSessionMessages(logicalSessionKey(scope));
           }
         });
+        turns.clear(); anomalies.length = 0;
         await checkpoint(progress);
         if (nextOffset === offset) break; // leave a partial final line for the next night
         offset = nextOffset;
@@ -452,7 +475,15 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
   function coverage() {
     const statuses = db.prepare(`SELECT terminal_status,COUNT(*) AS count FROM ai_usage_turn_facts
       WHERE tenant_id=? AND started_at<? GROUP BY terminal_status`).all(tenantId, batch.target_through);
-    const counts = Object.fromEntries(statuses.map((row) => [row.terminal_status, row.count]));
+    const captured = Object.fromEntries(statuses.map((row) => [row.terminal_status, row.count]));
+    const historyStatuses = db.prepare(`SELECT status,COUNT(*) AS count FROM (
+      SELECT DISTINCT session_key,json_extract(value_json,'$.turnKey') AS turn_key,json_extract(value_json,'$.status') AS status
+      FROM ai_usage_fact_rows f WHERE tenant_id=? AND dataset='turns' AND occurred_at<? AND json_valid(value_json)
+        AND ${durationSourceFilterSql('f')}
+    ) GROUP BY status`).all(tenantId, batch.target_through);
+    const counts = Object.fromEntries(historyStatuses.map(row => [row.status, row.count]));
+    const readableMain = db.prepare(`SELECT 1 FROM ai_usage_source_states WHERE tenant_id=?
+      AND json_extract(state_json,'$.readable')=1 AND json_extract(state_json,'$.isMain')=1 LIMIT 1`).get(tenantId);
     const publications = db.prepare(`SELECT (SELECT COUNT(*) FROM ai_skill_publications WHERE tenant_id=? AND status='confirmed')
       + (SELECT COUNT(*) FROM ai_skill_publish_events WHERE tenant_id=? AND status='succeeded' AND publish_kind='create') AS count`)
       .get(tenantId, tenantId).count;
@@ -464,7 +495,7 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
         (julianday(merged_at)<julianday(?) AND
           (additions IS NULL OR typeof(additions) NOT IN ('integer','real') OR additions<0
             OR additions>9007199254740991 OR additions!=CAST(additions AS INTEGER))))`).get(tenantId, batch.target_through).n : 0;
-    return { sessions: 'partial', duration: counts.completed ? 'partial' : 'unavailable', skillPublications: publications ? 'partial' : 'unavailable',
+    return { sessions: 'partial', duration: counts.completed || readableMain ? 'partial' : 'unavailable', durationSource: 'native_transcript', capturedTurns: captured, skillPublications: publications ? 'partial' : 'unavailable',
       skillInvocations: 'partial', generatedSql: tables.has('agent_session_messages') || tables.has('agent_session_runtime') ? 'partial' : 'unavailable',
       generatedSqlSource: 'session_sql', hooks: tables.has('hook_data_records') ? 'complete' : 'unavailable', hookExecutions: tables.has('hook_executions') ? 'complete' : 'unavailable',
       templates: tables.has('workspace_agent_template_snapshots') ? 'complete' : 'unavailable',
@@ -472,7 +503,8 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
       incompleteTurns: counts.incomplete || 0, failedTurns: counts.failed || 0,
       cancelledTurns: (counts.cancelled || 0) + (counts.aborted || 0), unsupportedTurns: counts.unsupported || 0,
       reasons: [...(invalidMerged ? ['Merged MR records with missing/invalid merge times or additions limit code coverage.'] : []), 'Only retained, readable histories are included.',
-        'Historical request boundaries and historical Skill publisher bindings may be unavailable.'] };
+        'Duration uses retained main transcript request/reply timestamps; missing or invalid completion boundaries are excluded.',
+        'Historical Skill publisher bindings may be unavailable.'] };
   }
 
   return { bootstrap, transcripts, changedSources, skills, coverage };

@@ -7,7 +7,6 @@ import { Button, Dialog, DialogContent, DialogTitle, Input } from '../../shared/
 import { cn } from '../../lib/utils';
 import type { WorkspaceMcpTool } from '../tools-market/hooks/useWorkspaceMcpTools';
 import type { McpTemplateToolSettings } from '../tools-market/mcpToolOverrides';
-import { tenantTemplateSkillCandidates } from '../tenant-management/tenantTemplateCatalog';
 
 import AgentTemplateSqlCheckSettings from './AgentTemplateSqlCheckSettings';
 import AgentTemplateMcpSettingsDialog from './AgentTemplateMcpSettingsDialog';
@@ -334,8 +333,8 @@ export default function AgentTemplatesTab({
     void Promise.allSettled([
       managementApi.agentTemplatePresetCatalog(catalogTenantId).then((response) => readJson<{ skills?: Preset[]; mcps?: Preset[]; sqlCheckRuleIds?: string[] }>(response)),
       managementApi.agentTemplateHookCatalog(catalogTenantId).then((response) => readJson<{ hooks?: HookCatalogItem[] }>(response)),
-      tenantManaged ? Promise.resolve({ skills: [] as MarketSkill[] }) : managementApi.searchSkillPresetMarket(catalogTenantId, { complete: true }).then((response) => readJson<{ skills?: MarketSkill[] }>(response)),
-      tenantManaged ? Promise.resolve({ presets: [] as AdminSkillPreset[] }) : managementApi.skillPresets(catalogTenantId, 'agent_template').then((response) => readJson<{ presets?: AdminSkillPreset[] }>(response)),
+      managementApi.searchSkillPresetMarket(catalogTenantId, { complete: true }).then((response) => readJson<{ skills?: MarketSkill[] }>(response)),
+      managementApi.skillPresets(catalogTenantId, 'agent_template').then((response) => readJson<{ presets?: AdminSkillPreset[] }>(response)),
     ])
       .then(([presetResult, hookResult, marketResult, presetListResult]) => {
         if (cancelled) return;
@@ -350,7 +349,7 @@ export default function AgentTemplatesTab({
           hooks: normalizeHookCatalog(hookCatalog),
           skillPresets,
           skillMarketLoaded: marketResult.status === 'fulfilled',
-          skills: tenantManaged ? tenantTemplateSkillCandidates(presetCatalog.skills || [], catalogTenantId) : buildSkillCandidates({
+          skills: buildSkillCandidates({
             tenantId: catalogTenantId,
             marketSkills: marketCatalog.skills || [],
             presets: skillPresets,
@@ -368,7 +367,7 @@ export default function AgentTemplatesTab({
       })
       .finally(() => { if (!cancelled) setIsCatalogLoading(false); });
     return () => { cancelled = true; };
-  }, [catalogTenantId, isEditing, managementApi, tenantManaged]);
+  }, [catalogTenantId, isEditing, managementApi]);
 
   useEffect(() => () => { pendingSkills.current.clear(); }, []);
 
@@ -526,10 +525,6 @@ export default function AgentTemplatesTab({
 
   const toggleSkill = async (skill: SkillCandidate) => {
     if (!editing || !editing.tenantIds.includes(skill.tenantId)) return;
-    if (tenantManaged) {
-      if (skill.presetId) togglePreset('skillPresetRefs', { ...skill, id: skill.presetId });
-      return;
-    }
     const selected = skill.presetId
       ? editing.skillPresetRefs.some((ref) => ref.tenantId === skill.tenantId && ref.presetId === skill.presetId)
       : false;
@@ -569,7 +564,11 @@ export default function AgentTemplatesTab({
         preset = created.preset;
       }
       if (!isCurrentRequest()) return;
-      if (preset.lastValidationStatus !== 'healthy') {
+      // Tenant admins reuse published skills without changing platform-owned
+      // validation state, including when older records omit that metadata.
+      const needsValidation = (!tenantManaged || preset.status !== 'published')
+        && preset.lastValidationStatus !== 'healthy';
+      if (needsValidation) {
         const validated = await readJson<{ preset: AdminSkillPreset; validation?: { status?: string; error?: string } }>(
           await managementApi.validateSkillPreset(preset.id, skill.tenantId),
         );
@@ -743,7 +742,7 @@ export default function AgentTemplatesTab({
       <>
         <div className="mx-auto max-w-6xl space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <div><h2 className="text-xl font-semibold text-foreground">Agent 模板</h2><p className="mt-1 text-sm text-muted-foreground">{tenantManaged ? '配置本租户的 CLAUDE.md、已分发的 Skills / MCP、Hooks 和引导语。' : '为不同租户预配置 CLAUDE.md、Skills、MCP、Hooks 和引导语。'}</p></div>
+            <div><h2 className="text-xl font-semibold text-foreground">Agent 模板</h2><p className="mt-1 text-sm text-muted-foreground">{tenantManaged ? '配置本租户的 CLAUDE.md、技能市场 Skills、已分发的 MCP、Hooks 和引导语。' : '为不同租户预配置 CLAUDE.md、Skills、MCP、Hooks 和引导语。'}</p></div>
             <div className="flex items-center gap-2">
               {!tenantManaged && <Button variant="outline" onClick={() => { setCategoryFeedback(null); setCategoryDialogOpen(true); }}><Tags className="h-4 w-4" />分类管理</Button>}
               <Button onClick={beginCreate} disabled={activeTenants.length === 0}><Plus className="h-4 w-4" />新建模板</Button>
@@ -823,7 +822,7 @@ export default function AgentTemplatesTab({
   }
 
   const selectedCatalogTenant = activeTenants.find((tenant) => tenant.id === catalogTenantId);
-  const catalogSkills = tenantManaged ? catalog.skills : buildSkillCandidates({
+  const catalogSkills = buildSkillCandidates({
     tenantId: catalogTenantId || 0,
     marketSkills: catalog.skills.map((skill) => skill.marketSkill),
     presets: catalog.skillPresets,

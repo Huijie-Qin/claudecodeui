@@ -83,7 +83,7 @@ export function readAiUsageConfig(env = process.env) {
     throw new Error('AI_USAGE_MAX_CONCURRENCY must be a positive safe integer');
   }
   return Object.freeze({ enabled: boolean === 'true', runAt, windowEnd, timeZone, concurrency, dataLagDays: Number(dataLagDays),
-    tickMs: 30_000, batchSize: 200, leaseMs: 120_000, calculationVersion: 'request_response_interval_v1_skill_sources_v2_activity_v3_hook_executions_v4_hook_numbers_v5_skill_publishers_v6_merged_mr_v7_integration_v1_session_report_v8_fork_lineage_v9_publish_events_v10_session_sql_v11_session_scope_v12' });
+    tickMs: 30_000, batchSize: 200, leaseMs: 120_000, calculationVersion: 'request_response_interval_v1_skill_sources_v2_activity_v3_hook_executions_v4_hook_numbers_v5_skill_publishers_v6_merged_mr_v7_integration_v1_session_report_v8_fork_lineage_v9_publish_events_v10_session_sql_v11_session_scope_v12_duration_isolation_v13_sql_all_reply_v14_transcript_duration_v15' });
 }
 
 export function getAiUsageSchedule(config, now = new Date()) {
@@ -114,6 +114,18 @@ export function normalizeTimestamp(value) {
     ? `${value.replace(' ', 'T')}Z` : value;
   const date = new Date(input);
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+// Date.parse accepts extended/ancient years that the report calendar cannot
+// represent. Reject those individual source records before they create dates
+// that later break activity, SQL, or duration projections.
+export function normalizeUsageTimestamp(value, timeZone = 'Asia/Shanghai') {
+  const time = normalizeTimestamp(value);
+  if (!time) return null;
+  const date = localParts(time, timeZone).date;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const next = shiftDate(date, 1);
+  return /^\d{4}-\d{2}-\d{2}$/.test(next) ? time : null;
 }
 
 export function* splitTurnByDate(startedAt, completedAt, timeZone, through = null) {

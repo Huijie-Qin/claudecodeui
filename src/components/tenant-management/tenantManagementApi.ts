@@ -37,11 +37,17 @@ export function createTenantManagementApi(tenantId: number, onForbidden?: () => 
     deleteAgentTemplate: (templateId: number) => request(`/agent-templates/${id(templateId)}`, 'DELETE'),
     createAgentTemplateCategory: denied,
     deleteAgentTemplateCategory: denied,
-    searchSkillPresetMarket: denied,
-    skillPresets: denied,
-    createSkillPreset: denied,
-    validateSkillPreset: denied,
-    publishSkillPreset: denied,
+    searchSkillPresetMarket: (_tenantId?: number, {
+      searchContent = '', page = 1, pageSize = 20, complete = false,
+    } = {}) => request(`/skill-presets/market${query({
+      searchContent, page, pageSize, complete,
+    })}`),
+    skillPresets: (_tenantId?: number, _usage = 'agent_template') => request('/skill-presets'),
+    createSkillPreset: (body: { sourceRef?: string; skill?: unknown; tenantId?: number; preinstall?: boolean; status?: string }) => request('/skill-presets', 'POST', {
+      sourceRef: body.sourceRef, skill: body.skill, preinstall: false, status: 'draft',
+    }),
+    validateSkillPreset: (presetId: number, _tenantId?: number) => request(`/skill-presets/${id(presetId)}/validate`, 'POST'),
+    publishSkillPreset: (presetId: number, _tenantId?: number) => request(`/skill-presets/${id(presetId)}/publish`, 'POST'),
   };
 }
 

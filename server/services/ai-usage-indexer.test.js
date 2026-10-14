@@ -123,7 +123,7 @@ test('canonical JSONL appearance retracts an unchanged DB copy and disappearance
   f.nextNight();
   assert.equal((await f.run()).published, 1);
   assert.equal(f.facts().filter((row) => row.source_key === 'message:1').length, 0);
-  assert.equal(f.facts().filter((row) => row.source_key.startsWith('jsonl:')).length, 1);
+  assert.equal(f.facts().filter((row) => row.source_key.startsWith('jsonl:') && row.dataset === 'interactions').length, 1);
   assert.deepEqual(f.report().filter((row) => row.dataset === 'interactions').map((row) => row.stat_date), ['2026-09-11']);
 
   await unlink(f.file('session-a'));
@@ -138,7 +138,7 @@ test('canonical JSONL appearance retracts an unchanged DB copy and disappearance
   f.nextNight();
   assert.equal((await f.run()).published, 1);
   assert.equal(f.facts().filter((row) => row.source_key === 'message:1').length, 0);
-  assert.equal(f.facts().filter((row) => row.source_key.startsWith('jsonl:')).length, 1);
+  assert.equal(f.facts().filter((row) => row.source_key.startsWith('jsonl:') && row.dataset === 'interactions').length, 1);
 });
 
 test('file cursor resumes traversal without marking unvisited or previously visited histories missing', async (t) => {
@@ -159,7 +159,7 @@ test('file cursor resumes traversal without marking unvisited or previously visi
   assert.equal(JSON.parse(batch.progress_json).fileCursor[2], 'session-a.jsonl');
   assert.equal(f.database.prepare('SELECT COUNT(*) AS n FROM ai_usage_batch_files WHERE batch_id=?').get(batch.id).n, 1);
   assert.equal(f.database.prepare('SELECT active_batch_id FROM ai_usage_tenant_state WHERE tenant_id=1').get().active_batch_id, previousBatch);
-  assert.equal(f.facts().length, 2);
+  assert.equal(f.facts().filter(row => row.dataset === 'interactions').length, 2);
   assert.ok(f.database.prepare('SELECT state_json FROM ai_usage_source_states').all()
     .every((row) => JSON.parse(row.state_json).readable));
 
@@ -175,7 +175,7 @@ test('file cursor resumes traversal without marking unvisited or previously visi
 
   f.nextNight();
   assert.equal((await f.run()).published, 1);
-  assert.equal(f.facts().length, 4);
+  assert.equal(f.facts().filter(row => row.dataset === 'interactions').length, 4);
   assert.ok(f.facts().some((row) => row.row_key.endsWith(':a-after-checkpoint')));
 });
 
@@ -221,12 +221,17 @@ test('forks and repeated forks count only new interactions, skills, tokens and a
     const request = userMessage(`${sessionId}-request`, start, '/report');
     const end = new Date(Date.parse(start) + seconds * 1000).toISOString();
     const response = skillTool(`${sessionId}-tool`, end);
-    Object.assign(response.message, { id: `${sessionId}-response`, stop_reason: 'end_turn',
+    Object.assign(response.message, { id: `${sessionId}-response`, stop_reason: 'tool_use',
       usage: { input_tokens: total - 1, output_tokens: 1 } });
     const identity = turnRecorder.start({ tenantId: 1, userId: 1, workspaceId: 10,
       provider: 'claude', sessionKey: sessionId, requestKey: request.uuid, startedAt: start });
     turnRecorder.complete({ ...identity, responseCompletedAt: end, terminalAt: end });
-    return [request, response].map((message) => ({ ...message, sessionId }));
+    const toolResult = { uuid: `${sessionId}-result`, timestamp: end, type: 'user', message: { role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: `${sessionId}-tool`, content: 'Completed' }] } };
+    const final = { uuid: `${sessionId}-final`, timestamp: end, type: 'assistant', message: {
+      id: `${sessionId}-final-response`, role: 'assistant', content: [{ type: 'text', text: 'Done' }],
+      stop_reason: 'end_turn', usage: { input_tokens: 0, output_tokens: 0 } } };
+    return [request, response, toolResult, final].map((message) => ({ ...message, sessionId }));
   };
   const inherited = (messages, sessionId, parentSessionId) => messages.map((message) => ({
     ...message, sessionId, uuid: `${sessionId}-${message.uuid}`,

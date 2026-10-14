@@ -1,4 +1,4 @@
-import { localParts, normalizeTimestamp } from './ai-usage-config.js';
+import { localParts, normalizeUsageTimestamp } from './ai-usage-config.js';
 import { isInheritedUsageMessage } from './ai-usage-inheritance.js';
 
 export const logicalSessionKey = (scope) => JSON.stringify([
@@ -14,7 +14,7 @@ function contentText(content) {
 // Deliberately excludes body text, inputs and transient SDK-generated IDs/times.
 export function parseUsageMessage(scope, message, { timeZone, fallbackId, fallbackTime, subagentId = null, includeSkillTools = true } = {}) {
   if (!message || typeof message !== 'object' || isInheritedUsageMessage(message)) return [];
-  const time = normalizeTimestamp(message.timestamp || fallbackTime);
+  const time = normalizeUsageTimestamp(message.timestamp || fallbackTime, timeZone);
   const id = message.uuid || message.id || fallbackId;
   if (!time || !id) return [];
   const role = message.role || message.message?.role || message.type;

@@ -10,6 +10,7 @@ import { localInstant, localParts, shiftDate } from './ai-usage-config.js';
 import { clearSplitStaging, publishSplitCandidate } from './ai-dashboard-split.js';
 import { publishSessionSummaryCandidate } from './ai-session-summary.js';
 import { SESSION_REPORT_VERSION } from './ai-usage-session-report.js';
+import { durationTurnKeySql } from './ai-usage-duration.js';
 import { validateReportSessionUsageCandidate } from './ai-usage-session-source.js';
 import { publishSessionConflictIssues, validateSessionConflictCandidate } from './ai-usage-session-conflicts.js';
 
@@ -30,12 +31,43 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
     subject_id=excluded.subject_id,session_key=excluded.session_key,occurred_at=excluded.occurred_at,
     value_json=excluded.value_json,priority=excluded.priority`);
 
-  function put(tenantId, sourceKey, rows, { replace = false, priority = 0 } = {}) {
+  function put(tenantId, sourceKey, rows, { replace = false, priority = 0, replaceTurns = false } = {}) {
+    // A new/changed/removed preferred transcript can change the winner for
+    // dates that occur ONLY in another copy. Dirty the whole logical request,
+    // not just the dates being written by this source.
+    const changedTurns = new Map();
+    for (const row of rows) if (row.dataset === 'turns' && row.value?.turnKey) {
+      changedTurns.set(JSON.stringify([row.session_key, row.value.turnKey]), [row.session_key, row.value.turnKey]);
+    }
+    if (replace) for (const row of database.prepare(`SELECT DISTINCT session_key,${durationTurnKeySql('')} AS turn_key
+      FROM ai_usage_fact_rows WHERE tenant_id=? AND source_key=? AND dataset='turns'`).all(tenantId, sourceKey)) {
+      if (row.turn_key != null) changedTurns.set(JSON.stringify([row.session_key, row.turn_key]), [row.session_key, row.turn_key]);
+    }
+    for (const [sessionKey, key] of changedTurns.values()) {
+      for (const row of database.prepare(`SELECT DISTINCT dataset,stat_date,session_key FROM ai_usage_fact_rows
+        WHERE tenant_id=? AND dataset='turns' AND session_key IS ? AND (${durationTurnKeySql('')})=?`).all(tenantId, sessionKey, key)) {
+        markDirty(tenantId, row);
+      }
+    }
     if (replace) {
       for (const row of database.prepare('SELECT DISTINCT dataset,stat_date,session_key FROM ai_usage_fact_rows WHERE tenant_id=? AND source_key=?').all(tenantId, sourceKey)) {
         markDirty(tenantId, row);
       }
       database.prepare('DELETE FROM ai_usage_fact_rows WHERE tenant_id=? AND source_key=?').run(tenantId, sourceKey);
+    }
+    // A later transcript block can complete, extend, or invalidate the same
+    // request. Replace all of its old day slices together, including dates that
+    // no longer occur in the corrected interval.
+    if (replaceTurns && !replace) {
+      const keys = new Set(rows.filter(row => row.dataset === 'turns').map(row => row.value.turnKey));
+      for (const key of keys) {
+        const previous = database.prepare(`SELECT dataset,stat_date,session_key FROM ai_usage_fact_rows
+          WHERE tenant_id=? AND source_key=? AND dataset='turns' AND row_key>=? AND row_key<?`)
+          .all(tenantId, sourceKey, `${key}:`, `${key};`);
+        for (const row of previous) markDirty(tenantId, row);
+        database.prepare(`DELETE FROM ai_usage_fact_rows WHERE tenant_id=? AND source_key=?
+          AND dataset='turns' AND row_key>=? AND row_key<?`).run(tenantId, sourceKey, `${key}:`, `${key};`);
+      }
     }
     for (const row of rows) {
       const old = database.prepare(`SELECT stat_date FROM ai_usage_fact_rows WHERE tenant_id=? AND source_key=? AND dataset=? AND row_key=?`)

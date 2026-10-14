@@ -26,11 +26,11 @@ const temporary = await mkdtemp(path.join(os.tmpdir(), 'ccui-tenant-preview-'));
 const importDatabasePath = path.join(temporary, 'imports.sqlite');
 const importDatabase = new Database(importDatabasePath); // Prevent legacy DB migration on import.
 process.env.DATABASE_PATH = importDatabasePath;
-const [{ MULTITENANCY_SCHEMA_SQL }, { HOOK_CONFIG_SCHEMA_SQL }, { createHookConfigService }, { createAgentTemplateService }, { createAgentTemplateFolderAssetStore }, { createTenantManagementRouter }, { createPreviewDatabase }, { createAiUsageRouter }] = await Promise.all([
+const [{ MULTITENANCY_SCHEMA_SQL }, { HOOK_CONFIG_SCHEMA_SQL }, { createHookConfigService }, { createAgentTemplateService }, { createAgentTemplateFolderAssetStore }, { createTenantManagementRouter }, { createPreviewDatabase }, { createAiUsageRouter }, { createSkillPresetService }] = await Promise.all([
   import('../server/database/multitenancy-schema.js'), import('../server/database/hook-config-schema.js'),
   import('../server/services/hook-configs.js'), import('../server/services/agent-templates.js'),
   import('../server/services/agent-template-folder-assets.js'), import('../server/routes/tenant-management.js'),
-  import('./preview-ai-usage.mjs'), import('../server/routes/ai-usage.js'),
+  import('./preview-ai-usage.mjs'), import('../server/routes/ai-usage.js'), import('../server/services/skill-presets.js'),
 ]);
 const database = new Database(':memory:');
 database.exec(`CREATE TABLE users(id INTEGER PRIMARY KEY,username TEXT,is_active INTEGER DEFAULT 1,is_system_admin INTEGER DEFAULT 0);
@@ -45,6 +45,47 @@ const multitenancy = createMultitenancyDb(database);
 const config = new Map();
 const hooks = createHookConfigService({ database, configStore: { get: (key) => config.get(key), set: (key, value) => config.set(key, value) }, hookMcpCatalog: { listServers: () => [], listToolResources: () => [] } });
 const templates = createAgentTemplateService(database, { folderAssets: createAgentTemplateFolderAssetStore({ rootPath: path.join(temporary, 'template-assets') }) });
+// Every market operation stays in memory; the real preset service exercises
+// creation, validation and publication without contacting the configured market.
+const previewMarketSkills = [
+  { id: 'preview-market-sql-review', skillId: 'preview-market-sql-review', name: 'preview-sql-review', displayName: '模拟市场 · SQL 审查', description: '仅模拟数据：检查 SQL 的可读性并给出改进建议。', nspPath: 'preview/skills/sql-review', createUserId: 'preview-author', version: 1, sourceType: 'skill-market-api' },
+  { id: 'preview-market-report-outline', skillId: 'preview-market-report-outline', name: 'preview-report-outline', displayName: '模拟市场 · 报告提纲', description: '仅模拟数据：根据分析需求整理报告提纲。', nspPath: 'preview/skills/report-outline', createUserId: 'preview-author', version: 1, sourceType: 'skill-market-api' },
+];
+const requirePreviewMarketContext = ({ tenantCode, accountId } = {}) => {
+  if (tenantCode !== 'example' || !database.prepare('SELECT id FROM users WHERE username = ?').get(accountId || '')) {
+    throw Object.assign(new Error('模拟技能市场仅供示例租户的预览账号使用'), { statusCode: 403 });
+  }
+};
+const findPreviewMarketSkill = (reference) => {
+  const skill = previewMarketSkills.find((entry) => [entry.id, entry.skillId, entry.name].includes(reference));
+  if (!skill) throw Object.assign(new Error('模拟市场技能不存在'), { statusCode: 404 });
+  return { ...skill };
+};
+const skillPresets = createSkillPresetService({
+  multitenancy,
+  users: { getUserByIdAnyStatus: (userId) => database.prepare('SELECT * FROM users WHERE id = ?').get(userId) },
+  marketService: {
+    listSkillMarket: async ({ searchContent = '', page = 1, pageSize = 20, completeInventory = false, ...context } = {}) => {
+      requirePreviewMarketContext(context);
+      const query = String(searchContent).trim().toLocaleLowerCase();
+      const matches = previewMarketSkills.filter((skill) => [skill.name, skill.displayName, skill.description].some((value) => value.toLocaleLowerCase().includes(query)));
+      const start = (Number(page) - 1) * Number(pageSize);
+      return {
+        skills: (completeInventory ? matches : matches.slice(start, start + Number(pageSize))).map((skill) => ({ ...skill })),
+        pageInfo: { page: Number(page), pageSize: Number(pageSize), total: matches.length, totalPages: Math.ceil(matches.length / Number(pageSize)), hasNextPage: !completeInventory && start + Number(pageSize) < matches.length },
+      };
+    },
+    fetchRemoteSkillDetail: async (reference, context) => {
+      requirePreviewMarketContext(context);
+      return findPreviewMarketSkill(reference);
+    },
+    downloadRemoteSkillFiles: async (remoteSkill, context) => {
+      requirePreviewMarketContext(context);
+      const skill = findPreviewMarketSkill(remoteSkill.id);
+      return { skillName: skill.name, files: { 'SKILL.md': `---\nname: ${skill.name}\ndescription: ${skill.description}\n---\n\n# ${skill.displayName}\n\n这是隔离预览的模拟技能，仅用于验证模板配置流程。\n` } };
+    },
+  },
+});
 const hook = hooks.createHook({ ownerTenantId: 10, userId: 2, input: { name: 'SQL 产出记录', description: '统计对话中的 SQL 产出；演示配置，不执行模型。', eventName: 'Stop', matcher: {}, extensionLogic: { language: 'javascript', code: 'export async function run() { return { output: { sqlLineCount: 0 } }; }', outputs: [{ name: 'sqlLineCount', type: 'number' }] }, postActions: [], claudeResponse: { bindings: {} } } });
 hooks.publishHook({ hookId: hook.id, userId: 2 });
 hooks.replaceHookBindings({ hookId: hook.id, scope: 'tenants', tenantIds: [10], defaultEnabled: false, boundBy: 2 });
@@ -127,7 +168,7 @@ app.get('/api/taskmaster/installation-status', (_req, res) => res.json({ install
 app.get('/api/settings/feature-flags', (_req, res) => res.json({ features: {} }));
 app.get('/api/settings/model-response-hooks', (_req, res) => res.json({ success: true, config: {} }));
 app.get('/api/mcp-utils/taskmaster-server', (_req, res) => res.json({ configured: false, server: null }));
-app.use('/api/tenant-management', createTenantManagementRouter({ database, hooks, templates, skills: { listConfigurationSkills: async () => ({ skills: [] }) } }));
+app.use('/api/tenant-management', createTenantManagementRouter({ database, hooks, templates, skillPresets, skills: { listConfigurationSkills: async () => ({ skills: [] }) } }));
 const reportAccess = { resolve: (input) => { const live = database.prepare('SELECT role FROM tenant_users WHERE user_id=? AND tenant_id=?').get(input.userId, input.tenantId); if (Number(input.userId) !== 1 && live?.role !== 'tenant_admin') throw Object.assign(new Error('需要租户管理员权限'), { statusCode: 403 }); return report.accessService.resolve(input); } };
 app.use('/api/ai-usage', createAiUsageRouter({ db: report.db, accessService: reportAccess, queryService: report.queryService }));
 // Only the Admin membership UI is wired in this fixture, never other Admin actions.

@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import Database from 'better-sqlite3';
 
@@ -17,12 +20,15 @@ const configured = concurrency => ({
 
 function fixture(t, count = 5) {
   const db = new Database(':memory:');
-  t.after(() => db.close());
+  const historyRoot = mkdtempSync(path.join(os.tmpdir(), 'ai-usage-pool-history-'));
+  t.after(() => { db.close(); rmSync(historyRoot, { recursive: true, force: true }); });
   db.exec(`CREATE TABLE tenants(id INTEGER PRIMARY KEY,status TEXT);
     CREATE TABLE users(id INTEGER PRIMARY KEY,username TEXT);
     CREATE TABLE workspaces(id INTEGER PRIMARY KEY,tenant_id INTEGER,display_name TEXT,status TEXT);
     CREATE TABLE session_index(tenant_id INTEGER,workspace_id INTEGER,user_id INTEGER,
-      provider TEXT,provider_session_id TEXT,status TEXT);`);
+      provider TEXT,provider_session_id TEXT,status TEXT);
+    CREATE TABLE agent_session_runtime(tenant_id INTEGER,workspace_id INTEGER,user_id INTEGER,provider TEXT,
+      provider_session_id TEXT,runtime_id TEXT,runtime_home_path TEXT);`);
   for (let tenant = 1; tenant <= count; tenant++) {
     db.prepare("INSERT INTO tenants VALUES(?,'active')").run(tenant);
     db.prepare('INSERT INTO users VALUES(?,?)').run(tenant, `user-${tenant}`);
@@ -38,6 +44,16 @@ function fixture(t, count = 5) {
       (turn_key,tenant_id,user_id,workspace_id,session_key,provider,started_at,response_completed_at,terminal_status,updated_at)
       VALUES(?,?,?,?,'shared-session','claude',?,?,'completed',?)`)
       .run(`turn-${tenant}`, tenant, tenant, tenant * 10, start, end, end);
+    const home = path.join(historyRoot, String(tenant));
+    const project = path.join(home, '.claude', 'projects', 'project');
+    mkdirSync(project, { recursive: true });
+    db.prepare("INSERT INTO agent_session_runtime VALUES(?,?,?,'claude','shared-session',?,?)")
+      .run(tenant, tenant * 10, tenant, `runtime-${tenant}`, home);
+    writeFileSync(path.join(project, 'shared-session.jsonl'), [
+      { uuid: 'user', type: 'user', timestamp: start, sessionId: 'shared-session', message: { role: 'user', content: 'Request' } },
+      { uuid: 'assistant', type: 'assistant', timestamp: end, sessionId: 'shared-session',
+        message: { role: 'assistant', content: 'Reply', stop_reason: 'end_turn' } },
+    ].map(entry => JSON.stringify(entry)).join('\n') + '\n');
   }
   // Record observable lock releases, including whether any tenant was still
   // running. Tests never need timing sleeps or access to application databases.
