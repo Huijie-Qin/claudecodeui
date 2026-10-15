@@ -55,6 +55,7 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
     assertLease: (...args) => { assertPoolLease(); return baseStore.assertLease(...args); },
     claim: (...args) => poolTransaction(() => baseStore.claim(...args)),
     checkpoint: (...args) => poolTransaction(() => baseStore.checkpoint(...args)),
+    initializeFullRebuild: (...args) => poolTransaction(() => baseStore.initializeFullRebuild(...args)),
     initializeStaging: (...args) => poolTransaction(() => baseStore.initializeStaging(...args)),
     publish: (...args) => poolTransaction(() => baseStore.publish(...args)),
   };
@@ -104,10 +105,12 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
     activeBatches.set(batch.id, batch);
     let progress = {};
     try {
-      logger.info?.('[AI usage] batch_started', { batchId: batch.id, tenantId: batch.tenant_id,
-        calculationVersion: batch.calculation_version, targetThrough: batch.target_through });
       progress = JSON.parse(batch.progress_json || '{}');
-      const batchConfig = { ...config, timeZone: batch.time_zone, calculationVersion: batch.calculation_version };
+      const batchConfig = { ...config, timeZone: batch.time_zone, calculationVersion: batch.calculation_version,
+        incrementalEnabled: JSON.parse(batch.coverage_json || '{}').incrementalEnabled ?? true };
+      const mode = batchConfig.incrementalEnabled ? 'incremental' : 'full';
+      logger.info?.('[AI usage] batch_started', { batchId: batch.id, tenantId: batch.tenant_id,
+        calculationVersion: batch.calculation_version, targetThrough: batch.target_through, mode });
       const onDurationAnomaly = ({ stage, reason, rowKey, sessionKey, sourceKey }) => {
         progress.durationAnomalies ||= {};
         const count = (progress.durationAnomalies[stage] || 0) + 1;
@@ -130,7 +133,12 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
       };
       const state = database.prepare('SELECT * FROM ai_usage_tenant_state WHERE tenant_id=?').get(tenant.id);
       if (progress.dataRevision == null) progress.dataRevision = state.data_revision || 0;
-      if (state.time_zone !== batch.time_zone || state.calculation_version !== batch.calculation_version) {
+      if (!batchConfig.incrementalEnabled && !progress.fullRebuildInitialized) {
+        store.initializeFullRebuild(batch, progress, batchConfig);
+        logger.info?.('[AI usage] history_rebuild_started', { batchId: batch.id, tenantId: batch.tenant_id,
+          previousVersion: state.calculation_version, calculationVersion: batch.calculation_version,
+          targetThrough: batch.target_through, mode, reason: 'full_mode' });
+      } else if (state.time_zone !== batch.time_zone || state.calculation_version !== batch.calculation_version) {
         store.transaction(() => {
           store.assertLease(batch, now());
           database.prepare(`UPDATE ai_usage_tenant_state SET bootstrapped=0,bootstrap_json='{}',time_zone=?,calculation_version=? WHERE tenant_id=?`)
@@ -147,7 +155,7 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
         });
         logger.info?.('[AI usage] history_rebuild_started', { batchId: batch.id, tenantId: batch.tenant_id,
           previousVersion: state.calculation_version, calculationVersion: batch.calculation_version,
-          targetThrough: batch.target_through });
+          targetThrough: batch.target_through, mode, reason: 'definition_changed' });
       }
       const indexer = createAiUsageIndexer({ store, config: batchConfig, batch, checkpoint, checkWindow, onDurationAnomaly });
       if (!progress.stage || progress.stage === 'bootstrap') {
@@ -323,7 +331,7 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
             hookNumericStatisticsVersion: /(?:^|_)hook_numbers_v5(?:_|$)/.test(batch.calculation_version) ? 1 : 0 }, now());
           published++;
           logger.info?.('[AI usage] batch_published', { batchId: batch.id, tenantId: batch.tenant_id,
-            calculationVersion: batch.calculation_version, targetThrough: batch.target_through,
+            calculationVersion: batch.calculation_version, targetThrough: batch.target_through, mode,
             excludedSessionCount: conflictCoverage.excludedSessionCount, skippedDurationRecords });
           break;
         } catch (error) {
