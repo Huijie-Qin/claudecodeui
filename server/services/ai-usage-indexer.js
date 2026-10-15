@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { setImmediate as yieldEventLoop } from 'node:timers/promises';
 
 import { localParts, normalizeTimestamp, normalizeUsageTimestamp } from './ai-usage-config.js';
 import { logicalSessionKey, parseUsageMessage, safeHookFields } from './ai-usage-parser.js';
@@ -256,6 +257,23 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
     for await (const entry of handle) { checkWindow(); yield entry; }
   }
 
+  // Resume only after verifying EVERY consumed byte. A first-block fingerprint
+  // cannot distinguish an append from a rewrite that preserves that block.
+  async function hashPrefix(handle, length) {
+    const hash = createHash('sha256');
+    const buffer = Buffer.alloc(Math.min(256 * 1024, length));
+    let position = 0;
+    while (position < length) {
+      checkWindow();
+      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, length - position), position);
+      if (!bytesRead) return null;
+      hash.update(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+      await yieldEventLoop();
+    }
+    return hash;
+  }
+
   async function indexFile(file, scope, subagentId, progress, isDisplayCommands = false) {
     const sourceKey = `jsonl:${logicalSessionKey(scope)}:${file}`;
     const state = db.prepare('SELECT * FROM ai_usage_source_states WHERE tenant_id=? AND source_key=?').get(tenantId, sourceKey);
@@ -269,21 +287,49 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
       const markers = !subagentId && !isDisplayCommands
         ? await readTranscriptCompletionMarkers(file, { checkWindow }) : null;
       const completionChanged = markers && previousState.completionFingerprint !== markers.fingerprint;
-      if (!completionChanged && state && previousState.readable && stat.size === state.size && stat.mtimeMs === state.mtime_ms
-        && identity === state.identity && state.offset === stat.size) return true;
       let offset = state?.offset || 0;
-      let skipLine = safeJson(state?.state_json).skipLine || false;
+      let skipLine = previousState.skipLine || false;
       let skillState = previousState.skillState || {};
       let durationState = previousState.durationState || {};
-      const prefix = Buffer.alloc(Math.min(4096, stat.size, Math.max(offset, 0)));
-      if (prefix.length) await handle.read(prefix, 0, prefix.length, 0);
-      const fingerprint = createHash('sha256').update(prefix).digest('hex');
-      const reset = state && (completionChanged || !previousState.readable || identity !== state.identity || stat.size < offset
-        || (state.fingerprint && prefix.length === Math.min(offset, 4096) && fingerprint !== state.fingerprint)
-        || (stat.size === state.size && stat.mtimeMs !== state.mtime_ms && offset === stat.size));
+      let contentHash = createHash('sha256');
+      const clearSource = () => {
+        store.assertLease(batch);
+        store.put(tenantId, sourceKey, [], { replace: true });
+        // Facts and their resume state must be invalidated atomically. A pause
+        // before the first new chunk must never reuse the old cursor/hash.
+        db.prepare('DELETE FROM ai_usage_source_states WHERE tenant_id=? AND source_key=?').run(tenantId, sourceKey);
+      };
+      const discardChangedSource = () => {
+        store.transaction(() => {
+          clearSource();
+          queueSessionMessages(logicalSessionKey(scope));
+          onDurationAnomaly({ stage: 'transcripts', sourceKey, sessionKey: logicalSessionKey(scope),
+            reason: 'AI_USAGE_HISTORY_CHANGED_DURING_SCAN' });
+        });
+        return false;
+      };
+      const stableSource = async () => {
+        let after;
+        try { after = await fs.stat(file); }
+        catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return false; throw error; }
+        return after.isFile() && `${after.dev}:${after.ino}` === identity && after.size >= stat.size
+          && (after.size !== stat.size || after.mtimeMs === stat.mtimeMs);
+      };
+      let reset = state && (completionChanged || !previousState.readable || identity !== state.identity || stat.size < offset
+        || !/^[a-f0-9]{64}$/.test(previousState.contentFingerprint || ''));
+      if (state && !reset) {
+        const verified = await hashPrefix(handle, offset);
+        if (!verified) return discardChangedSource();
+        contentHash = verified;
+        reset = contentHash.copy().digest('hex') !== previousState.contentFingerprint;
+      }
       if (reset) {
-        store.transaction(() => { store.assertLease(batch); store.put(tenantId, sourceKey, [], { replace: true }); });
+        store.transaction(clearSource);
         offset = 0; skipLine = false; skillState = {}; durationState = {};
+        contentHash = createHash('sha256');
+      }
+      if (!reset && state && stat.size === state.size && stat.mtimeMs === state.mtime_ms && offset === stat.size) {
+        return await stableSource() ? true : discardChangedSource();
       }
       const turns = new Map();
       const anomalies = [];
@@ -299,6 +345,7 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
         // Reserve the delimiter byte so a line of exactly MAX_LINE_BYTES is valid.
         const buffer = Buffer.alloc(Math.min(length + (length === MAX_LINE_BYTES ? 1 : 0), stat.size - offset));
         const { bytesRead } = buffer.length ? await handle.read(buffer, 0, buffer.length, offset) : { bytesRead: 0 };
+        if (!bytesRead && offset < stat.size) return discardChangedSource();
         const bytes = buffer.subarray(0, bytesRead);
         let end = bytes.lastIndexOf(10);
         if (bytesRead && end < 0 && length < MAX_LINE_BYTES && offset + bytesRead < stat.size) {
@@ -343,6 +390,8 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
         } else if (bytesRead > MAX_LINE_BYTES) {
           nextOffset += bytesRead; skipLine = true;
         }
+        contentHash.update(bytes.subarray(0, nextOffset - offset));
+        const contentFingerprint = contentHash.copy().digest('hex');
         duration?.flush();
         for (const turn of turns.values()) rows.push(...transcriptTurnRows(scope, turn, config.timeZone).map(enrich));
         const prefixLength = Math.min(nextOffset, 4096);
@@ -358,7 +407,7 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
             fingerprint=excluded.fingerprint,state_json=excluded.state_json,updated_at=excluded.updated_at`)
             .run(tenantId, sourceKey, nextOffset, stat.size, stat.mtimeMs, identity, hash,
               JSON.stringify({ sessionKey: logicalSessionKey(scope), readable: true,
-                isMain: !subagentId && !isDisplayCommands, isDisplayCommands, skipLine, skillState,
+                isMain: !subagentId && !isDisplayCommands, isDisplayCommands, skipLine, skillState, contentFingerprint,
                 ...(markers ? { completionFingerprint: markers.fingerprint, durationState: duration.snapshot() } : {}) }), new Date().toISOString());
           for (const anomaly of anomalies) onDurationAnomaly(anomaly);
           // Reconcile already-indexed DB copies, not just future message writes.
@@ -373,6 +422,12 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
         offset = nextOffset;
         length = 256 * 1024;
       } while (offset < stat.size);
+      // Chunk checkpoints can span concurrent writes. Publish this source only
+      // if its consumed prefix still equals the bytes that produced its facts.
+      const verified = await hashPrefix(handle, offset);
+      if (!verified || verified.digest('hex') !== contentHash.digest('hex') || !await stableSource()) {
+        return discardChangedSource();
+      }
       return true;
     } finally { await handle.close(); }
   }

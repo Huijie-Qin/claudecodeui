@@ -104,7 +104,8 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
     activeBatches.set(batch.id, batch);
     let progress = {};
     try {
-      logger.info?.('[AI usage] batch_started', { batchId: batch.id, tenantId: batch.tenant_id });
+      logger.info?.('[AI usage] batch_started', { batchId: batch.id, tenantId: batch.tenant_id,
+        calculationVersion: batch.calculation_version, targetThrough: batch.target_through });
       progress = JSON.parse(batch.progress_json || '{}');
       const batchConfig = { ...config, timeZone: batch.time_zone, calculationVersion: batch.calculation_version };
       const onDurationAnomaly = ({ stage, reason, rowKey, sessionKey, sourceKey }) => {
@@ -144,6 +145,9 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
           // A timezone/definition change requires explicit night-time reindexing.
           database.prepare('UPDATE ai_usage_source_states SET offset=0,identity=NULL WHERE tenant_id=?').run(tenant.id);
         });
+        logger.info?.('[AI usage] history_rebuild_started', { batchId: batch.id, tenantId: batch.tenant_id,
+          previousVersion: state.calculation_version, calculationVersion: batch.calculation_version,
+          targetThrough: batch.target_through });
       }
       const indexer = createAiUsageIndexer({ store, config: batchConfig, batch, checkpoint, checkWindow, onDurationAnomaly });
       if (!progress.stage || progress.stage === 'bootstrap') {
@@ -319,6 +323,7 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
             hookNumericStatisticsVersion: /(?:^|_)hook_numbers_v5(?:_|$)/.test(batch.calculation_version) ? 1 : 0 }, now());
           published++;
           logger.info?.('[AI usage] batch_published', { batchId: batch.id, tenantId: batch.tenant_id,
+            calculationVersion: batch.calculation_version, targetThrough: batch.target_through,
             excludedSessionCount: conflictCoverage.excludedSessionCount, skippedDurationRecords });
           break;
         } catch (error) {

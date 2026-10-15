@@ -1,5 +1,26 @@
 # AI 使用报表：首版开发与运行说明
 
+## 2026-10-15 历史文件改写与 v16 重建
+
+计算版本追加 `transcript_content_v16`。修复原生文件保留前 4 KiB、原地改写后变长时被误认为追加的问题：此前夜间可能从新 JSON 中间的旧 offset 开始，撤销时长并保留旧 SQL；单用户脚本每次完整扫描，因此两项可能不一致。
+
+现在每次复用读取位置前，分块校验已消费全部字节的 SHA-256，包含大小和修改时间未变的文件。指纹保存在 `ai_usage_source_states.state_json.contentFingerprint`；缺少新指纹、文件替换或内容变化时，从头重建该来源。旧派生行和游标在同一事务失效，暂停后不能复用已经清空事实的旧游标。正常追加仅解析新增完整行，未换行尾部继续等待。扫描完成再次校验已消费内容及文件身份；扫描中被改写的来源撤销本次贡献、记录 `AI_USAGE_HISTORY_CHANGED_DURING_SCAN`，下一批次重新读取。其他会话继续处理。
+
+首次可领取的 v16 夜间批次会通过版本升级重置原生读取位置，重新扫描当前保留且可读取的历史来源，并重建截止日期之前的历史结果。已暂停或失败的旧版本批次清空旧候选后重建；原正式表保留到新批次成功发布。**同日已经发布的批次不会因部署立即重开**，应等待下一个尚未发布的夜间批次；窗口结束时仍按断点继续，不能保证所有历史在一个窗口内完成。后续版本相同的批次做完整内容校验与增量解析，不每天强制重新解析全部历史。
+
+完整内容校验增加顺序文件读取量，使用固定大小缓冲区，不在文件扫描期间持有数据库写事务。AI 时长和 SQL 计算规则、`ai_usage_turn_facts` 原始记录及表结构不变。该修复作用于夜间缓存，已经交付的 v3 单用户脚本无需替换。
+
+PM2 日志中，`history_rebuild_started` 表示版本升级重建已开始；同一 `batchId` 出现 `batch_published` 才表示新结果已经发布。两条日志均包含 `calculationVersion` 和 `targetThrough`，新版本末尾应为 `transcript_content_v16`。也可在业务数据库中查询（替换租户 ID）：
+
+```sql
+SELECT b.id, b.status, b.calculation_version, b.target_through, b.completed_at
+FROM ai_usage_tenant_state s
+JOIN ai_usage_batches b ON b.id = s.active_batch_id AND b.tenant_id = s.tenant_id
+WHERE s.tenant_id = 1;
+```
+
+需确认 active 批次为 `published` 且版本包含 `transcript_content_v16`，再将同用户、同租户、相同时区和日期范围的正式表数值与脚本核对。脚本读取当前文件，正式表保存上次发布时的结果；发布之后新增或改写的数据仍要等后续批次。服务启动成功或显示已部署新代码，不能代替以上重建验收。
+
 ## 2026-10-14 完整 AI 回复中的 SQL
 
 `ai-usage-sql.js` 与单点脚本共用 `sqlMessageExclusion` 和 `parseSqlGeneration`，覆盖正文、思考／推理及工具调用输入；规范化 thinking/tool_use 没有 role 时仍识别为 AI 输出，显式用户与工具返回不计。工具参数支持对象、数组及 JSON 字符串，SQL/query 字段和 `.sql` 写入内容保留完整物理行；同一回复跨块相同 SQL 去重，统计结果不保存正文。原生会话顶层 assistant/user 类型优先于嵌套角色，非围栏 SQL 的独立右括号不再漏行。
