@@ -87,6 +87,15 @@ test('ENV validates fixed daily time, explicit timezone, and a bounded window', 
   assert.equal(getAiUsageSchedule(config, new Date('2026-09-11T22:00:00Z')).inWindow, false);
 });
 
+test('incremental mode defaults to true and accepts only explicit boolean strings', () => {
+  assert.equal(readAiUsageConfig({}).incrementalEnabled, true);
+  assert.equal(readAiUsageConfig({ AI_USAGE_INCREMENTAL_ENABLED: 'true' }).incrementalEnabled, true);
+  assert.equal(readAiUsageConfig({ AI_USAGE_INCREMENTAL_ENABLED: 'false' }).incrementalEnabled, false);
+  for (const value of ['', ' ', 'yes', 'TRUE', 'FALSE', ' true ', ' false ', '0', '1', true, false, 0, 1]) {
+    assert.throws(() => readAiUsageConfig({ AI_USAGE_INCREMENTAL_ENABLED: value }), /AI_USAGE_INCREMENTAL_ENABLED must be true or false/);
+  }
+});
+
 test('concurrency accepts positive safe integers and rejects invalid pool sizes', () => {
   assert.equal(readAiUsageConfig({}).concurrency, 1);
   for (const value of ['1', '2', '5', String(Number.MAX_SAFE_INTEGER)]) {

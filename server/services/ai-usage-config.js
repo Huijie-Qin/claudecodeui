@@ -65,6 +65,8 @@ export function localInstant(dateKey, time, timeZone = 'Asia/Shanghai') {
 export function readAiUsageConfig(env = process.env) {
   const boolean = env.AI_USAGE_ENABLED ?? 'false';
   if (!['true', 'false'].includes(boolean)) throw new Error('AI_USAGE_ENABLED must be true or false');
+  const incremental = env.AI_USAGE_INCREMENTAL_ENABLED ?? 'true';
+  if (!['true', 'false'].includes(incremental)) throw new Error('AI_USAGE_INCREMENTAL_ENABLED must be true or false');
   const runAt = env.AI_USAGE_RUN_AT ?? '02:00';
   const windowEnd = env.AI_USAGE_WINDOW_END ?? '06:00';
   for (const [name, value] of [['AI_USAGE_RUN_AT', runAt], ['AI_USAGE_WINDOW_END', windowEnd]]) {
@@ -82,7 +84,8 @@ export function readAiUsageConfig(env = process.env) {
   if (!/^[1-9]\d*$/.test(concurrencyValue) || !Number.isSafeInteger(concurrency)) {
     throw new Error('AI_USAGE_MAX_CONCURRENCY must be a positive safe integer');
   }
-  return Object.freeze({ enabled: boolean === 'true', runAt, windowEnd, timeZone, concurrency, dataLagDays: Number(dataLagDays),
+  return Object.freeze({ enabled: boolean === 'true', incrementalEnabled: incremental === 'true',
+    runAt, windowEnd, timeZone, concurrency, dataLagDays: Number(dataLagDays),
     tickMs: 30_000, batchSize: 200, leaseMs: 120_000, calculationVersion: 'request_response_interval_v1_skill_sources_v2_activity_v3_hook_executions_v4_hook_numbers_v5_skill_publishers_v6_merged_mr_v7_integration_v1_session_report_v8_fork_lineage_v9_publish_events_v10_session_sql_v11_session_scope_v12_duration_isolation_v13_sql_all_reply_v14_transcript_duration_v15_transcript_content_v16' });
 }
 

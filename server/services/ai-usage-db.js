@@ -96,6 +96,16 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
     if (!current) throw new Error('AI_USAGE_LEASE_LOST');
   }
 
+  function clearCandidate(batch) {
+    database.prepare('DELETE FROM ai_usage_report_staging WHERE batch_id=?').run(batch.id);
+    database.prepare('DELETE FROM ai_dashboard_integration_staging WHERE batch_id=?').run(batch.id);
+    clearSplitStaging(database, batch.id);
+    database.prepare('DELETE FROM ai_session_summary_staging WHERE batch_id=?').run(batch.id);
+    database.prepare('DELETE FROM ai_usage_batch_files WHERE batch_id=?').run(batch.id);
+    database.prepare('DELETE FROM ai_usage_skill_work_items WHERE batch_id=?').run(batch.id);
+    database.prepare('DELETE FROM ai_usage_batch_session_exclusions WHERE batch_id=?').run(batch.id);
+  }
+
   function claim(tenantId, schedule, config, now = clock()) {
     return database.transaction(() => {
       const nowIso = now.toISOString();
@@ -110,25 +120,23 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
         const id = randomUUID();
         database.prepare(`INSERT INTO ai_usage_batches(id,tenant_id,scheduled_for,target_through,time_zone,calculation_version,source_read_at,coverage_json)
           VALUES(?,?,?,?,?,?,?,?)`).run(id, tenantId, schedule.scheduledFor, schedule.targetThrough,
-          config.timeZone, config.calculationVersion, nowIso, JSON.stringify({ dataLagDays: config.dataLagDays ?? 1 }));
+          config.timeZone, config.calculationVersion, nowIso, JSON.stringify({ dataLagDays: config.dataLagDays ?? 1,
+            incrementalEnabled: config.incrementalEnabled ?? true }));
         batch = database.prepare('SELECT * FROM ai_usage_batches WHERE id=?').get(id);
       }
-      const oldLagDays = JSON.parse(batch.coverage_json || '{}').dataLagDays ?? 1;
+      const previousCoverage = JSON.parse(batch.coverage_json || '{}');
+      const oldLagDays = previousCoverage.dataLagDays ?? 1;
       const newLagDays = config.dataLagDays ?? 1;
-      if (batch.calculation_version !== config.calculationVersion || batch.time_zone !== config.timeZone || oldLagDays !== newLagDays) {
-        // A paused old-definition batch must not resume half way through new
-        // parser code. Keep the published snapshot and restart only staging.
+      const incrementalEnabled = config.incrementalEnabled ?? true;
+      if (batch.calculation_version !== config.calculationVersion || batch.time_zone !== config.timeZone || oldLagDays !== newLagDays
+        || (previousCoverage.incrementalEnabled ?? true) !== incrementalEnabled) {
+        // A paused batch with a changed definition or mode must restart its
+        // candidate. Keep the published snapshot until the replacement is ready.
         requeueAiUsageReport(database, tenantId);
-        database.prepare('DELETE FROM ai_usage_report_staging WHERE batch_id=?').run(batch.id);
-        database.prepare('DELETE FROM ai_dashboard_integration_staging WHERE batch_id=?').run(batch.id);
-        clearSplitStaging(database, batch.id);
-        database.prepare('DELETE FROM ai_session_summary_staging WHERE batch_id=?').run(batch.id);
-        database.prepare('DELETE FROM ai_usage_batch_files WHERE batch_id=?').run(batch.id);
-        database.prepare('DELETE FROM ai_usage_skill_work_items WHERE batch_id=?').run(batch.id);
-        database.prepare('DELETE FROM ai_usage_batch_session_exclusions WHERE batch_id=?').run(batch.id);
+        clearCandidate(batch);
         const targetThrough = localInstant(shiftDate(localParts(batch.target_through, batch.time_zone).date,
           oldLagDays - newLagDays), '00:00', config.timeZone);
-        const coverageJson = JSON.stringify({ dataLagDays: newLagDays });
+        const coverageJson = JSON.stringify({ dataLagDays: newLagDays, incrementalEnabled });
         database.prepare(`UPDATE ai_usage_batches SET progress_json='{}',calculation_version=?,time_zone=?,target_through=?,coverage_json=? WHERE id=?`)
           .run(config.calculationVersion, config.timeZone, targetThrough, coverageJson, batch.id);
         batch = { ...batch, progress_json: '{}', calculation_version: config.calculationVersion,
@@ -154,6 +162,29 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
       WHERE id=? AND lease_token=? AND status='running'`).run(status, error, batch.id, batch.lease_token);
   }
 
+  // Full mode invalidates derived caches once per logical batch, never on each
+  // tick/resume. Original evidence, suppression rules and published tables stay.
+  function initializeFullRebuild(batch, progress, config) {
+    if (progress.fullRebuildInitialized) return;
+    database.transaction(() => {
+      assertLease(batch);
+      requeueAiUsageReport(database, batch.tenant_id);
+      clearCandidate(batch);
+      for (const table of ['ai_usage_fact_rows', 'ai_usage_source_states', 'ai_usage_source_changes',
+        'ai_usage_skill_groups', 'ai_usage_dirty_skill_sessions']) {
+        database.prepare(`DELETE FROM ${table} WHERE tenant_id=?`).run(batch.tenant_id);
+      }
+      database.prepare(`UPDATE ai_usage_tenant_state SET bootstrapped=0,bootstrap_json='{}',time_zone=?,calculation_version=?
+        WHERE tenant_id=?`).run(batch.time_zone, batch.calculation_version, batch.tenant_id);
+      for (const key of Object.keys(progress)) if (key !== 'dataRevision') delete progress[key];
+      progress.stage = 'bootstrap';
+      progress.fullRebuildInitialized = true;
+      // Cache invalidation and its durable once-per-batch marker must commit
+      // together so an interrupted worker never repeatedly discards its work.
+      checkpoint(batch, progress, config);
+    }).immediate();
+  }
+
   function initializeStaging(batch, progress, config) {
     if (progress.stagingInitialized) return;
     database.transaction(() => {
@@ -167,7 +198,7 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
         requeueAiUsageReport(database, batch.tenant_id);
       }
       database.prepare('DELETE FROM ai_usage_report_staging WHERE batch_id=?').run(batch.id);
-      database.prepare(`INSERT INTO ai_usage_report_staging(batch_id,${REPORT_COLUMNS})
+      if (!progress.fullRebuildInitialized) database.prepare(`INSERT INTO ai_usage_report_staging(batch_id,${REPORT_COLUMNS})
         SELECT ?,${REPORT_COLUMNS} FROM ai_usage_report_rows WHERE tenant_id=? AND stat_date<?`).run(batch.id, batch.tenant_id, throughDate);
       progress.stagingInitialized = true;
       checkpoint(batch, progress, config);
@@ -209,6 +240,7 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
       database.prepare(`UPDATE ai_usage_batches SET status='published',completed_at=?,coverage_json=?,lease_until=NULL WHERE id=?`)
         .run(now.toISOString(), JSON.stringify(integrationCoverage({ ...coverage,
           dataLagDays: JSON.parse(batch.coverage_json || '{}').dataLagDays ?? 1,
+          incrementalEnabled: JSON.parse(batch.coverage_json || '{}').incrementalEnabled ?? true,
           partialDay: batch.target_through > now.toISOString() })), batch.id);
       database.prepare('UPDATE ai_usage_tenant_state SET active_batch_id=? WHERE tenant_id=?').run(batch.id, batch.tenant_id);
       database.prepare('DELETE FROM ai_usage_report_staging WHERE batch_id=?').run(batch.id);
@@ -216,6 +248,6 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
     }).immediate();
   }
 
-  return { database, put, claim, assertLease, checkpoint, finish, initializeStaging, publish,
+  return { database, put, claim, assertLease, checkpoint, finish, initializeFullRebuild, initializeStaging, publish,
     transaction: (fn) => database.transaction(fn).immediate() };
 }
