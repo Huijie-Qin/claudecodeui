@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { appendFile, mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -256,12 +256,17 @@ test('an unsupported calendar boundary cannot interrupt adjacent valid historica
 
 // Snapshot only the fixture DB so the audit exercises its normal read-only CLI
 // library path against exactly the same retained histories as the nightly job.
-async function auditDuration(f) {
+async function auditMetrics(f) {
   const databasePath = path.join(f.home, 'audit.db');
   await writeFile(databasePath, f.db.serialize());
   const audit = await auditUserUsage({ databasePath, tenantId: 1, userId: 1,
     from: '2026-09-10', to: '2026-09-10' });
-  return audit.metrics.aiActiveDurationSeconds;
+  return { aiActiveDurationSeconds: audit.metrics.aiActiveDurationSeconds,
+    generatedSqlLines: audit.metrics.generatedSqlLines };
+}
+
+async function auditDuration(f) {
+  return (await auditMetrics(f)).aiActiveDurationSeconds;
 }
 
 test('an oversized unfinished tail preserves completed duration until its newline across nightly batches', async t => {
@@ -313,4 +318,142 @@ test('a legal JSON line of exactly the size limit is accepted after its delayed 
   assert.equal(f.duration(), 180, 'the size limit excludes the newline, matching the audit reader');
   assert.equal(await auditDuration(f), f.duration());
   assert.equal(f.warnings.length, 0);
+});
+
+
+// Keep the first 4KB unchanged so these tests exercise corrections to already
+// consumed history, rather than inode replacement or the small prefix check.
+const retainedPrefix = { type: 'system', padding: 'x'.repeat(5000) };
+function correctedReply() {
+  const answer = reply('corrected-answer', '2026-09-10T02:02:00.000Z');
+  answer.message.content[0].text = '```sql\nSELECT 1;\nSELECT 2;\n```';
+  return answer;
+}
+const originalHistory = () => [retainedPrefix, user('corrected-request'),
+  reply('corrected-answer', '2026-09-10T02:01:00.000Z')];
+const correctedHistory = () => [retainedPrefix, user('corrected-request'), correctedReply()];
+
+function publishedMetrics(f) {
+  return {
+    aiActiveDurationSeconds: f.db.prepare(`SELECT SUM(ai_active_duration_seconds) AS value
+      FROM ai_dashboard_ai_detail WHERE tenant_id=1 AND user_id=1 AND stat_date='2026-09-10'`).get().value,
+    generatedSqlLines: f.db.prepare(`SELECT SUM(generated_sql_lines) AS value
+      FROM ai_dashboard_sql_generation_detail WHERE tenant_id=1 AND user_id=1 AND stat_date='2026-09-10'`).get().value,
+  };
+}
+
+async function assertPublishedAuditParity(f, seconds, sqlLines) {
+  const expected = { aiActiveDurationSeconds: seconds, generatedSqlLines: sqlLines };
+  assert.deepEqual(await auditMetrics(f), expected, 'the independent full-file audit sees the expected metrics');
+  assert.deepEqual(publishedMetrics(f), expected, 'both formal nightly detail tables agree with the audit');
+}
+
+test('rewriting consumed history beyond 4KB while growing the same file rebuilds AI and SQL without later duplication', async t => {
+  const f = await fixture(t);
+  f.db.exec('ALTER TABLE agent_session_runtime ADD COLUMN id INTEGER');
+  await f.write(originalHistory());
+  assert.equal((await f.run()).published, 1);
+  await assertPublishedAuditParity(f, 60, 1);
+  const before = await stat(f.file);
+  await f.write(correctedHistory());
+  const after = await stat(f.file);
+  assert.equal(after.ino, before.ino);
+  assert.ok(after.size > before.size);
+  assert.equal(lines(originalHistory()).slice(0, 4096), lines(correctedHistory()).slice(0, 4096));
+  f.next(); assert.equal((await f.run()).published, 1);
+  await assertPublishedAuditParity(f, 120, 2);
+  await f.append([user('appended-request', '2026-09-10T03:00:00.000Z'),
+    reply('appended-answer', '2026-09-10T03:01:00.000Z')]);
+  f.next(); assert.equal((await f.run()).published, 1);
+  await assertPublishedAuditParity(f, 180, 3);
+  f.next(); assert.equal((await f.run()).published, 1);
+  await assertPublishedAuditParity(f, 180, 3);
+});
+
+test('same-size history corrections are detected even when inode and modification time are preserved', async t => {
+  const f = await fixture(t);
+  f.db.exec('ALTER TABLE agent_session_runtime ADD COLUMN id INTEGER');
+  const original = originalHistory();
+  original.at(-1).padding = 'x'.repeat(400);
+  const corrected = correctedHistory();
+  corrected.at(-1).padding = '';
+  corrected.at(-1).padding = 'x'.repeat(Buffer.byteLength(lines(original)) - Buffer.byteLength(lines(corrected)));
+  assert.equal(Buffer.byteLength(lines(original)), Buffer.byteLength(lines(corrected)));
+  await f.write(original);
+  const fixedTime = new Date('2026-09-10T05:00:00.000Z');
+  await utimes(f.file, fixedTime, fixedTime);
+  assert.equal((await f.run()).published, 1);
+  await assertPublishedAuditParity(f, 60, 1);
+  const before = await stat(f.file);
+  await f.write(corrected);
+  await utimes(f.file, before.atime, before.mtime);
+  const after = await stat(f.file);
+  assert.equal(after.size, before.size);
+  assert.equal(after.ino, before.ino);
+  assert.equal(after.mtimeMs, before.mtimeMs);
+  f.next(); assert.equal((await f.run()).published, 1);
+  await assertPublishedAuditParity(f, 120, 2);
+});
+
+test('a history rebuild paused between file chunks preserves old published metrics and resumes both metrics exactly once', async t => {
+  const f = await fixture(t);
+  f.db.exec('ALTER TABLE agent_session_runtime ADD COLUMN id INTEGER');
+  await f.write(originalHistory());
+  assert.equal((await f.run()).published, 1);
+  await assertPublishedAuditParity(f, 60, 1);
+  const oldSize = (await stat(f.file)).size;
+  const filler = Array.from({ length: 90 }, () => ({ type: 'system', padding: 'x'.repeat(4000) }));
+  await f.write([...correctedHistory(), ...filler,
+    user('after-checkpoint', '2026-09-10T03:00:00.000Z'),
+    reply('after-checkpoint-answer', '2026-09-10T03:01:00.000Z')]);
+  const newSize = (await stat(f.file)).size;
+  f.next();
+  const resetPaused = await f.run({ shouldStop: () =>
+    !f.db.prepare('SELECT 1 FROM ai_usage_source_states').get() });
+  assert.equal(resetPaused.status, 'paused', 'stop after invalidating the stale source and before its first replacement chunk');
+  assert.deepEqual(publishedMetrics(f), { aiActiveDurationSeconds: 60, generatedSqlLines: 1 });
+  const paused = await f.run({ shouldStop: () => {
+    const source = f.db.prepare('SELECT offset FROM ai_usage_source_states').get();
+    return Boolean(source && source.offset > oldSize && source.offset < newSize);
+  } });
+  assert.equal(paused.status, 'paused');
+  assert.deepEqual(publishedMetrics(f), { aiActiveDurationSeconds: 60, generatedSqlLines: 1 },
+    'the partially rebuilt facts must not replace either published total');
+  assert.deepEqual(await auditMetrics(f), { aiActiveDurationSeconds: 180, generatedSqlLines: 3 });
+  assert.equal((await f.run()).published, 1);
+  await assertPublishedAuditParity(f, 180, 3);
+  f.next(); assert.equal((await f.run()).published, 1);
+  await assertPublishedAuditParity(f, 180, 3);
+});
+
+test('upgrading an already published v15 cache rebuilds corrected history and preserves its snapshot until publication', async t => {
+  const f = await fixture(t);
+  f.db.exec('ALTER TABLE agent_session_runtime ADD COLUMN id INTEGER');
+  const legacyConfig = { ...config, calculationVersion: config.calculationVersion.replace(/_transcript_content_v16$/, '') };
+  assert.notEqual(legacyConfig.calculationVersion, config.calculationVersion);
+  await f.write(originalHistory());
+  assert.equal((await f.run({ config: legacyConfig })).published, 1);
+  await assertPublishedAuditParity(f, 60, 1);
+  // v15 kept its cursor and 4KB fingerprint, but did not retain a full consumed
+  // content fingerprint. Recreate that persisted state from an older release.
+  f.db.prepare("UPDATE ai_usage_source_states SET state_json=json_remove(state_json,'$.contentFingerprint')").run();
+  await f.write(correctedHistory());
+  f.next();
+  const info = [];
+  const logger = { info(message) { info.push(message); }, warn() {}, error() {} };
+  const paused = await f.run({ logger, shouldStop: () =>
+    f.db.prepare('SELECT calculation_version FROM ai_usage_tenant_state').get().calculation_version === config.calculationVersion });
+  assert.equal(paused.status, 'paused');
+  assert.deepEqual(publishedMetrics(f), { aiActiveDurationSeconds: 60, generatedSqlLines: 1 });
+  assert.deepEqual(await auditMetrics(f), { aiActiveDurationSeconds: 120, generatedSqlLines: 2 });
+  assert.equal((await f.run({ logger })).published, 1);
+  await assertPublishedAuditParity(f, 120, 2);
+  const active = f.db.prepare(`SELECT b.status,b.calculation_version FROM ai_usage_batches b
+    JOIN ai_usage_tenant_state s ON s.active_batch_id=b.id`).get();
+  assert.deepEqual(active, { status: 'published', calculation_version: config.calculationVersion });
+  assert.equal((await f.run({ logger })).published, 0, 'a published same-day batch is not reopened');
+  f.next(); assert.equal((await f.run({ logger })).published, 1);
+  await assertPublishedAuditParity(f, 120, 2);
+  assert.equal(info.filter(message => message === '[AI usage] history_rebuild_started').length, 1,
+    'the version upgrade rebuild occurs once, rather than on each later night');
 });
