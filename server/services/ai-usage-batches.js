@@ -6,6 +6,7 @@ import { SESSION_SUMMARY_VERSION } from '../database/ai-session-summary-schema.j
 import { requeueAiUsageReport } from '../database/ai-usage-report-schema.js';
 
 import { createAiUsageStore } from './ai-usage-db.js';
+import { createAiUsageRunLog } from './ai-usage-run-log.js';
 import { createAiUsageIndexer } from './ai-usage-indexer.js';
 import { getAiUsageSchedule, localParts } from './ai-usage-config.js';
 import { buildActivityDays, markActivityDays } from './ai-usage-activity.js';
@@ -28,9 +29,12 @@ export class AiUsageWindowClosed extends Error {
 }
 
 export async function runAiUsageWindow({ database, config, now = () => new Date(), shouldStop = () => false, logger = console }) {
-  if (!config.enabled || !getAiUsageSchedule(config, now()).inWindow) return { status: 'outside_window', published: 0 };
+  if (!config.enabled) return { status: 'outside_window', published: 0 };
+  const runSchedule = getAiUsageSchedule(config, now());
+  if (!runSchedule.inWindow) return { status: 'outside_window', published: 0 };
   let abortError = null;
   const globalToken = randomUUID();
+  const runLog = createAiUsageRunLog(database, { schedule: runSchedule, config, workerToken: globalToken, now });
   const poolLease = database.prepare('SELECT 1 FROM ai_usage_worker_lock WHERE id=1 AND lease_token=? AND lease_until>?');
   const baseStore = createAiUsageStore(database, { clock: now });
   function assertPoolLease() {
@@ -53,11 +57,22 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
   const store = { ...baseStore,
     transaction: poolTransaction,
     assertLease: (...args) => { assertPoolLease(); return baseStore.assertLease(...args); },
-    claim: (...args) => poolTransaction(() => baseStore.claim(...args)),
-    checkpoint: (...args) => poolTransaction(() => baseStore.checkpoint(...args)),
+    claim: (...args) => poolTransaction(() => {
+      const batch = baseStore.claim(...args);
+      if (batch) runLog.claimed(batch);
+      else runLog.notClaimed(args[0]);
+      return batch;
+    }),
+    checkpoint: (batch, progress, ...args) => poolTransaction(() => {
+      baseStore.checkpoint(batch, progress, ...args);
+      runLog.checkpoint(batch, progress);
+    }),
     initializeFullRebuild: (...args) => poolTransaction(() => baseStore.initializeFullRebuild(...args)),
     initializeStaging: (...args) => poolTransaction(() => baseStore.initializeStaging(...args)),
-    publish: (...args) => poolTransaction(() => baseStore.publish(...args)),
+    publish: (batch, ...args) => poolTransaction(() => {
+      baseStore.publish(batch, ...args);
+      runLog.published(batch);
+    }),
   };
   const claimed = database.transaction(() => {
     const held = database.prepare('SELECT * FROM ai_usage_worker_lock WHERE id=1').get();
@@ -100,7 +115,13 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
   async function runTenant(tenant) {
     checkWindow();
     const schedule = getAiUsageSchedule(config, now());
-    const batch = store.claim(tenant.id, schedule, config, now());
+    let batch;
+    try { batch = store.claim(tenant.id, schedule, config, now()); }
+    catch (error) {
+      try { runLog.claimFailed(tenant.id, error); }
+      catch (logError) { logger.error?.('[AI usage] run_log_failed', { tenantId: tenant.id, error: logError.message }); }
+      throw error;
+    }
     if (!batch) return;
     activeBatches.set(batch.id, batch);
     let progress = {};
@@ -361,7 +382,16 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
       }
     } catch (error) {
       if (error instanceof AiUsageWindowClosed || error.message === 'AI_USAGE_LEASE_LOST') abortError ??= error;
-      store.finish(batch, error instanceof AiUsageWindowClosed ? 'paused' : 'failed', error.message);
+      const status = error instanceof AiUsageWindowClosed ? 'paused' : 'failed';
+      try {
+        database.transaction(() => {
+          store.finish(batch, status, error.message);
+          runLog.finished(batch, status, error.message, error.reason || error.code || null, progress);
+        }).immediate();
+      } catch (logError) {
+        logger.error?.('[AI usage] run_log_failed', { batchId: batch.id, tenantId: batch.tenant_id, error: logError.message });
+        store.finish(batch, status, error.message);
+      }
       if (error instanceof AiUsageWindowClosed) logger.info?.('[AI usage] batch_paused', {
         batchId: batch.id, tenantId: batch.tenant_id, reason: error.reason, stage: progress.stage,
       });
@@ -388,6 +418,7 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
         COALESCE(p.target_through,''),
         CASE WHEN u.oldest_scheduled_for IS NOT NULL THEN 0 ELSE 1 END,
         COALESCE(p.completed_at,''),u.oldest_scheduled_for,t.id`).all();
+    store.transaction(() => runLog.initialize(tenants));
     let cursor = 0;
     async function runSlot() {
       try {
@@ -401,8 +432,11 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
     // Keep it until all in-flight tenants have saved their final state.
     await Promise.allSettled(Array.from({ length: Math.min(config.concurrency ?? 1, tenants.length) }, runSlot));
     if (abortError) throw abortError;
+    runLog.finalize('waiting_for_next_attempt');
     return { status: errors.length ? 'partial_failure' : 'completed', published, errors };
   } catch (error) {
+    try { runLog.finalize(error instanceof AiUsageWindowClosed ? error.reason : 'worker_failed', error.message); }
+    catch (logError) { logger.error?.('[AI usage] run_log_failed', { error: logError.message }); }
     if (error instanceof AiUsageWindowClosed) return { status: 'paused', published };
     throw error;
   } finally {

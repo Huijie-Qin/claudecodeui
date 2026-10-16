@@ -33,7 +33,8 @@ export function createAiUsageService({ database, databasePath = database.name, e
     const pending = database.prepare(`SELECT 1 FROM tenants t WHERE t.status='active' AND (
       NOT EXISTS(SELECT 1 FROM ai_usage_batches b WHERE b.tenant_id=t.id AND b.scheduled_for=? AND b.status='published')
       OR EXISTS(SELECT 1 FROM ai_usage_batches b WHERE b.tenant_id=t.id AND b.status IN ('paused','failed','running'))
-    ) LIMIT 1`).get(schedule.scheduledFor);
+      OR NOT EXISTS(SELECT 1 FROM ai_usage_run_logs l WHERE l.tenant_id=t.id AND l.scheduled_for=?)
+    ) LIMIT 1`).get(schedule.scheduledFor, schedule.scheduledFor);
     if (!pending) return;
     worker = workerFactory({ workerData: { databasePath: path.resolve(databasePath), config } });
     state = 'running';

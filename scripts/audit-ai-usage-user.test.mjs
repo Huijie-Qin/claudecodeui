@@ -11,7 +11,7 @@ import Database from 'better-sqlite3';
 
 import { parseSqlGeneration } from '../server/services/ai-usage-sql.js';
 
-import { auditUserUsage } from './audit-ai-usage-user.mjs';
+import { auditTenantUsage, auditUserUsage } from './audit-ai-usage-user.mjs';
 
 const execute = promisify(execFile);
 const script = fileURLToPath(new URL('./audit-ai-usage-user.mjs', import.meta.url));
@@ -893,4 +893,167 @@ test('audit and nightly choose one whole turn source before status and dates, th
   assert.equal(restored.durationDiagnostics.counted, 2);
   assert.equal(restored.sources.find(source => source.path === fallback).countedDurationMs, 180000);
   await compare(120000, { from: '2026-09-11', to: '2026-09-11' });
+});
+
+
+const runTenant = (f, options = {}) => auditTenantUsage({ databasePath: f.databasePath, tenantId: 1,
+  from: '2026-09-11', to: '2026-09-11', ...options });
+const tenantArguments = f => [script, '--db', f.databasePath, '--tenant-id', '1',
+  '--from', '2026-09-11', '--to', '2026-09-11', '--time-zone', 'Asia/Shanghai'];
+
+test('tenant audit unions current members and original historical owners without scanning unrelated users or tenants', async t => {
+  const f = await fixture(t);
+  f.db.exec(`CREATE TABLE tenant_users(tenant_id INTEGER,user_id INTEGER,status TEXT);
+    INSERT INTO users VALUES(9,'no-records'),(10,'foreign-only'),(11,'unrelated'),(12,'database-history'),
+      (13,'session-history'),(14,'capture-history'),(15,'empty-history'),(18,'disabled-member'),(19,'pending-member');
+    INSERT INTO tenant_users VALUES(1,7,'active'),(1,9,'active'),(1,18,'disabled'),(1,19,'pending'),(2,10,'active');`);
+  f.session(); f.turn('captured');
+  await f.native(historyTurn('member', at, '2026-09-11T02:01:00.000Z', fence('SELECT 1;\nSELECT 2;')));
+  await f.native(historyTurn('former-member', at, '2026-09-11T02:02:00.000Z', fence('SELECT 1;\nSELECT 2;\nSELECT 3;')), { userId: 8 });
+  await f.native(historyTurn('foreign-copy', at, '2026-09-11T02:30:00.000Z', fence('SELECT 99;')),
+    { tenantId: 2, workspaceId: 20, userId: 7, sessionId: 'foreign-session' });
+  f.message(reply('database-only', fence('SELECT 1;')), { userId: 12, provider: 'codex' });
+  f.message(reply('foreign-only', fence('SELECT 99;')), { tenantId: 2, workspaceId: 20, userId: 10 });
+  f.session({ userId: 13 });
+  f.turn('only-capture', at, '2026-09-11T02:20:00.000Z', { userId: 14 });
+  await f.native([], { userId: 15 });
+  const result = await runTenant(f);
+  assert.equal(result.auditVersion, 4);
+  assert.equal(result.mode, 'tenant');
+  assert.equal(result.status, 'completed');
+  assert.equal(result.failedUsers, 0);
+  assert.equal(result.successfulUsers, 9);
+  assert.equal(result.userCount, 9);
+  assert.deepEqual(result.users.map(user => user.userId), [7, 8, 9, 12, 13, 14, 15, 18, 19]);
+  for (const user of result.users) {
+    const single = await f.run({ userId: user.userId });
+    assert.deepEqual(user.metrics, { ...single.metrics, aiActiveDurationHours:
+      single.metrics.aiActiveDurationSeconds === null ? null : single.metrics.aiActiveDurationSeconds / 3600 });
+    assert.deepEqual(user.coverage, single.coverage);
+    assert.deepEqual(user.scanned, single.scanned);
+    assert.equal(user.error, null);
+  }
+  assert.deepEqual(result.users.slice(0, 2).map(user => [user.metrics.aiActiveDurationSeconds, user.metrics.generatedSqlLines]), [[60, 2], [120, 3]]);
+  assert.equal(result.users.find(user => user.userId === 9).metrics.aiActiveDurationSeconds, null, 'a member without readable history is unavailable, not zero');
+  assert.equal(result.users.find(user => user.userId === 9).metrics.generatedSqlLines, 0, 'an available empty message source has zero SQL');
+  assert.equal(result.users.find(user => user.userId === 15).metrics.aiActiveDurationSeconds, 0, 'a readable empty main transcript retains the established zero semantics');
+});
+
+test('tenant discovery supports history-only databases and reports an empty tenant without importing all users', async t => {
+  const f = await fixture(t);
+  await f.native(historyTurn('history-only', at, '2026-09-11T02:01:00.000Z', fence('SELECT 1;')));
+  assert.deepEqual((await runTenant(f)).users.map(user => user.userId), [7]);
+  const empty = await runTenant(f, { tenantId: 2 });
+  assert.deepEqual(empty.users, []);
+  assert.equal(empty.userCount, 0);
+  assert.equal(empty.status, 'completed');
+  f.db.exec('DROP TABLE ai_usage_turn_facts; DROP TABLE session_index; DROP TABLE agent_session_runtime; DROP TABLE agent_session_messages;');
+  assert.deepEqual((await runTenant(f)).users, []);
+});
+
+test('tenant mode preserves date timezone clipping, SQL suppression and single-user source-scope exclusion rules', async t => {
+  const f = await fixture(t);
+  f.session();
+  f.session({ tenantId: 2, workspaceId: 20 });
+  await f.native(historyTurn('conflicted', at, '2026-09-11T02:10:00.000Z', fence('SELECT 99;')));
+  f.session({ sessionId: 'healthy' });
+  const content = fence('SELECT 1;\nSELECT 2;');
+  const records = historyTurn('cross-day', '2026-09-10T15:59:00.000Z', '2026-09-10T16:02:00.000Z', content);
+  await f.native(records, { sessionId: 'healthy' });
+  f.message(reply('second-user', fence('SELECT 3;')), { userId: 8, provider: 'codex' });
+  const scope = { tenant_id: 1, workspace_id: 10, user_id: 7, provider: 'claude', provider_session_id: 'healthy' };
+  const sql = parseSqlGeneration(scope, records[1], { timeZone: 'Asia/Shanghai' })[0];
+  f.db.exec('CREATE TABLE ai_usage_suppressed_rows(tenant_id INTEGER,dataset TEXT,row_key TEXT)');
+  f.db.prepare("INSERT INTO ai_usage_suppressed_rows VALUES(1,'sql_generations',?)").run(sql.row_key);
+  const result = await runTenant(f);
+  assert.deepEqual(result.users.map(user => [user.userId, user.metrics.aiActiveDurationSeconds, user.metrics.generatedSqlLines]),
+    [[7, 120, 0], [8, null, 1]]);
+  assert.ok(result.users[0].skipped.SESSION_SUMMARY_SOURCE_SCOPE_CONFLICT > 0);
+  assert.equal(result.users[0].skipped.sql_suppressed, 1);
+  const utc = await runTenant(f, { timeZone: 'UTC' });
+  assert.equal(utc.range.fromInclusive, '2026-09-11T00:00:00.000Z');
+  assert.equal(utc.users[0].metrics.aiActiveDurationSeconds, 0);
+});
+
+test('a failed historical owner remains an explicit null/error row while healthy users before and after it finish', async t => {
+  const f = await fixture(t);
+  f.db.exec("INSERT INTO users VALUES(9,'later-user'); DELETE FROM users WHERE id=8;");
+  for (const userId of [7, 8, 9]) await f.native(historyTurn(`user-${userId}`, at, '2026-09-11T02:01:00.000Z', fence('SELECT 1;')), { userId });
+  const result = await runTenant(f);
+  assert.deepEqual(result.users.map(user => user.userId), [7, 8, 9]);
+  assert.equal(result.status, 'partial_failure');
+  assert.equal(result.successfulUsers, 2);
+  assert.equal(result.failedUsers, 1);
+  assert.deepEqual(result.users.filter(user => user.error === null).map(user => user.metrics.aiActiveDurationSeconds), [60, 60]);
+  const failed = result.users[1];
+  assert.equal(failed.userName, null);
+  assert.equal(failed.status, 'failed');
+  assert.deepEqual(failed.metrics, { aiActiveDurationMs: null, aiActiveDurationSeconds: null, aiActiveDurationHours: null, generatedSqlLines: null });
+  assert.equal(failed.coverage.duration, 'unavailable');
+  assert.equal(failed.coverage.sql, 'unavailable');
+  assert.match(failed.error.message, /用户不存在：8/);
+});
+
+test('tenant CLI defaults to per-user output and JSON without a user-id and remains strictly read-only', async t => {
+  const f = await fixture(t);
+  f.db.exec("CREATE TABLE tenant_users(tenant_id INTEGER,user_id INTEGER,status TEXT); INSERT INTO tenant_users VALUES(1,7,'active'),(1,8,'active');");
+  const file = await f.native(historyTurn('healthy', at, '2026-09-11T02:01:00.000Z', fence('SELECT 1;\nSELECT 2;')));
+  const schema = f.db.prepare('SELECT name,sql FROM sqlite_master ORDER BY name').all();
+  f.db.close();
+  const before = { database: await readFile(f.databasePath), native: await readFile(file),
+    databaseMtime: (await stat(f.databasePath)).mtimeMs, nativeMtime: (await stat(file)).mtimeMs,
+    directory: (await readdir(f.directory)).sort() };
+  const text = await execute(process.execPath, tenantArguments(f), { timeout: 10000 });
+  assert.equal(text.stderr, '');
+  assert.match(text.stdout, /用户ID\t用户名\tAI时长\(秒\)\tAI时长\(小时\)\tSQL行数/);
+  assert.match(text.stdout, /7\taudit-user\t60\t0\.0167\t2\t/);
+  assert.match(text.stdout, /8\tother-user\t不可用\t不可用\t0\t/);
+  const json = await execute(process.execPath, [...tenantArguments(f), '--json'], { timeout: 10000 });
+  assert.equal(json.stderr, '');
+  const result = JSON.parse(json.stdout);
+  assert.equal(result.mode, 'tenant');
+  assert.equal(result.users.length, 2);
+  assert.equal(result.users[0].metrics.aiActiveDurationHours, 60 / 3600);
+  assert.deepEqual(await readFile(f.databasePath), before.database);
+  assert.deepEqual(await readFile(file), before.native);
+  assert.equal((await stat(f.databasePath)).mtimeMs, before.databaseMtime);
+  assert.equal((await stat(file)).mtimeMs, before.nativeMtime);
+  assert.deepEqual((await readdir(f.directory)).sort(), before.directory);
+  const inspected = new Database(f.databasePath, { readonly: true, fileMustExist: true });
+  try { assert.deepEqual(inspected.prepare('SELECT name,sql FROM sqlite_master ORDER BY name').all(), schema); }
+  finally { inspected.close(); }
+});
+
+test('tenant CLI emits complete JSON and a nonzero partial-failure exit code without losing healthy user results', async t => {
+  const f = await fixture(t);
+  await f.native(historyTurn('healthy', at, '2026-09-11T02:01:00.000Z', fence('SELECT 1;')));
+  f.turn('deleted-owner', at, '2026-09-11T02:01:00.000Z', { userId: 99 });
+  f.db.close();
+  const before = await readFile(f.databasePath);
+  await assert.rejects(execute(process.execPath, [...tenantArguments(f), '--json'], { timeout: 10000 }), error => {
+    assert.equal(error.code, 2);
+    assert.equal(error.stderr, '');
+    const result = JSON.parse(error.stdout);
+    assert.equal(result.status, 'partial_failure');
+    assert.equal(result.users[0].userId, 7);
+    assert.equal(result.users[0].metrics.generatedSqlLines, 1);
+    assert.equal(result.users[1].userId, 99);
+    assert.equal(result.users[1].metrics.generatedSqlLines, null);
+    assert.match(result.users[1].error.message, /用户不存在：99/);
+    return true;
+  });
+  assert.deepEqual(await readFile(f.databasePath), before);
+});
+
+test('tenant audit still validates dates, scope and existing database before enumerating users', async t => {
+  const f = await fixture(t);
+  await assert.rejects(runTenant(f, { tenantId: 999 }), /租户不存在/);
+  await assert.rejects(runTenant(f, { from: 'bad-date' }), /日期必须/);
+  await assert.rejects(runTenant(f, { from: '2026-09-12' }), /不能晚于/);
+  await assert.rejects(runTenant(f, { tenantId: 0 }), /正整数/);
+  const missing = path.join(f.directory, 'not-created.db');
+  await assert.rejects(runTenant(f, { databasePath: missing }));
+  await assert.rejects(stat(missing), { code: 'ENOENT' });
+  await assert.rejects(execute(process.execPath, [script, '--db', f.databasePath, '--tenant-id', '1'], { timeout: 10000 }),
+    error => error.code === 1 && /缺少 --from/.test(error.stderr));
 });

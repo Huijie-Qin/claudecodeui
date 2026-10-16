@@ -1,6 +1,6 @@
-# 单租户、单用户 AI 用量核算
+# 租户逐用户／单用户 AI 用量核算
 
-`node scripts/audit-ai-usage-user.mjs` 从原始记录重新计算 AI 活跃时长、代码生成量（SQL 物理行数），不读取看板汇总值，不回写数据库或触发统计任务。
+`node scripts/audit-ai-usage-user.mjs` 从原始记录重新计算 AI 活跃时长、代码生成量（SQL 物理行数），不读取看板汇总值，不回写数据库或触发统计任务。省略 `--user-id` 时输出指定租户的每个用户；指定 `--user-id` 时保持原单用户详细结果。无需传用户名。
 
 在已部署同版本代码并安装服务依赖的项目目录中运行。入口 `scripts/audit-ai-usage-user.mjs` 依赖共享的 `server/services/ai-usage-sql.js`、`ai-usage-transcript-duration.js`、`ai-usage-transcript-markers.js` 及它们的依赖；不要只替换入口文件或继续使用旧 `.txt` 副本。`--db` 使用服务实际的 `DATABASE_PATH` 绝对路径；租户和用户参数均为数据库数字 ID。脚本不自动加载 `.env` 或 PM2 环境变量。下面的数据库路径和 ID 需替换为实际值：
 
@@ -8,19 +8,35 @@
 node scripts/audit-ai-usage-user.mjs \
   --db /absolute/path/auth.db \
   --tenant-id 1 \
-  --user-id 7 \
   --from 2026-10-01 \
   --to 2026-10-13
 ```
+
+默认输出每个用户的 `userId`、用户名、AI 时长（秒／小时）、SQL 行数、时长／SQL 覆盖情况及错误。顺序逐用户核算，不并发开启多个用户的扫描。
+
+用户集合为该租户现存 `tenant_users` 关系（包括 active、disabled、pending）与 `session_index`、`agent_session_runtime`、`agent_session_messages`、`ai_usage_turn_facts` 中历史归属用户的并集，按 ID 排序去重。无记录成员也列出；已离开租户但有保留历史的用户仍列出。不扫描全库 `users`，也不把其他租户的成员或历史记录计入。只复制数据库而未保留历史文件时，时长仍会显示不可用。
+
+租户汇总 JSON：
+
+```bash
+node scripts/audit-ai-usage-user.mjs \
+  --db /absolute/path/auth.db --tenant-id 1 \
+  --from 2026-10-01 --to 2026-10-13 --time-zone Asia/Shanghai \
+  --json > tenant-ai-usage.json
+```
+
+新租户模式的 JSON 为 `auditVersion: 4`、`mode: "tenant"`，包含 `users[]`、`userCount`、`successfulUsers`、`failedUsers`。每个用户含 `userId`、`userName`、`metrics.aiActiveDurationSeconds`、`metrics.aiActiveDurationHours`、`metrics.generatedSqlLines`、`coverage`、`scanned`、`skipped` 和 `error`。成功行 `error=null`；用户核算失败时保留其 ID，指标全部为 null，`error` 提供原因，其余用户继续。顶层 `status=partial_failure` 表示至少一个用户失败；此时 CLI 仍输出完整结果，退出码为 **2**，不会把失败当成 0。全局参数、租户或数据库错误退出码为 **1**。
+
+需要某一个用户的逐日结果、具体文件和异常位置时，加回 `--user-id 7`。此模式的 `auditUserUsage()` 导出和 `auditVersion: 3` 输出保持不变；新增程序接口为 `auditTenantUsage()`。日期范围在两种模式下都必填。租户模式共享开始时读取的工作区归属与屏蔽元数据，逐用户用短只读事务读取消息，关闭连接后扫描文件；整个租户不是一个事务快照。
 
 单独交付的打包版 `.mjs` 已内联共享计算模块，不需要同步服务器的 `server/services` 文件；请把它放在服务项目根目录或 `scripts/` 下，复用现有 `better-sqlite3`，使用服务相同的 Node.js。仓库中的源码入口仍需要上述同版本模块。
 
 两端日期都包含；默认时区为当前进程的 `AI_USAGE_TIMEZONE`，未设置则为 `Asia/Shanghai`，可用 `--time-zone` 显式指定。核对看板时应使用相同时区和已发布的统计日期范围。
 
-脚本每次从头读取；夜间默认通过内容校验后复用已计算记录，设置 `AI_USAGE_INCREMENTAL_ENABLED=false` 时每个新批次从原始来源全量重建。全量重算期间保留已发布结果，成功后按租户覆盖，不叠加旧统计。夜间 `transcript_content_v16` 修复旧记录改写后增量缓存不失效的问题，并在升级后的首个可领取批次重建历史。已有 v3 打包脚本不受该缓存缺陷影响，无需更换。线上验收应先确认 `active_batch_id` 指向已发布的 v16 批次，见 [历史重建与验收](ai-usage-development.md#2026-10-15-历史文件改写与-v16-重建)；同日已发布批次不会因部署立即重开。
+脚本每次从头读取；夜间默认通过内容校验后复用已计算记录，设置 `AI_USAGE_INCREMENTAL_ENABLED=false` 时每个新批次从原始来源全量重建。全量重算期间保留已发布结果，成功后按租户覆盖，不叠加旧统计。夜间 `transcript_content_v16` 修复旧记录改写后增量缓存不失效的问题，并在升级后的首个可领取批次重建历史。已有 v3 打包脚本不受该缓存缺陷影响，但只支持单用户；要省略 `--user-id` 输出整个租户，请使用本次 v4 打包版。线上验收应先确认 `active_batch_id` 指向已发布的 v16 批次，见 [历史重建与验收](ai-usage-development.md#2026-10-15-历史文件改写与-v16-重建)；同日已发布批次不会因部署立即重开。
 
 
-添加 `--json` 导出完整结果，包括两项合计、逐日结果、文件扫描、SQL 与历史时长追溯样本，以及最多 100 条异常定位信息：
+单用户模式添加 `--json` 导出完整结果，包括两项合计、逐日结果、文件扫描、SQL 与历史时长追溯样本，以及最多 100 条异常定位信息：
 
 ```bash
 node scripts/audit-ai-usage-user.mjs \
@@ -35,10 +51,12 @@ node scripts/audit-ai-usage-user.mjs \
 - `ai_usage_turn_facts` 只用于实时捕获诊断，不参与时长。即使表内有 600 秒的完成请求、对应历史轮次只有 60 秒，也只计 60 秒；该表缺失不妨碍从历史文件恢复时长。没有可读主会话时，不用实时请求表或数据库消息首尾跨度补算。
 - **代码生成量**：复用服务 SQL 解析器，纳入 AI 正文、思考／推理及工具调用输入参数中的 SQL，兼容没有 role 的 thinking/tool_use 记录。同一回复跨内容块完全相同的 SQL 去重，用户输入、工具返回、系统状态及流式重复片段排除。读取绑定到目标用户与租户的 Claude 原生 JSONL；同一会话存在可读主文件时优先使用原生文件，否则使用 `agent_session_messages.normalized_json`。其他提供方使用消息表。所有工作区、提供方合并为该用户两项指标，不混入其他租户或用户。
 - SQL 按回复的业务日期统计。重复读取、消息修订、fork 继承、子代理分支、非 SQL 内容、来源优先级及被屏蔽记录沿用现有规则。仅解析换行结束的完整 JSONL 行；单行超过 2 MiB、损坏消息、不可读文件会记录诊断后继续。损坏或超长的完整 JSONL 行使其当前时长轮次失效，不拼接缺失边界；其他已完成轮次保留。未换行的文件尾部留待后续运行，外会话行单独跳过，两者都不撤回此前已完成的合法轮次。文件替换或缩短时丢弃该文件本次贡献。
-- 已知工作区归属错误或 `SESSION_SUMMARY_SOURCE_SCOPE_CONFLICT` 的会话跳过，正常会话继续。不存在租户或用户直接报错；不要求用户当前仍是租户成员，便于核算保留的历史。
-- 数据库以只读连接读取所需记录，结束读取事务并关闭连接后才扫描文件。权限、数据库锁、缺业务基础表等错误会退出并返回非零状态，不伪装成统计值 0。不会创建不存在的数据库。
+- 已知工作区归属错误或 `SESSION_SUMMARY_SOURCE_SCOPE_CONFLICT` 的会话跳过，正常会话继续。不存在租户直接报错；单用户模式不存在用户直接报错，租户模式中历史归属 ID 缺少用户元数据时保留该行并标记失败。不要求用户当前仍是租户成员，便于核算保留的历史。
+- 数据库以只读连接读取所需记录，结束读取事务并关闭连接后才扫描文件。租户枚举时的权限、数据库锁、缺业务基础表等全局错误会退出并返回非零状态；枚举完成后的单用户失败按上述规则保留错误并继续，不伪装成统计值 0。不会创建不存在的数据库。
 
 ## 结果说明
+
+以下详细诊断字段适用于 `--user-id` 单用户模式；租户模式通过 `users[]` 提供每人的指标和覆盖汇总。
 
 `metrics.aiActiveDurationMs` 和 `aiActiveDurationSeconds` 分别为毫秒、秒；`metrics.generatedSqlLines` 为 SQL 行数。`daily` 仅列出有有效贡献的日期；没有记录的日期不额外补行。
 
