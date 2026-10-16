@@ -1005,9 +1005,13 @@ test('tenant CLI defaults to per-user output and JSON without a user-id and rema
     directory: (await readdir(f.directory)).sort() };
   const text = await execute(process.execPath, tenantArguments(f), { timeout: 10000 });
   assert.equal(text.stderr, '');
-  assert.match(text.stdout, /用户ID\t用户名\tAI时长\(秒\)\tAI时长\(小时\)\tSQL行数/);
-  assert.match(text.stdout, /7\taudit-user\t60\t0\.0167\t2\t/);
-  assert.match(text.stdout, /8\tother-user\t不可用\t不可用\t0\t/);
+  assert.match(text.stdout, /时长不可用：1 个用户；SQL 不可用：0 个用户/);
+  assert.match(text.stdout, /用户 7（audit-user） \| AI 时长：60 秒（0\.0167 小时） \| SQL 行数：2/);
+  assert.match(text.stdout, /用户 8（other-user） \| AI 时长：不可用 \| SQL 行数：0/);
+  assert.match(text.stdout, /时长说明：仅覆盖已读到的主历史文件/);
+  assert.match(text.stdout, /时长说明：未读到归属明确的主历史文件/);
+  assert.match(text.stdout, /已读主历史：1 个文件；识别完成轮次：1/);
+  assert.doesNotMatch(text.stdout, /\t|readable_main_history_only/);
   const json = await execute(process.execPath, [...tenantArguments(f), '--json'], { timeout: 10000 });
   assert.equal(json.stderr, '');
   const result = JSON.parse(json.stdout);

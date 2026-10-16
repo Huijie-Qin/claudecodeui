@@ -12,7 +12,7 @@ node scripts/audit-ai-usage-user.mjs \
   --to 2026-10-13
 ```
 
-默认输出每个用户的 `userId`、用户名、AI 时长（秒／小时）、SQL 行数、时长／SQL 覆盖情况及错误。顺序逐用户核算，不并发开启多个用户的扫描。
+默认按用户分段输出，每项带明确的中文标签，避免终端制表符错位；包含用户 ID、用户名、AI 时长（秒／小时）、SQL 行数、来源说明、已读主历史文件数、完成轮次数、数据库消息数及跳过／错误。开头汇总时长和 SQL 各有多少用户不可用。顺序逐用户核算，不并发开启多个用户的扫描。
 
 用户集合为该租户现存 `tenant_users` 关系（包括 active、disabled、pending）与 `session_index`、`agent_session_runtime`、`agent_session_messages`、`ai_usage_turn_facts` 中历史归属用户的并集，按 ID 排序去重。无记录成员也列出；已离开租户但有保留历史的用户仍列出。不扫描全库 `users`，也不把其他租户的成员或历史记录计入。只复制数据库而未保留历史文件时，时长仍会显示不可用。
 
@@ -60,7 +60,7 @@ node scripts/audit-ai-usage-user.mjs \
 
 `metrics.aiActiveDurationMs` 和 `aiActiveDurationSeconds` 分别为毫秒、秒；`metrics.generatedSqlLines` 为 SQL 行数。`daily` 仅列出有有效贡献的日期；没有记录的日期不额外补行。
 
-`coverage=partial` 表示只能核算当前保留且可读取的来源，不保证历史完整。时长 **0** 表示已读到主会话，但所选日期没有有效完成时长；时长 **null / 不可用** 表示没有可读且归属明确的主会话，`coverage.durationReason=no_readable_main_history`。可读主会话的原因值为 `readable_main_history_only`。实时请求表是否有记录不决定时长覆盖。SQL 既无消息表也无可读原生文件时为 null。
+`coverage=partial` 表示只能核算当前保留且可读取的来源，不保证历史完整。JSON 中的 `coverage.durationReason=readable_main_history_only` 是时长来源说明，不是 SQL 指标，也不是错误；SQL 数值始终读取 `metrics.generatedSqlLines`。时长 **0** 表示已读到主会话，但所选日期没有有效完成时长；时长 **null / 不可用** 表示没有可读且归属明确的主会话，`coverage.durationReason=no_readable_main_history`。可读主会话的原因值为 `readable_main_history_only`。实时请求表是否有记录不决定时长覆盖。SQL 既无消息表也无可读原生文件时为 null。
 
 `skipped` 按原因计数，`database_copy_native_preferred` 属于 SQL 来源规则性排除；`history_duration_anomaly` 的具体原因见 `issues.anomalyReason`，结合 `malformed_*`、`unreadable_*`、归属冲突排查。无明确完成证据的轮次在 `durationDiagnostics.incomplete` 中计数，不伪装成已完成。
 

@@ -542,15 +542,26 @@ async function main() {
   if (tenantMode) {
     console.log(`租户 ${result.tenantId} / ${result.userCount} 个用户（成功 ${result.successfulUsers}，失败 ${result.failedUsers}）`);
     console.log(`日期 ${result.range.from} 至 ${result.range.to}（${result.range.timeZone}，含首尾日期）`);
-    console.log('用户ID\t用户名\tAI时长(秒)\tAI时长(小时)\tSQL行数\t时长覆盖\tSQL覆盖\t错误');
     const cell = value => String(value ?? '不可用').replace(/[\t\r\n]+/g, ' ');
+    const durationReasons = {
+      readable_main_history_only: '仅覆盖已读到的主历史文件',
+      no_readable_main_history: '未读到归属明确的主历史文件',
+      user_audit_failed: '该用户核算报错',
+    };
+    const durationUnavailable = result.users.filter(user => user.metrics.aiActiveDurationSeconds === null).length;
+    const sqlUnavailable = result.users.filter(user => user.metrics.generatedSqlLines === null).length;
+    console.log(`时长不可用：${durationUnavailable} 个用户；SQL 不可用：${sqlUnavailable} 个用户。不可用不代表 0。`);
     for (const user of result.users) {
       const metrics = user.metrics;
-      console.log([user.userId, user.userName, metrics.aiActiveDurationSeconds,
-        metrics.aiActiveDurationHours === null ? null : metrics.aiActiveDurationHours.toFixed(4), metrics.generatedSqlLines,
-        `${user.coverage.duration}:${user.coverage.durationReason}`, user.coverage.sql, user.error?.message || '-'].map(cell).join('\t'));
+      const duration = metrics.aiActiveDurationSeconds === null ? '不可用'
+        : `${metrics.aiActiveDurationSeconds} 秒（${metrics.aiActiveDurationHours.toFixed(4)} 小时）`;
+      console.log(`用户 ${user.userId}（${cell(user.userName)}） | AI 时长：${duration} | SQL 行数：${cell(metrics.generatedSqlLines)}`);
+      console.log(`  时长说明：${cell(durationReasons[user.coverage.durationReason] || user.coverage.durationReason)}；SQL 覆盖：${user.coverage.sql === 'unavailable' ? '无可用来源' : '仅覆盖当前可读来源'}`);
+      if (user.scanned) console.log(`  已读主历史：${user.scanned.durationFiles} 个文件；识别完成轮次：${user.scanned.completedHistoryTurns}；数据库消息：${user.scanned.databaseMessages}`);
+      if (user.skipped && Object.keys(user.skipped).length) console.log(`  跳过情况：${JSON.stringify(user.skipped)}`);
+      if (user.error) console.log(`  错误：${cell(user.error.message)}`);
     }
-    console.log('代码生成量按 SQL 物理行数计算。不可用与错误不记为 0；用 --user-id 查看某人的文件和逐日诊断。');
+    console.log('代码生成量按 SQL 物理行数计算。来源说明不是 SQL 行数；用 --user-id 查看某人的文件和逐日诊断，--json 导出结构化结果。');
     return;
   }
   const seconds = result.metrics.aiActiveDurationSeconds;
