@@ -18,7 +18,7 @@ export function createAiUsageService({ database, databasePath = database.name, e
   let nextAttempt = 0;
 
   function getStatus() {
-    return { enabled: config.enabled, runAt: config.runAt, windowEnd: config.windowEnd,
+    return { enabled: config.enabled, incrementalEnabled: config.incrementalEnabled, runAt: config.runAt, windowEnd: config.windowEnd,
       dataLagDays: config.dataLagDays, maxConcurrency: config.concurrency,
       timeZone: config.timeZone, nextRunAt: config.enabled ? getAiUsageSchedule(config, now()).nextRunAt : null,
       state, configurationError };
@@ -31,10 +31,11 @@ export function createAiUsageService({ database, databasePath = database.name, e
     // Only reached inside the idle window. No history API, message directory,
     // or database query is touched by daytime ticks.
     const pending = database.prepare(`SELECT 1 FROM tenants t WHERE t.status='active' AND (
-      NOT EXISTS(SELECT 1 FROM ai_usage_batches b WHERE b.tenant_id=t.id AND b.scheduled_for=? AND b.status='published')
+      NOT EXISTS(SELECT 1 FROM ai_usage_batches b WHERE b.tenant_id=t.id AND b.status='published' AND (b.scheduled_for=?
+        OR (json_extract(b.coverage_json,'$.completedWindowScheduledFor')=? AND b.target_through>=?)))
       OR EXISTS(SELECT 1 FROM ai_usage_batches b WHERE b.tenant_id=t.id AND b.status IN ('paused','failed','running'))
       OR NOT EXISTS(SELECT 1 FROM ai_usage_run_logs l WHERE l.tenant_id=t.id AND l.scheduled_for=?)
-    ) LIMIT 1`).get(schedule.scheduledFor, schedule.scheduledFor);
+    ) LIMIT 1`).get(schedule.scheduledFor, schedule.scheduledFor, schedule.targetThrough, schedule.scheduledFor);
     if (!pending) return;
     worker = workerFactory({ workerData: { databasePath: path.resolve(databasePath), config } });
     state = 'running';

@@ -20,7 +20,9 @@ export function createAiUsageRunLog(database, { schedule, config, workerToken, n
         AND b.tenant_id=ai_usage_run_logs.tenant_id AND b.status='running' AND b.lease_until>?))`)
       .run(time, time, time, time);
     const existingPublication = database.prepare(`SELECT id,completed_at,coverage_json FROM ai_usage_batches
-      WHERE tenant_id=? AND scheduled_for=? AND status='published'`);
+      WHERE tenant_id=? AND status='published' AND (scheduled_for=?
+        OR (json_extract(coverage_json,'$.completedWindowScheduledFor')=? AND target_through>=?))
+      ORDER BY completed_at DESC LIMIT 1`);
     const insert = database.prepare(`INSERT INTO ai_usage_run_logs
       (scheduled_for,tenant_id,run_date,time_zone,window_ends_at,target_through,queue_position,status,
        batch_id,worker_lease_token,incremental_enabled,updated_at,finished_at,reason,stage,published_batches,last_published_batch_id,last_published_at)
@@ -42,7 +44,7 @@ export function createAiUsageRunLog(database, { schedule, config, workerToken, n
       WHERE scheduled_for=@scheduled AND tenant_id=@tenant
         AND (status<>'published' OR batch_id IS NOT @batch OR last_published_batch_id IS NOT @batch OR published_batches<1)`);
     for (const [position, tenant] of tenants.entries()) {
-      const published = existingPublication.get(tenant.id, scheduled);
+      const published = existingPublication.get(tenant.id, scheduled, scheduled, schedule.targetThrough);
       const publishedMode = published ? JSON.parse(published.coverage_json || '{}').incrementalEnabled : null;
       const observedMode = typeof publishedMode === 'boolean' ? Number(publishedMode) : null;
       insert.run({ scheduled, tenant: tenant.id, date: localParts(scheduled, config.timeZone).date,
@@ -70,8 +72,9 @@ export function createAiUsageRunLog(database, { schedule, config, workerToken, n
   }
 
   function notClaimed(tenantId) {
-    const published = database.prepare("SELECT id,completed_at FROM ai_usage_batches WHERE tenant_id=? AND scheduled_for=? AND status='published'")
-      .get(tenantId, scheduled);
+    const published = database.prepare(`SELECT id,completed_at FROM ai_usage_batches WHERE tenant_id=? AND status='published'
+      AND (scheduled_for=? OR (json_extract(coverage_json,'$.completedWindowScheduledFor')=? AND target_through>=?))`)
+      .get(tenantId, scheduled, scheduled, schedule.targetThrough);
     if (published) return;
     const held = database.prepare("SELECT id FROM ai_usage_batches WHERE tenant_id=? AND status='running' AND lease_until>? LIMIT 1")
       .get(tenantId, now().toISOString());
@@ -85,9 +88,10 @@ export function createAiUsageRunLog(database, { schedule, config, workerToken, n
       .run({ ...owner(batch), stage: progress.stage || null, time: now().toISOString() });
   }
 
-  function published(batch) {
+  function published(batch, coverage = {}) {
     const time = now().toISOString();
-    const currentWindow = batch.scheduled_for === scheduled;
+    const currentWindow = batch.scheduled_for === scheduled
+      || (coverage.completedWindowScheduledFor === scheduled && batch.target_through >= schedule.targetThrough);
     database.prepare(`UPDATE ai_usage_run_logs SET status=@status,stage='publish',updated_at=@time,finished_at=@finished,
       reason=@reason,error=NULL,published_batches=published_batches+CASE WHEN last_published_batch_id IS @batch THEN 0 ELSE 1 END,
       last_published_batch_id=@batch,last_published_at=@time

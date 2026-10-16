@@ -115,6 +115,13 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
       let batch = database.prepare(`SELECT * FROM ai_usage_batches WHERE tenant_id=?
         AND status IN ('running','paused','failed') ORDER BY scheduled_for LIMIT 1`).get(tenantId);
       if (!batch) {
+        // An older full rebuild can finish after catching up to this window.
+        // Its original scheduled_for remains the identity of the logical job.
+        if (database.prepare(`SELECT 1 FROM ai_usage_batches WHERE tenant_id=? AND status='published'
+          AND target_through>=? AND (scheduled_for=? OR json_extract(coverage_json,'$.completedWindowScheduledFor')=?)`)
+          .get(tenantId, schedule.targetThrough, schedule.scheduledFor, schedule.scheduledFor)) return null;
+        // A published same-day job is immutable. Reopening one requires an
+        // explicit rebuild generation, not an INSERT against its unique key.
         if (database.prepare('SELECT 1 FROM ai_usage_batches WHERE tenant_id=? AND scheduled_for=?')
           .get(tenantId, schedule.scheduledFor)) return null;
         const id = randomUUID();
@@ -185,6 +192,41 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
     }).immediate();
   }
 
+  // Finish the saved pass before advancing an old full rebuild. Keep parsed
+  // facts and verified file offsets, but rediscover sources and rebuild every
+  // projection for the new cutoff before publishing the same logical batch.
+  // Bound this to one refresh: a slow scan spanning multiple nights must not
+  // chase a moving cutoff forever and discard each prepared projection.
+  function advanceFullRebuildTarget(batch, progress, schedule, config) {
+    if (JSON.parse(batch.coverage_json || '{}').incrementalEnabled !== false
+      || (progress.targetRefreshCount || 0) >= 1 || batch.target_through >= schedule.targetThrough) return false;
+    const nextProgress = {
+      ...(progress.dataRevision == null ? {} : { dataRevision: progress.dataRevision }),
+      ...(progress.fullRebuildInitialized ? { fullRebuildInitialized: true } : {}),
+      originalTargetThrough: progress.originalTargetThrough || batch.target_through,
+      targetRefreshCount: (progress.targetRefreshCount || 0) + 1,
+      stage: 'bootstrap',
+    };
+    const refreshedAt = clock();
+    database.transaction(() => {
+      assertLease(batch, refreshedAt);
+      requeueAiUsageReport(database, batch.tenant_id);
+      clearCandidate(batch);
+      database.prepare(`UPDATE ai_usage_tenant_state SET bootstrapped=0,bootstrap_json='{}' WHERE tenant_id=?`)
+        .run(batch.tenant_id);
+      database.prepare('UPDATE ai_usage_batches SET target_through=?,source_read_at=? WHERE id=?')
+        .run(schedule.targetThrough, refreshedAt.toISOString(), batch.id);
+      checkpoint(batch, nextProgress, config, refreshedAt);
+    }).immediate();
+    // Do not alter the caller's in-memory checkpoint if the transaction failed.
+    batch.target_through = schedule.targetThrough;
+    batch.source_read_at = refreshedAt.toISOString();
+    batch.progress_json = JSON.stringify(nextProgress);
+    for (const key of Object.keys(progress)) delete progress[key];
+    Object.assign(progress, nextProgress);
+    return true;
+  }
+
   function initializeStaging(batch, progress, config) {
     if (progress.stagingInitialized) return;
     database.transaction(() => {
@@ -248,6 +290,6 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
     }).immediate();
   }
 
-  return { database, put, claim, assertLease, checkpoint, finish, initializeFullRebuild, initializeStaging, publish,
+  return { database, put, claim, assertLease, checkpoint, finish, initializeFullRebuild, advanceFullRebuildTarget, initializeStaging, publish,
     transaction: (fn) => database.transaction(fn).immediate() };
 }

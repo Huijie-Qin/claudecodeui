@@ -77,17 +77,18 @@ test('a shortened window records every eligible tenant, including tenants that n
   }
 });
 
-test('publishing an old resumed batch keeps the new window pending until its own current batch finishes', async t => {
+test('publishing an old incremental batch keeps the new window pending until its own current batch finishes', async t => {
   const f = await fixture(t, 1);
+  const incremental = { ...configured(1), incrementalEnabled: true };
   let stop = false;
-  const paused = await f.run(night, { shouldStop: () => stop, logger: { ...quiet, info(message) {
+  const paused = await f.run(night, { config: incremental, shouldStop: () => stop, logger: { ...quiet, info(message) {
     if (message === '[AI usage] batch_started') stop = true;
   } } });
   assert.equal(paused.status, 'paused');
   const oldLog = f.logs()[0];
   assert.equal(oldLog.status, 'paused');
   const nextNight = '2026-09-12T18:10:00.000Z';
-  assert.equal((await f.run(nextNight)).published, 1);
+  assert.equal((await f.run(nextNight, { config: incremental })).published, 1);
   const backlog = f.logs(nextNight)[0];
   assert.equal(backlog.status, 'pending');
   assert.equal(backlog.reason, 'backlog_remaining');
@@ -99,15 +100,57 @@ test('publishing an old resumed batch keeps the new window pending until its own
   assert.ok(backlog.last_published_at);
   assert.ok(backlog.target_through > f.db.prepare('SELECT target_through FROM ai_usage_batches WHERE id=?').get(oldLog.batch_id).target_through);
   assert.equal(f.logs()[0].status, 'paused', 'a later window cannot retroactively complete the earlier window log');
-  assert.equal((await f.run(nextNight)).published, 1);
+  assert.equal((await f.run(nextNight, { config: incremental })).published, 1);
   const completed = f.logs(nextNight)[0];
   assert.equal(completed.status, 'published');
   assert.equal(completed.published_batches, 2);
   assert.equal(completed.attempt_count, 2);
   assert.notEqual(completed.batch_id, oldLog.batch_id);
   assert.equal(completed.last_published_batch_id, completed.batch_id);
-  assert.equal((await f.run(nextNight)).published, 0);
+  assert.equal((await f.run(nextNight, { config: incremental })).published, 0);
   assert.deepEqual(f.logs(nextNight)[0], completed, 'a completed same-window tick neither counts nor timestamps a duplicate attempt');
+});
+
+test('a resumed full rebuild satisfies the current window and its durable marker prevents a duplicate rebuild after log recovery', async t => {
+  const f = await fixture(t, 1);
+  let stop = false;
+  assert.equal((await f.run(night, { shouldStop: () => stop, logger: { ...quiet, info(message) {
+    if (message === '[AI usage] batch_started') stop = true;
+  } } })).status, 'paused');
+  const original = f.logs()[0];
+  const nextNight = '2026-09-14T18:10:00.000Z';
+  const schedule = getAiUsageSchedule(configured(1), new Date(nextNight));
+  assert.equal((await f.run(nextNight)).published, 1);
+  const batch = f.db.prepare('SELECT * FROM ai_usage_batches WHERE id=?').get(original.batch_id);
+  assert.equal(batch.scheduled_for, original.scheduled_for, 'catchup retains the original logical batch identity');
+  assert.equal(batch.target_through, schedule.targetThrough);
+  assert.equal(JSON.parse(batch.coverage_json).completedWindowScheduledFor, schedule.scheduledFor);
+  assert.equal(JSON.parse(batch.coverage_json).targetRefreshCount, 1);
+  const completed = f.logs(nextNight)[0];
+  assert.equal(completed.status, 'published');
+  assert.equal(completed.batch_id, original.batch_id);
+  assert.equal(completed.published_batches, 1);
+  assert.equal(completed.attempt_count, 1);
+  assert.equal(completed.reason, null);
+  assert.ok(completed.finished_at);
+  assert.equal(f.logs()[0].status, 'paused', 'the original window keeps its observed historical outcome');
+  assert.equal((await f.run(nextNight)).published, 0);
+  assert.deepEqual(f.logs(nextNight)[0], completed);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM ai_usage_batches').get().n, 1);
+
+  // A deployment/recovery may recreate the current log after the old-scheduled
+  // batch has published. Its persisted completion marker is authoritative.
+  f.db.prepare('DELETE FROM ai_usage_run_logs WHERE scheduled_for=?').run(schedule.scheduledFor);
+  assert.equal((await f.run(nextNight)).published, 0);
+  const recovered = f.logs(nextNight)[0];
+  assert.equal(recovered.status, 'published');
+  assert.equal(recovered.reason, 'already_published');
+  assert.equal(recovered.batch_id, original.batch_id);
+  assert.equal(recovered.attempt_count, 0);
+  assert.equal(recovered.published_batches, 1);
+  assert.equal(recovered.finished_at, batch.completed_at);
+  assert.equal(f.db.prepare('SELECT effective_status FROM ai_usage_run_log_status WHERE scheduled_for=?')
+    .get(schedule.scheduledFor).effective_status, 'published');
 });
 
 test('pause and tenant publication failure retain the saved stage and explain why later tenants did or did not run', async t => {
@@ -306,13 +349,16 @@ test('a new owner records abandoned running attempts as interrupted without inve
   assert.equal(recovered.updated_at, nextNight, 'the recovery timestamp is when abandonment was detected');
   assert.equal(recovered.finished_at, null, 'recovery cannot invent the original process termination time');
   assert.equal(recovered.attempt_count, 1);
-  const pending = f.logs(nextNight)[0];
-  assert.equal(pending.status, 'pending');
-  assert.equal(pending.reason, 'backlog_remaining');
-  assert.equal(pending.batch_id, abandoned.batch_id);
-  assert.equal(pending.published_batches, 1);
-  assert.equal((await f.run(nextNight)).published, 1);
-  assert.equal(f.logs(nextNight)[0].status, 'published');
-  assert.equal(f.logs(nextNight)[0].published_batches, 2);
+  const completed = f.logs(nextNight)[0];
+  assert.equal(completed.status, 'published');
+  assert.equal(completed.reason, null);
+  assert.equal(completed.batch_id, abandoned.batch_id);
+  assert.equal(completed.published_batches, 1);
+  const batch = f.db.prepare('SELECT target_through,coverage_json FROM ai_usage_batches WHERE id=?').get(abandoned.batch_id);
+  const schedule = getAiUsageSchedule(configured(1), new Date(nextNight));
+  assert.equal(batch.target_through, schedule.targetThrough);
+  assert.equal(JSON.parse(batch.coverage_json).completedWindowScheduledFor, schedule.scheduledFor);
+  assert.equal((await f.run(nextNight)).published, 0);
+  assert.equal(f.logs(nextNight)[0].published_batches, 1);
   assert.equal(f.db.prepare('SELECT COUNT(*) n FROM ai_usage_run_logs').get().n, 2, 'only the two observed nightly windows receive log rows');
 });
