@@ -359,3 +359,81 @@ test('full rebuild preserves published Skill and Hook metrics from real source r
   assert.deepEqual(skillDetails(), beforeSkillDetails, 'both formal Skill detail tables keep the same published metrics');
   assert.deepEqual(raw(), originals, 'full mode does not alter Hook inputs, Skill publication history, bindings or captured context');
 });
+
+test('full rebuild replaces every retained historical date instead of only the latest day and removes a vanished historical date', async t => {
+  const f = await fixture(t);
+  const expected = [
+    { date: '2026-09-01', seconds: 60, sqlLines: 1 },
+    { date: '2026-09-05', seconds: 180, sqlLines: 2 },
+    { date: '2026-09-10', seconds: 120, sqlLines: 3 },
+  ];
+  await f.write(expected.flatMap(({ date, seconds, sqlLines }) => {
+    const startedAt = `${date}T02:00:00.000Z`;
+    const completedAt = new Date(Date.parse(startedAt) + seconds * 1000).toISOString();
+    const sql = Array.from({ length: sqlLines }, (_, index) => `SELECT ${index + 1};`).join('\n');
+    return [user(`request-${date}`, startedAt), reply(`answer-${date}`, completedAt, sql)];
+  }));
+  const vanishedFile = path.join(path.dirname(f.file), 'vanished-history.jsonl');
+  f.db.prepare("INSERT INTO session_index VALUES(1,10,1,'claude','vanished-history')").run();
+  f.db.prepare("INSERT INTO agent_session_runtime VALUES(2,1,10,1,'claude','vanished-history','runtime-b',?)").run(f.home);
+  await writeFile(vanishedFile, lines([
+    user('vanished-request', '2026-09-03T02:00:00.000Z'),
+    reply('vanished-answer', '2026-09-03T02:00:45.000Z', 'SELECT 1;\nSELECT 2;\nSELECT 3;\nSELECT 4;'),
+  ]));
+  const publishedDay = date => ({
+    seconds: f.db.prepare(`SELECT SUM(ai_active_duration_seconds) value FROM ai_dashboard_ai_detail
+      WHERE tenant_id=1 AND user_id=1 AND stat_date=?`).get(date).value,
+    sqlLines: f.db.prepare(`SELECT SUM(generated_sql_lines) value FROM ai_dashboard_sql_generation_detail
+      WHERE tenant_id=1 AND user_id=1 AND stat_date=?`).get(date).value,
+  });
+  assert.equal((await f.run()).published, 1);
+  for (const { date, seconds, sqlLines } of expected) assert.deepEqual(publishedDay(date), { seconds, sqlLines });
+  assert.deepEqual(publishedDay('2026-09-03'), { seconds: 45, sqlLines: 4 });
+  const retainedFile = await stat(f.file);
+  // Reproduce older wrong persisted totals without touching native history or
+  // queuing its old dates. The latest day's already-correct result stays intact.
+  for (const date of ['2026-09-01', '2026-09-05']) {
+    for (const table of ['ai_usage_fact_rows', 'ai_usage_report_rows']) {
+      f.db.prepare(`UPDATE ${table} SET value_json=json_set(value_json,'$.durationMs',15000)
+        WHERE tenant_id=1 AND dataset='turns' AND stat_date=?`).run(date);
+      f.db.prepare(`UPDATE ${table} SET value_json=json_set(value_json,'$.generatedLines',99)
+        WHERE tenant_id=1 AND dataset='sql_generations' AND stat_date=?`).run(date);
+    }
+    f.db.prepare(`UPDATE ai_dashboard_ai_detail SET ai_active_duration_seconds=15
+      WHERE tenant_id=1 AND stat_date=? AND ai_active_duration_seconds IS NOT NULL`).run(date);
+    f.db.prepare('UPDATE ai_dashboard_sql_generation_detail SET generated_sql_lines=99 WHERE tenant_id=1 AND stat_date=?').run(date);
+    assert.deepEqual(publishedDay(date), { seconds: 15, sqlLines: 99 }, `${date} really has a wrong published snapshot`);
+    assert.equal(f.db.prepare('SELECT 1 FROM ai_usage_dirty_partitions WHERE tenant_id=1 AND stat_date=?').get(date), undefined,
+      `${date} has no pending incremental work that could disguise an incomplete full rebuild`);
+  }
+  assert.deepEqual(publishedDay('2026-09-10'), { seconds: 120, sqlLines: 3 });
+  await unlink(vanishedFile);
+  f.next();
+  assert.equal((await f.run(fullConfig)).published, 1);
+  const databasePath = path.join(f.home, 'historical-audit.db');
+  await writeFile(databasePath, f.db.serialize());
+  for (const { date, seconds, sqlLines } of expected) {
+    const audit = await auditUserUsage({ databasePath, tenantId: 1, userId: 1,
+      from: date, to: date, timeZone: 'Asia/Shanghai' });
+    assert.deepEqual({ seconds: audit.metrics.aiActiveDurationSeconds, sqlLines: audit.metrics.generatedSqlLines },
+      { seconds, sqlLines }, `${date} is independently recovered from its native source`);
+    assert.deepEqual(publishedDay(date), { seconds, sqlLines }, `${date} formal tables are replaced by the full rebuild`);
+    assert.equal(f.db.prepare(`SELECT SUM(json_extract(value_json,'$.durationMs')) value FROM ai_usage_report_rows
+      WHERE tenant_id=1 AND dataset='turns' AND stat_date=?`).get(date).value, seconds * 1000,
+    `${date} canonical published duration is rebuilt too`);
+    assert.equal(f.db.prepare(`SELECT SUM(json_extract(value_json,'$.generatedLines')) value FROM ai_usage_report_rows
+      WHERE tenant_id=1 AND dataset='sql_generations' AND stat_date=?`).get(date).value, sqlLines,
+    `${date} canonical published SQL is rebuilt too`);
+  }
+  assert.deepEqual(publishedDay('2026-09-03'), { seconds: null, sqlLines: null }, 'a disappeared old source cannot leave its former totals behind');
+  assert.equal(f.db.prepare(`SELECT 1 FROM ai_usage_report_rows WHERE tenant_id=1 AND stat_date='2026-09-03'
+    AND dataset IN ('turns','sql_generations','interactions','session_usage','daily_active_users')`).get(), undefined);
+  const vanishedAudit = await auditUserUsage({ databasePath, tenantId: 1, userId: 1,
+    from: '2026-09-03', to: '2026-09-03', timeZone: 'Asia/Shanghai' });
+  assert.equal(vanishedAudit.metrics.aiActiveDurationSeconds, 0);
+  assert.equal(vanishedAudit.metrics.generatedSqlLines, 0);
+  const after = await stat(f.file);
+  assert.deepEqual({ inode: after.ino, size: after.size, mtime: after.mtimeMs },
+    { inode: retainedFile.ino, size: retainedFile.size, mtime: retainedFile.mtimeMs },
+    'old dates are recomputed even though their retained native file did not change');
+});

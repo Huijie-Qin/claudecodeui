@@ -373,7 +373,21 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
   }
 
   try {
-    const tenants = database.prepare("SELECT id FROM tenants WHERE status='active' ORDER BY id").all();
+    // Queue the least up-to-date tenants first. A full rebuild starts again
+    // each night, so fixed ID ordering can spend every window on tenants whose
+    // reports are already fresh while later tenants never get a first batch.
+    const tenants = database.prepare(`WITH unfinished AS (
+      SELECT tenant_id,MIN(scheduled_for) AS oldest_scheduled_for FROM ai_usage_batches
+      WHERE status IN ('running','paused','failed') GROUP BY tenant_id
+    ) SELECT t.id FROM tenants t
+      LEFT JOIN ai_usage_tenant_state s ON s.tenant_id=t.id
+      LEFT JOIN ai_usage_batches p ON p.id=s.active_batch_id AND p.tenant_id=t.id AND p.status='published'
+      LEFT JOIN unfinished u ON u.tenant_id=t.id
+      WHERE t.status='active'
+      ORDER BY CASE WHEN p.id IS NULL THEN 0 ELSE 1 END,
+        COALESCE(p.target_through,''),
+        CASE WHEN u.oldest_scheduled_for IS NOT NULL THEN 0 ELSE 1 END,
+        COALESCE(p.completed_at,''),u.oldest_scheduled_for,t.id`).all();
     let cursor = 0;
     async function runSlot() {
       try {
