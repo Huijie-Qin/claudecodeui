@@ -449,14 +449,18 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
       runtime.tenant_id, runtime.workspace_id, runtime.user_id, runtime.runtime_home_path,
     ]), runtime]));
     const seen = new Set();
-    const afterCursor = (position) => {
+    // Partial positions compare only their supplied prefix. A matching parent
+    // must remain discoverable so the cursor's unfinished subagents/sidecar can
+    // resume, while older homes/projects/sessions need no filesystem traversal.
+    const compareCursor = (position) => {
       const cursor = progress.fileCursor;
-      if (!cursor) return true;
+      if (!cursor) return 1;
       for (let index = 0; index < position.length; index++) {
-        if (position[index] !== cursor[index]) return position[index] > cursor[index];
+        if (position[index] !== cursor[index]) return position[index] > cursor[index] ? 1 : -1;
       }
-      return false;
+      return 0;
     };
+    const afterCursor = position => compareCursor(position) > 0;
     async function visit(file, scope, subagentId, position, isDisplayCommands = false) {
       if (!afterCursor(position)) return;
       const sourceKey = `jsonl:${logicalSessionKey(scope)}:${file}`;
@@ -476,12 +480,15 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
       return entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     }
     for (const [homeKey, runtime] of [...homes.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+      if (compareCursor([homeKey]) < 0) continue;
       const root = path.join(runtime.runtime_home_path, '.claude', 'projects');
       for (const project of await sortedEntries(root)) {
-        if (!project.isDirectory()) continue;
+        if (!project.isDirectory() || compareCursor([homeKey, project.name]) < 0) continue;
         const directory = path.join(root, project.name);
         for (const entry of await sortedEntries(directory)) {
           if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+          const position = [homeKey, project.name, entry.name];
+          if (compareCursor(position) < 0) continue;
           const sessionId = entry.name.slice(0, -6);
           const scope = { ...runtime, provider_session_id: sessionId };
           if (!sessions.has(logicalSessionKey(scope))) continue;
@@ -489,20 +496,23 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
           const key = `jsonl:${logicalSessionKey(scope)}:${file}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          await visit(file, scope, null, [homeKey, project.name, entry.name, '0']);
-          for (const sub of await sortedEntries(path.join(directory, sessionId, 'subagents'))) {
-            if (sub.isFile() && sub.name.endsWith('.jsonl')) {
-              await visit(path.join(directory, sessionId, 'subagents', sub.name), scope, sub.name.slice(0, -6).replace(/^agent-/, ''),
-                [homeKey, project.name, entry.name, `1:${sub.name}`]);
+          await visit(file, scope, null, [...position, '0']);
+          const displayPosition = [...position, '2:display-commands'];
+          if (afterCursor(displayPosition)) {
+            for (const sub of await sortedEntries(path.join(directory, sessionId, 'subagents'))) {
+              if (sub.isFile() && sub.name.endsWith('.jsonl')) {
+                await visit(path.join(directory, sessionId, 'subagents', sub.name), scope, sub.name.slice(0, -6).replace(/^agent-/, ''),
+                  [...position, `1:${sub.name}`]);
+              }
             }
+            const displayCommands = path.join(directory, sessionId, 'display-commands.jsonl');
+            // The existing UI sidecar supplies only the original command name.
+            // Its file mtime is never used as a business timestamp.
+            try {
+              if ((await fs.stat(displayCommands)).isFile()) await visit(displayCommands, scope, null,
+                displayPosition, true);
+            } catch (error) { if (!['ENOENT', 'EACCES', 'ENOTDIR'].includes(error.code)) throw error; }
           }
-          const displayCommands = path.join(directory, sessionId, 'display-commands.jsonl');
-          // The existing UI sidecar supplies only the original command name.
-          // Its file mtime is never used as a business timestamp.
-          try {
-            if ((await fs.stat(displayCommands)).isFile()) await visit(displayCommands, scope, null,
-              [homeKey, project.name, entry.name, '2:display-commands'], true);
-          } catch (error) { if (!['ENOENT', 'EACCES', 'ENOTDIR'].includes(error.code)) throw error; }
         }
       }
     }

@@ -1,5 +1,50 @@
 # AI 使用报表：首版开发与运行说明
 
+## 2026-10-16 全量续跑进度与看板发布修复
+
+修复了两条可复现的停滞／陈旧结果路径：
+
+- 原生文件扫描恢复时，虽然跳过了已完成文件内容，仍会打开这些文件的子代理目录并检查附属文件。在慢文件系统、大量历史目录下，重复遍历可能耗尽整个窗口，导致连续几夜停在同一个 `fileCursor`。现在按持久游标跳过已经完成的运行目录、项目和主会话子树，当前主会话未完成的子代理／附属文件仍继续处理。新批次与追赶扫描从头发现来源，因此排序更早的新文件不会永久遗漏。
+- 跨夜恢复旧全量批次，以前会按旧 `target_through` 发布，出现 `completed_at` 是今天而看板仍截止到几天前，并且已扫过的历史文件改写不会再检查。现在先完成保存的全量扫描，再在发布前将目标推进到实际运行窗口，重新发现来源、校验文件内容、处理新消息并重建所有候选投影；来源变化会重读。校验通过后才在同一事务替换正式报表、主题明细、会话汇总及 `active_batch_id`。
+
+初次全量仍清理该租户全部派生缓存，原始记录与旧正式结果保留。追赶时保留已经从原始来源重建的事实及文件读取位置，经内容指纹验证后复用，避免把已经完成的全量解析再次清零。目标变更、候选清理和断点写入原子提交；追赶阶段暂停／重启后继续，不能只更新截止日期而沿用旧候选。
+
+每个逻辑全量批次最多推进目标一次，然后固定目标完成；否则单次扫描本身跨多个窗口的大租户会不断追逐新的日期，永远无法发布。如果追赶也跨夜，最终发布可能仍落后当晚目标，此时日志仍记 `pending/backlog_remaining`，需要后续批次继续，不冒充全部赶上。不能保证任意规模的所有租户一夜完成。
+
+`full_rebuild_target_advanced` 日志表示开始补齐旧任务的截止范围；`coverage_json.originalTargetThrough`、`targetRefreshCount` 保存追赶记录，`source_read_at` 更新为最后一轮来源扫描开始时间。只有成功发布且覆盖当前窗口目标时才写入 `coverage_json.completedWindowScheduledFor`，调度器、领取和日志均识别它，同窗口不会因为批次原计划日期较早而马上再开一轮全量。增量旧批次沿用原续跑策略；同日已经发布的批次不会因重启直接重开。
+
+### 部署后的实际验收
+
+在服务真实 `.env` 设置 `AI_USAGE_ENABLED=true`、`AI_USAGE_INCREMENTAL_ENABLED=false`，构建并重启后端。`GET /api/ai-usage/status` 现在返回实际加载的 `incrementalEnabled`；它为 false 才表示当前配置全量。`coverage.incrementalEnabled` 则表示当前看板已发布批次的实际模式，两者可能在尚未发布新结果时不同。若使用 `dist-server` 启动，仅替换 `server/` 源码不会让运行中的旧后端更新。
+
+在业务数据库检查每个活跃租户的正式批次及本次执行状态；以下查询自动选择日志中最新的实际运行窗口：
+
+```sql
+WITH latest AS (SELECT MAX(scheduled_for) scheduled_for FROM ai_usage_run_logs)
+SELECT t.id AS tenant_id,
+       l.effective_status AS run_status, l.stage, l.reason, l.error,
+       l.target_through AS expected_through,
+       b.id AS active_batch_id, b.status AS active_status,
+       b.target_through AS published_through,
+       datetime(b.completed_at, '+8 hours') AS completed_beijing,
+       json_extract(b.coverage_json, '$.incrementalEnabled') AS incremental,
+       json_extract(b.progress_json, '$.fullRebuildInitialized') AS full_initialized,
+       json_extract(b.coverage_json, '$.targetRefreshCount') AS target_refresh_count,
+       CASE WHEN b.status='published' AND b.target_through>=l.target_through
+         AND l.effective_status='published' THEN 1 ELSE 0 END AS reached_window_target
+FROM tenants t
+LEFT JOIN ai_usage_tenant_state s ON s.tenant_id=t.id
+LEFT JOIN ai_usage_batches b ON b.id=s.active_batch_id AND b.tenant_id=t.id
+LEFT JOIN ai_usage_run_log_status l ON l.tenant_id=t.id
+  AND l.scheduled_for=(SELECT scheduled_for FROM latest)
+WHERE t.status='active'
+ORDER BY reached_window_target, t.id;
+```
+
+全量验收应同时看到 `incremental=0`、`full_initialized=1`、新批次实际发布时间及正确覆盖范围；`reached_window_target=1` 表示该租户已完成日志中最新窗口目标。若最新窗口本身是几天前，仍须先排查调度是否启动；此标志不能替代日期新鲜度检查。之后用相同用户、日期和时区的独立核算结果核对看板 API 的逐日 AI 时长与 SQL 行数。
+
+本地端到端验证用真实 SQLite、历史 JSONL 和 HTTP 看板接口，故意写坏旧正式结果与派生缓存，再改写早期历史、加入最近日期及新会话，并经历跨日暂停和数据库重开。验证对象包括历史逐日指标、截止日期、批次切换、失败/暂停时旧快照保留，以及恢复后的单用户脚本一致性；不以任务返回 `completed` 代替数据核对。旧版本在该用例中会把今天的发布时间配上三天前的截止日期，且早期文件已改为 600 秒时接口仍给 120 秒；修复后历史时长与 SQL 行数逐日匹配原始核算。完整回归 **464 项通过**，三个真实 HTTP 端到端用例包含并发 1／2、第二次窗口耗尽及重启恢复。
+
 ## 2026-10-16 夜间执行日志与租户逐用户复核
 
 新增 `ai_usage_run_logs`，按实际调度窗口预登记全部活跃租户，记录队列、开始/完成、执行阶段、全量/增量模式、暂停/失败原因和发布数量。查询 `ai_usage_run_log_status.effective_status` 可识别崩溃或租约过期后的异常中断；旧批次续跑归到实际执行的那一晚，补完旧批次但尚未赶上当前窗口时仍算未完成。部署前的逐晚执行历史不能追溯补造。可直接复制 [执行日志查询 SQL](ai-usage-run-logs.md)。

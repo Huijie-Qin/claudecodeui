@@ -155,8 +155,9 @@ test('changing lag on a paused batch restarts its candidate while keeping the lo
 
 test('scheduler exposes the configured lag and disables invalid settings without reading data', () => {
   const database = { prepare() { throw new Error('Unexpected query'); } };
-  const today = createAiUsageService({ database, databasePath: '/tmp/unused.db', env: { AI_USAGE_DATA_LAG_DAYS: '0' } });
+  const today = createAiUsageService({ database, databasePath: '/tmp/unused.db', env: { AI_USAGE_DATA_LAG_DAYS: '0', AI_USAGE_INCREMENTAL_ENABLED: 'false' } });
   assert.equal(today.getStatus().dataLagDays, 0);
+  assert.equal(today.getStatus().incrementalEnabled, false);
   const messages = [];
   const invalid = createAiUsageService({ database, databasePath: '/tmp/unused.db',
     env: { AI_USAGE_ENABLED: 'true', AI_USAGE_DATA_LAG_DAYS: '-1' }, logger: { error: message => messages.push(message) } });

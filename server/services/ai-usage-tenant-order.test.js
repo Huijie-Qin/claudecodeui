@@ -100,7 +100,7 @@ test('the oldest published coverage runs before a newer snapshot with an unfinis
   assert.equal(result.started[1].batchId, pending, 'the newer tenant still resumes its existing logical batch when its turn arrives');
 });
 
-test('equal published coverage resumes an unfinished tenant first and a later same-window tick can schedule its new batch', async t => {
+test('equal published coverage resumes an unfinished full tenant first and catchup prevents a second same-window rebuild', async t => {
   const f = await fixture(t);
   assert.equal((await f.run('2026-09-11T18:10:00.000Z')).published, 2);
   const paused = await f.run('2026-09-12T18:10:00.000Z', { active: [2], pauseAfterStart: true });
@@ -113,13 +113,14 @@ test('equal published coverage resumes an unfinished tenant first and a later sa
   assert.equal(resumed.started[0].batchId, pending.id);
   assert.equal(f.db.prepare('SELECT status FROM ai_usage_batches WHERE id=?').get(pending.id).status, 'published');
   const sameWindow = await f.run(at);
-  assert.equal(sameWindow.published, 1);
-  assert.deepEqual(sameWindow.started.map(entry => entry.tenantId), [2],
-    'publishing an older resumed batch does not falsely mark the current scheduled window complete');
-  assert.notEqual(sameWindow.started[0].batchId, pending.id);
-  const current = f.db.prepare('SELECT scheduled_for FROM ai_usage_batches WHERE id=?').get(sameWindow.started[0].batchId);
-  assert.equal(current.scheduled_for, getAiUsageSchedule(config, new Date(at)).scheduledFor);
-  assert.equal((await f.run(at)).published, 0, 'both tenants now have exactly one completed batch for this window');
+  assert.equal(sameWindow.published, 0);
+  assert.deepEqual(sameWindow.started, [], 'the resumed full batch already covers this window after catchup');
+  const current = f.db.prepare('SELECT scheduled_for,target_through,coverage_json FROM ai_usage_batches WHERE id=?').get(pending.id);
+  const schedule = getAiUsageSchedule(config, new Date(at));
+  assert.equal(current.scheduled_for, pending.scheduled_for);
+  assert.equal(current.target_through, schedule.targetThrough);
+  assert.equal(JSON.parse(current.coverage_json).completedWindowScheduledFor, schedule.scheduledFor);
+  assert.equal((await f.run(at)).published, 0, 'both tenants have completed this window without another full rebuild');
 });
 
 test('equal coverage without unfinished work uses the earlier publication time before tenant id', async t => {

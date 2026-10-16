@@ -49,7 +49,7 @@ ORDER BY scheduled_for, queue_position, tenant_id;
 
 | 状态／原因 | 含义 |
 | --- | --- |
-| `published` | 本窗口对应批次已成功发布，正式结果已切换 |
+| `published` | 本窗口目标已成功发布，正式结果已切换 |
 | `pending / waiting_for_slot` | 已入队，等待执行 |
 | `pending / window_ended` | 窗口结束前没有轮到 |
 | `pending / backlog_remaining` | 这晚发布了之前暂停的旧批次，但还未完成本窗口目标 |
@@ -58,12 +58,12 @@ ORDER BY scheduled_for, queue_position, tenant_id;
 | `paused` | 到达窗口结束或收到停止请求；看 `reason` 和 `stage` |
 | `failed` | 执行或领取报错；看 `error`，`stage=claim` 为领取阶段失败 |
 | `interrupted` | 原工作进程、批次租约失效或窗口已结束，不能继续当作正在运行 |
-| `published / already_published` | 部署或重试时确认本窗口原已有成功批次，没有因此重跑 |
+| `published / already_published` | 部署或重试时确认已有覆盖本窗口的成功批次，没有因此重跑 |
 | `skipped / tenant_inactive` | 同一窗口重试时发现该租户已经停用 |
 
 `attempt_count` 仅记录本功能观测到的成功领取次数；补录已发布结果时为 0，不伪造开始时间。`incremental_enabled` 在未领取时是配置计划值，领取后是批次实际模式；旧成功批次缺少模式快照时为 NULL/unknown，不根据当前配置猜测。`published_batches` 包含本窗口中成功续跑的旧批次，以及明确确认的当前窗口已发布批次；它是批次数，不是已完成租户数。
 
-旧批次续跑保留原 `batch_id` 和批次 `scheduled_for`，但日志的 `scheduled_for/run_date` 始终使用实际运行窗口。仅续完旧批次时 `finished_at` 为空，`last_published_at` 记录那次发布；之后本窗口批次完成才记 `published`。同窗口重试更新同一行并增加领取次数，不重复计租户；旧窗口记录不会被次晚的成功改写成“那晚已完成”。这张表是窗口内的最终状态与尝试计数，不是每次重试逐条追加的事件表。
+旧批次续跑保留原 `batch_id` 和批次 `scheduled_for`，但日志的 `scheduled_for/run_date` 始终使用实际运行窗口。全量批次会在发布前执行一次目标追赶；如果已经覆盖实际窗口，发布记录中的 `completedWindowScheduledFor` 标明该窗口，日志直接记 `published`，同窗不重复全量。只发布了仍落后于当前窗口的旧结果时，`finished_at` 为空，`last_published_at` 记录那次发布，仍记 `pending/backlog_remaining`。同窗口重试更新同一行并增加领取次数，不重复计租户；旧窗口记录不会被次晚的成功改写成“那晚已完成”。这张表是窗口内的最终状态与尝试计数，不是每次重试逐条追加的事件表。
 
 优先查视图的 `effective_status`，它根据当前租约和窗口即时判断异常中断；直接查表的 `status` 在进程崩溃后可能暂留 `running`，下次工作进程启动会持久化修正。批次发布与成功日志在同一数据库事务中提交；正式结果回滚时不会留下假的成功日志。日志写入异常会输出 `[AI usage] run_log_failed` 或使相应批次失败，旧正式结果仍保留。
 
