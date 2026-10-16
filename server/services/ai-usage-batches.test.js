@@ -402,3 +402,55 @@ test('scheduler startup at 10:00 never launches a worker and 03:00 only launches
   timestamp = new Date('2026-09-11T19:00:00Z'); service.tick(); service.tick();
   assert.equal(calls, 1);
 });
+
+test('scheduler starts once to backfill a missing current-window log after publication and never does so outside the window', async t => {
+  const db = fixture(t);
+  const logger = { info() {}, warn() {}, error() {} };
+  assert.equal((await runAiUsageWindow({ database: db, config, now: night, logger })).published, 2);
+  const schedule = getAiUsageSchedule(config, night());
+  const batchesBefore = db.prepare('SELECT * FROM ai_usage_batches ORDER BY tenant_id').all();
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM ai_usage_run_logs WHERE scheduled_for=?').get(schedule.scheduledFor).n, 2);
+  // Simulate a deployment that introduces run logging after a tenant already
+  // completed this window. Only the absent log needs work, not its statistics.
+  db.prepare('DELETE FROM ai_usage_run_logs WHERE scheduled_for=? AND tenant_id=2').run(schedule.scheduledFor);
+  let timestamp = new Date('2026-09-12T02:00:00.000Z'); // 10:00 Shanghai, outside the window.
+  let queries = 0;
+  const workers = [];
+  const service = createAiUsageService({
+    database: { prepare(sql) { queries++; return db.prepare(sql); } }, databasePath: '/tmp/fixture.db',
+    env: { AI_USAGE_ENABLED: 'true' }, now: () => timestamp, logger,
+    workerFactory() {
+      const worker = Object.assign(new EventEmitter(), { postMessage() {} });
+      workers.push(worker);
+      return worker;
+    },
+  });
+  t.after(() => service.stop());
+  service.start();
+  service.tick();
+  assert.equal(workers.length, 0, 'a missing run log cannot launch a daytime worker');
+  assert.equal(queries, 0, 'daytime ticks do not even inspect database state');
+  timestamp = new Date('2026-09-11T19:00:00.000Z'); // 03:00 Shanghai, same scheduled window.
+  service.tick();
+  service.tick();
+  assert.equal(workers.length, 1, 'published batches with a missing run log still need exactly one worker');
+  const backfill = await runAiUsageWindow({ database: db, config, now: () => timestamp, logger });
+  assert.equal(backfill.published, 0, 'backfill must not reopen an already published daily batch');
+  const recovered = db.prepare('SELECT * FROM ai_usage_run_logs WHERE scheduled_for=? AND tenant_id=2').get(schedule.scheduledFor);
+  assert.equal(recovered.status, 'published');
+  assert.equal(recovered.reason, 'already_published');
+  assert.equal(recovered.attempt_count, 0, 'recovery cannot invent a new statistics execution');
+  assert.deepEqual(db.prepare('SELECT * FROM ai_usage_batches ORDER BY tenant_id').all(), batchesBefore);
+  workers[0].emit('message', { type: 'result', result: backfill });
+  workers[0].emit('exit', 0);
+  service.tick();
+  service.tick();
+  assert.equal(workers.length, 1, 'complete publication logs stop repeat workers in the same window');
+  assert.equal(service.getStatus().state, 'waiting');
+  db.prepare('DELETE FROM ai_usage_run_logs WHERE scheduled_for=? AND tenant_id=2').run(schedule.scheduledFor);
+  timestamp = new Date('2026-09-12T02:00:00.000Z');
+  const beforeDaytimeTick = queries;
+  service.tick();
+  assert.equal(workers.length, 1);
+  assert.equal(queries, beforeDaytimeTick, 'a later missing-log condition still cannot trigger a daytime query or worker');
+});

@@ -27,48 +27,115 @@ function dateKey(value) {
   return value;
 }
 
-function readSnapshot(databasePath, tenantId, userId) {
+function readBaseSnapshot(db, tenantId) {
+  const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
+  for (const table of ['tenants', 'users', 'workspaces']) {
+    if (!tables.has(table)) throw new Error(`缺少业务表 ${table}，请确认 --db 指向多租户服务的业务数据库`);
+  }
+  if (!db.prepare('SELECT id FROM tenants WHERE id=?').get(tenantId)) throw new Error(`租户不存在：${tenantId}`);
+  return { tables,
+    workspaces: db.prepare('SELECT id,tenant_id FROM workspaces').all(),
+    suppressed: tables.has('ai_usage_suppressed_rows') ? db.prepare(`SELECT row_key FROM ai_usage_suppressed_rows
+      WHERE tenant_id=? AND dataset IN ('sql_generations','hook_records')`).all(tenantId).map(row => row.row_key) : [],
+  };
+}
+
+function readSnapshot(databasePath, tenantId, userId, shared) {
   const db = new Database(databasePath, { readonly: true, fileMustExist: true, timeout: 5000 });
   try {
     db.pragma('query_only = ON');
     // Release the SQLite read transaction before any potentially slow filesystem scan.
     return db.transaction(() => {
-      const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
-      for (const table of ['tenants', 'users', 'workspaces']) {
-        if (!tables.has(table)) throw new Error(`缺少业务表 ${table}，请确认 --db 指向多租户服务的业务数据库`);
-      }
-      if (!db.prepare('SELECT id FROM tenants WHERE id=?').get(tenantId)) throw new Error(`租户不存在：${tenantId}`);
+      const base = shared || readBaseSnapshot(db, tenantId);
       const user = db.prepare('SELECT id,username FROM users WHERE id=?').get(userId);
       if (!user) throw new Error(`用户不存在：${userId}`);
-      const scoped = (table, columns, extra = '') => tables.has(table)
+      const scoped = (table, columns, extra = '') => base.tables.has(table)
         ? db.prepare(`SELECT ${columns} FROM ${table} WHERE tenant_id=? AND user_id=? ${extra}`).all(tenantId, userId) : [];
-      return {
-        tables, user,
-        workspaces: db.prepare('SELECT id,tenant_id FROM workspaces').all(),
+      return { ...base, user,
         // Only ownership metadata from other tenants is needed to detect ambiguous sessions.
-        sessions: tables.has('session_index') ? db.prepare(`SELECT ${scopeColumns} FROM session_index WHERE user_id=?`).all(userId) : [],
+        sessions: base.tables.has('session_index') ? db.prepare(`SELECT ${scopeColumns} FROM session_index WHERE user_id=?`).all(userId) : [],
         turns: scoped('ai_usage_turn_facts', 'terminal_status'),
         runtimes: scoped('agent_session_runtime', `${scopeColumns},runtime_home_path`, "AND provider='claude' ORDER BY id"),
         messages: scoped('agent_session_messages', `${scopeColumns},id,message_id,normalized_json,provider_timestamp,created_at`, 'ORDER BY id'),
-        suppressed: tables.has('ai_usage_suppressed_rows') ? db.prepare(`SELECT row_key FROM ai_usage_suppressed_rows
-          WHERE tenant_id=? AND dataset IN ('sql_generations','hook_records')`).all(tenantId).map(row => row.row_key) : [],
       };
     })();
   } finally { db.close(); }
 }
 
-/** Both dates are inclusive in timeZone. No database writes, migrations or scheduler imports. */
-export async function auditUserUsage({ databasePath, tenantId, userId, from, to, timeZone = 'Asia/Shanghai' }) {
-  for (const [key, value] of Object.entries({ tenantId, userId })) {
-    if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${key} 必须是正整数 ID`);
-  }
+function validateRange({ databasePath, tenantId, from, to, timeZone }) {
+  if (!Number.isSafeInteger(tenantId) || tenantId <= 0) throw new Error('tenantId 必须是正整数 ID');
   if (typeof databasePath !== 'string' || !path.isAbsolute(databasePath)) throw new Error('--db 必须是现有数据库的绝对路径');
   dateKey(from); dateKey(to);
   if (from > to) throw new Error('--from 不能晚于 --to');
-  const fromInclusive = localInstant(from, '00:00', timeZone);
-  const toExclusive = localInstant(shiftDate(to, 1), '00:00', timeZone);
+  return { from, to, timeZone, fromInclusive: localInstant(from, '00:00', timeZone),
+    toExclusive: localInstant(shiftDate(to, 1), '00:00', timeZone) };
+}
+
+function readTenantUsers(databasePath, tenantId) {
+  const db = new Database(databasePath, { readonly: true, fileMustExist: true, timeout: 5000 });
+  try {
+    db.pragma('query_only = ON');
+    return db.transaction(() => {
+      const shared = readBaseSnapshot(db, tenantId);
+      // Never enumerate the installation's users. Discover only current tenant
+      // memberships and owners of this tenant's retained original AI records.
+      const sources = ['tenant_users', 'session_index', 'agent_session_runtime', 'agent_session_messages', 'ai_usage_turn_facts']
+        .filter(table => shared.tables.has(table));
+      const candidates = sources.map(table => `SELECT user_id FROM ${table} WHERE tenant_id=@tenant AND user_id IS NOT NULL`);
+      const users = candidates.length ? db.prepare(`WITH candidates AS (${candidates.join(' UNION ')})
+        SELECT c.user_id AS userId,u.username AS userName FROM candidates c LEFT JOIN users u ON u.id=c.user_id
+        ORDER BY c.user_id`).all({ tenant: tenantId }) : [];
+      return { shared, users };
+    })();
+  } finally { db.close(); }
+}
+
+/** Sequential tenant audit; each user's read transaction ends before its file scan. */
+export async function auditTenantUsage({ databasePath, tenantId, from, to, timeZone = 'Asia/Shanghai' }) {
+  const range = validateRange({ databasePath, tenantId, from, to, timeZone });
   const observedAt = new Date().toISOString();
-  const snapshot = readSnapshot(databasePath, tenantId, userId);
+  const { shared, users } = readTenantUsers(databasePath, tenantId);
+  const result = { auditVersion: 4, mode: 'tenant', tenantId, range, observedAt,
+    status: 'completed', userCount: users.length, successfulUsers: 0, failedUsers: 0, users: [],
+    notes: [
+      '用户集合来自该租户现存 tenant_users 关系及 session_index、agent_session_runtime、agent_session_messages、ai_usage_turn_facts 的历史归属，不遍历其他租户用户。',
+      '逐用户顺序读取原始来源，AI 时长与 SQL 行数沿用单用户口径；代码量仅指 SQL 物理行数。',
+      '不可用或用户核算失败显示 null，不伪装为 0；error 非空时该用户失败，其他用户继续。',
+      '成员包括现存 active、disabled、pending 关系；历史用户即使已离开租户仍保留。用户信息缺失时保留其历史 ID 并显示错误。',
+      '共享归属与屏蔽元数据在开始时读取，各用户数据与文件不构成同一事务快照；用 --user-id 查看某人的逐日和文件诊断。',
+    ],
+  };
+  for (const user of users) {
+    try {
+      const audit = await auditUsage({ databasePath, tenantId, userId: user.userId, from, to, timeZone }, shared);
+      result.users.push({ userId: audit.userId, userName: audit.userName, status: 'completed',
+        metrics: { ...audit.metrics, aiActiveDurationHours: audit.metrics.aiActiveDurationSeconds === null
+          ? null : audit.metrics.aiActiveDurationSeconds / 3600 },
+        coverage: audit.coverage, scanned: audit.scanned, skipped: audit.skipped, error: null });
+      result.successfulUsers++;
+    } catch (error) {
+      result.users.push({ ...user, status: 'failed', metrics: { aiActiveDurationMs: null,
+        aiActiveDurationSeconds: null, aiActiveDurationHours: null, generatedSqlLines: null },
+        coverage: { duration: 'unavailable', sql: 'unavailable', durationReason: 'user_audit_failed' },
+        scanned: null, skipped: null, error: { code: error.code || 'AUDIT_USER_FAILED', message: error.message || String(error) } });
+      result.failedUsers++;
+    }
+  }
+  if (result.failedUsers) result.status = 'partial_failure';
+  return result;
+}
+
+/** Both dates are inclusive in timeZone. No database writes, migrations or scheduler imports. */
+export async function auditUserUsage(options) {
+  return auditUsage(options);
+}
+
+async function auditUsage({ databasePath, tenantId, userId, from, to, timeZone = 'Asia/Shanghai' }, shared) {
+  const range = validateRange({ databasePath, tenantId, from, to, timeZone });
+  if (!Number.isSafeInteger(userId) || userId <= 0) throw new Error('userId 必须是正整数 ID');
+  const { fromInclusive, toExclusive } = range;
+  const observedAt = new Date().toISOString();
+  const snapshot = readSnapshot(databasePath, tenantId, userId, shared);
   const result = {
     tenantId, userId, userName: snapshot.user.username,
     range: { from, to, timeZone, fromInclusive, toExclusive }, observedAt,
@@ -436,14 +503,19 @@ export async function auditUserUsage({ databasePath, tenantId, userId, from, to,
   return result;
 }
 
-const help = `单用户 AI 用量核算（只读；在项目目录运行，需要已安装服务依赖）
+const help = `租户／单用户 AI 用量核算（只读；在项目目录运行，需要已安装服务依赖）
 
+node scripts/audit-ai-usage-user.mjs --db /absolute/auth.db --tenant-id 1 --from 2026-10-01 --to 2026-10-13
 node scripts/audit-ai-usage-user.mjs --db /absolute/auth.db --tenant-id 1 --user-id 7 --from 2026-10-01 --to 2026-10-13
 
-必填：--db 数据库绝对路径；--tenant-id 租户数字 ID；--user-id 用户数字 ID
+省略 --user-id 时输出该租户每个用户的 AI 时长、SQL 行数、覆盖情况及错误。
+
+必填：--db 数据库绝对路径；--tenant-id 租户数字 ID
       --from / --to 统计日期 YYYY-MM-DD（包含两端日期）
-可选：--time-zone Asia/Shanghai（默认 AI_USAGE_TIMEZONE 或 Asia/Shanghai）
-      --json 输出完整 JSON，含逐日结果、文件读取量、SQL 与历史时长证据及异常位置
+可选：--user-id 用户数字 ID，指定时保留原单用户详细输出
+      --time-zone Asia/Shanghai（默认 AI_USAGE_TIMEZONE 或 Asia/Shanghai）
+      --json 输出 JSON；租户模式为每用户汇总、coverage、error
+             单用户模式另含逐日结果、文件读取量、SQL 与历史时长证据及异常位置
 
 请在能读取 runtime_home_path 所指向历史文件的服务主机/容器中运行。
 AI 时长按主会话历史逐轮恢复用户发起到主助手完成的区间；实时请求表仅作诊断。
@@ -457,13 +529,30 @@ async function main() {
     json: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
   } });
   if (values.help) { console.log(help); return; }
-  for (const key of ['db', 'tenant-id', 'user-id', 'from', 'to']) {
+  for (const key of ['db', 'tenant-id', 'from', 'to']) {
     if (!values[key]) throw new Error(`缺少 --${key}；使用 --help 查看示例`);
   }
-  const result = await auditUserUsage({ databasePath: values.db, tenantId: Number(values['tenant-id']),
-    userId: Number(values['user-id']), from: values.from, to: values.to,
-    timeZone: values['time-zone'] || process.env.AI_USAGE_TIMEZONE || 'Asia/Shanghai' });
+  const tenantMode = values['user-id'] === undefined;
+  const options = { databasePath: values.db, tenantId: Number(values['tenant-id']),
+    from: values.from, to: values.to, timeZone: values['time-zone'] || process.env.AI_USAGE_TIMEZONE || 'Asia/Shanghai' };
+  const result = tenantMode ? await auditTenantUsage(options)
+    : await auditUserUsage({ ...options, userId: Number(values['user-id']) });
+  if (tenantMode && result.failedUsers) process.exitCode = 2;
   if (values.json) { console.log(JSON.stringify(result, null, 2)); return; }
+  if (tenantMode) {
+    console.log(`租户 ${result.tenantId} / ${result.userCount} 个用户（成功 ${result.successfulUsers}，失败 ${result.failedUsers}）`);
+    console.log(`日期 ${result.range.from} 至 ${result.range.to}（${result.range.timeZone}，含首尾日期）`);
+    console.log('用户ID\t用户名\tAI时长(秒)\tAI时长(小时)\tSQL行数\t时长覆盖\tSQL覆盖\t错误');
+    const cell = value => String(value ?? '不可用').replace(/[\t\r\n]+/g, ' ');
+    for (const user of result.users) {
+      const metrics = user.metrics;
+      console.log([user.userId, user.userName, metrics.aiActiveDurationSeconds,
+        metrics.aiActiveDurationHours === null ? null : metrics.aiActiveDurationHours.toFixed(4), metrics.generatedSqlLines,
+        `${user.coverage.duration}:${user.coverage.durationReason}`, user.coverage.sql, user.error?.message || '-'].map(cell).join('\t'));
+    }
+    console.log('代码生成量按 SQL 物理行数计算。不可用与错误不记为 0；用 --user-id 查看某人的文件和逐日诊断。');
+    return;
+  }
   const seconds = result.metrics.aiActiveDurationSeconds;
   console.log(`租户 ${result.tenantId} / 用户 ${result.userId}（${result.userName}）`);
   console.log(`日期 ${result.range.from} 至 ${result.range.to}（${result.range.timeZone}，含首尾日期）`);
