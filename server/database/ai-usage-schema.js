@@ -30,6 +30,12 @@ CREATE TABLE IF NOT EXISTS ai_usage_source_states (
   state_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT,
   PRIMARY KEY(tenant_id, source_key)
 );
+-- Match the native-preferred message lookup without scanning every tenant source.
+-- CASE also permits migration/recovery of a malformed legacy state_json value.
+CREATE INDEX IF NOT EXISTS idx_ai_usage_native_main_session ON ai_usage_source_states(
+  tenant_id,CASE WHEN json_valid(state_json) THEN json_extract(state_json,'$.sessionKey') END
+) WHERE CASE WHEN json_valid(state_json) THEN
+  json_extract(state_json,'$.readable')=1 AND json_extract(state_json,'$.isMain')=1 ELSE 0 END;
 CREATE TABLE IF NOT EXISTS ai_usage_batch_files (
   batch_id TEXT NOT NULL, source_key TEXT NOT NULL, readable INTEGER NOT NULL,
   PRIMARY KEY(batch_id,source_key)

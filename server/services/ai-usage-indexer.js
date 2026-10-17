@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { setImmediate as yieldEventLoop } from 'node:timers/promises';
+import { performance } from 'node:perf_hooks';
 
 import { localParts, normalizeTimestamp, normalizeUsageTimestamp } from './ai-usage-config.js';
 import { logicalSessionKey, parseUsageMessage, safeHookFields } from './ai-usage-parser.js';
@@ -130,9 +131,11 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
       if (!row.provider_session_id) return [];
       // Native histories are authoritative for Claude. A legacy copy cannot add
       // a second population when its canonical transcript is readable.
+      // Keep both CASE expressions aligned with idx_ai_usage_native_main_session.
       if (row.provider === 'claude' && db.prepare(`SELECT 1 FROM ai_usage_source_states WHERE tenant_id=?
-        AND json_extract(state_json,'$.sessionKey')=? AND json_extract(state_json,'$.readable')=1
-        AND json_extract(state_json,'$.isMain')=1 LIMIT 1`)
+        AND CASE WHEN json_valid(state_json) THEN json_extract(state_json,'$.sessionKey') END=?
+        AND CASE WHEN json_valid(state_json) THEN json_extract(state_json,'$.readable')=1
+          AND json_extract(state_json,'$.isMain')=1 ELSE 0 END LIMIT 1`)
         .get(tenantId, logicalSessionKey(row))) return [];
       return messageRows(row, safeJson(row.normalized_json), {
         timeZone: config.timeZone, fallbackId: row.message_id,
@@ -199,17 +202,25 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
   }
 
   async function changedSources(progress) {
+    const page = db.prepare(`SELECT * FROM ai_usage_source_changes WHERE tenant_id=?
+      AND (source_type,source_key)>(?,?) ORDER BY source_type,source_key LIMIT ?`);
+    const removeChange = db.prepare(`DELETE FROM ai_usage_source_changes
+      WHERE tenant_id=? AND source_type=? AND source_key=? AND generation=?`);
     while (true) {
       checkWindow();
-      const cursor = progress.sourceCursor || ['', ''];
-      const changes = db.prepare(`SELECT * FROM ai_usage_source_changes WHERE tenant_id=?
-        AND (source_type,source_key)>(?,?) ORDER BY source_type,source_key LIMIT ?`).all(tenantId, ...cursor, config.batchSize);
+      const changes = page.all(tenantId, ...(progress.sourceCursor || ['', '']), config.batchSize);
       if (!changes.length) break;
-      for (const change of changes) {
-        checkWindow();
-        const rows = sourceRows(change).map(enrich);
-        store.transaction(() => {
-          store.assertLease(batch);
+      let nextCursor = null;
+      let interrupted = null;
+      // Bound both item count and write-lock time. Native-preferred DB copies
+      // still need reconciliation, but not a separate disk commit per message.
+      store.transaction(() => {
+        store.assertLease(batch);
+        const startedAt = performance.now();
+        for (const change of changes) {
+          try { checkWindow(); } catch (error) { interrupted = error; break; }
+          if (nextCursor && performance.now() - startedAt >= 50) break;
+          const rows = sourceRows(change).map(enrich);
           if (change.source_type === 'publication' || change.source_type === 'publication_event') {
             const eventSource = change.source_type === 'publication_event';
             // Late confirmation/correction also affects calls in OTHER users'
@@ -238,13 +249,18 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
           }
           store.put(tenantId, `${change.source_type}:${change.source_key}`, rows,
             { replace: true, ...(change.source_type === 'publication_event' ? { priority: 25 } : {}) });
-          db.prepare('DELETE FROM ai_usage_source_changes WHERE tenant_id=? AND source_type=? AND source_key=? AND generation=?')
-            .run(tenantId, change.source_type, change.source_key, change.generation);
-
-        });
-        progress.sourceCursor = [change.source_type, change.source_key];
-      }
-      await checkpoint(progress);
+          removeChange.run(tenantId, change.source_type, change.source_key, change.generation);
+          nextCursor = [change.source_type, change.source_key];
+        }
+        // Facts, generation-aware queue removal, and cursor commit together.
+        // Keep the caller's in-memory cursor unchanged if this transaction fails.
+        if (nextCursor) store.checkpoint(batch, { ...progress, sourceCursor: nextCursor }, config);
+      });
+      if (nextCursor) progress.sourceCursor = nextCursor;
+      // A window stop can save the completed prefix. Lease loss still rolls
+      // back above, because checkpoint fences the commit with the live lease.
+      if (interrupted) throw interrupted;
+      await checkpoint(progress, { persisted: true });
     }
   }
 

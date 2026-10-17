@@ -147,9 +147,9 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
         onDurationAnomaly({ stage: 'partitions', reason: error.code,
           rowKey: row.row_key, sessionKey: row.session_key, sourceKey: row.source_key });
       };
-      const checkpoint = async () => {
+      const checkpoint = async (_progress, { persisted = false } = {}) => {
         checkWindow();
-        store.checkpoint(batch, progress, config, now());
+        if (!persisted) store.checkpoint(batch, progress, config, now());
         await yieldEventLoop();
         if (abortError) throw abortError;
       };
