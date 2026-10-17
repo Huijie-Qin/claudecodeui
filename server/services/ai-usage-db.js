@@ -31,7 +31,12 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
     subject_id=excluded.subject_id,session_key=excluded.session_key,occurred_at=excluded.occurred_at,
     value_json=excluded.value_json,priority=excluded.priority`);
 
+  const sourceExists = database.prepare('SELECT 1 FROM ai_usage_fact_rows WHERE tenant_id=? AND source_key=? LIMIT 1');
+
   function put(tenantId, sourceKey, rows, { replace = false, priority = 0, replaceTurns = false } = {}) {
+    // Full rebuilds reconcile every DB copy, including copies superseded by a
+    // native file. An absent source has no old partitions or turns to retire.
+    const hasPrevious = replace && Boolean(sourceExists.get(tenantId, sourceKey));
     // A new/changed/removed preferred transcript can change the winner for
     // dates that occur ONLY in another copy. Dirty the whole logical request,
     // not just the dates being written by this source.
@@ -39,7 +44,7 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
     for (const row of rows) if (row.dataset === 'turns' && row.value?.turnKey) {
       changedTurns.set(JSON.stringify([row.session_key, row.value.turnKey]), [row.session_key, row.value.turnKey]);
     }
-    if (replace) for (const row of database.prepare(`SELECT DISTINCT session_key,${durationTurnKeySql('')} AS turn_key
+    if (hasPrevious) for (const row of database.prepare(`SELECT DISTINCT session_key,${durationTurnKeySql('')} AS turn_key
       FROM ai_usage_fact_rows WHERE tenant_id=? AND source_key=? AND dataset='turns'`).all(tenantId, sourceKey)) {
       if (row.turn_key != null) changedTurns.set(JSON.stringify([row.session_key, row.turn_key]), [row.session_key, row.turn_key]);
     }
@@ -49,7 +54,7 @@ export function createAiUsageStore(database, { clock = () => new Date() } = {}) 
         markDirty(tenantId, row);
       }
     }
-    if (replace) {
+    if (hasPrevious) {
       for (const row of database.prepare('SELECT DISTINCT dataset,stat_date,session_key FROM ai_usage_fact_rows WHERE tenant_id=? AND source_key=?').all(tenantId, sourceKey)) {
         markDirty(tenantId, row);
       }
