@@ -58,7 +58,7 @@ async function fixture(t, { skills, marketService = createFakeMarketService() } 
     CREATE TABLE app_config (key TEXT PRIMARY KEY, value TEXT);
     ${MULTITENANCY_SCHEMA_SQL} ${HOOK_CONFIG_SCHEMA_SQL}
     INSERT INTO users(id,username,is_system_admin) VALUES (1,'root',1),(2,'tenant-admin',0),(3,'member',0),(4,'other-admin',0);
-    INSERT INTO tenants(id,code,name) VALUES (10,'alpha','甲租户'),(20,'beta','乙租户'),(30,'dataagent-admin','DataAgent管理');
+    INSERT INTO tenants(id,code,prod_code,name) VALUES (10,'alpha','alpha-market','甲租户'),(20,'beta','beta-market','乙租户'),(30,'dataagent-admin','dataagent-market','DataAgent管理');
     INSERT INTO tenant_users(tenant_id,user_id,role,permission,status) VALUES
       (10,2,'tenant_admin','edit','active'),(20,2,'member','edit','active'),(10,3,'member','edit','active'),(20,4,'tenant_admin','edit','active'),(30,2,'tenant_admin','edit','active');
     INSERT INTO workspaces(id,tenant_id,owner_user_id,slug,display_name,path) VALUES (100,10,2,'alpha','甲工作区','/tmp/tenant-fixture-alpha'),(200,20,2,'beta','乙工作区','/tmp/tenant-fixture-beta');`);
@@ -270,13 +270,14 @@ test('tenant Skill market uses live tenant/account context and market pagination
   assert.deepEqual(market.pageInfo, { page: 2, pageSize: 5, total: 1 });
   assert.deepEqual(marketService.calls[0], { method: 'listSkillMarket', options: {
     searchContent: 'review', page: 2, pageSize: 5, completeInventory: true,
-    tenantCode: 'alpha', accountId: 'tenant-admin', includePageInfo: true,
+    tenantCode: 'alpha-market', accountId: 'tenant-admin', includePageInfo: true,
   } });
   database.prepare('UPDATE users SET username=? WHERE id=2').run('renamed-tenant-admin');
+  database.prepare('UPDATE tenants SET prod_code=? WHERE id=10').run('  alpha-market-renamed  ');
   assert.equal((await request('/skill-presets/market?q=check&complete=false')).status, 200);
   assert.deepEqual(marketService.calls[1].options, {
     searchContent: 'check', page: 1, pageSize: 20, completeInventory: false,
-    tenantCode: 'alpha', accountId: 'renamed-tenant-admin', includePageInfo: true,
+    tenantCode: 'alpha-market-renamed', accountId: 'renamed-tenant-admin', includePageInfo: true,
   });
   for (const query of ['page=0', 'page=bad', 'pageSize=-1', 'pageSize=1.5']) {
     assert.equal((await request(`/skill-presets/market?${query}`)).status, 400, query);
@@ -311,7 +312,7 @@ test('a new market Skill can be prepared and published into a tenant Agent templ
   assert.equal(published.preset.status, 'published');
   assert.equal(published.preset.preinstall, false);
   for (const call of marketService.calls) {
-    assert.deepEqual(call.requestContext, { tenantCode: 'alpha', accountId: 'tenant-admin', ...(call.method === 'fetchRemoteSkillDetail' ? { exactId: true } : {}) });
+    assert.deepEqual(call.requestContext, { tenantCode: 'alpha-market', accountId: 'tenant-admin', ...(call.method === 'fetchRemoteSkillDetail' ? { exactId: true } : {}) });
     assert.equal(call.skillRef, MARKET_SKILL.id);
   }
   const duplicate = await request('/skill-presets', { method: 'POST', body: { skill: { id: MARKET_SKILL.id } } });
@@ -457,4 +458,90 @@ test('legacy Hook ownership migration is additive and idempotent', () => {
     migrateHookConfigurationModel(database); migrateHookConfigurationModel(database);
     assert.ok(database.prepare('PRAGMA table_info(hooks)').all().some((column) => column.name === 'owner_tenant_id'));
   } finally { database.close(); }
+});
+
+
+test('upstream market authentication errors do not masquerade as tenant access revocation', async (t) => {
+  for (const upstreamStatus of [401, 403]) {
+    for (const failingMethod of ['listSkillMarket', 'fetchRemoteSkillDetail', 'downloadRemoteSkillFiles']) {
+      await t.test(`${failingMethod}: upstream ${upstreamStatus}`, async (t) => {
+        const marketService = createFakeMarketService();
+        let failedMarketCalls = 0;
+        marketService[failingMethod] = async () => {
+          failedMarketCalls += 1;
+          // The real market HTTP client preserves the upstream HTTP status and
+          // marks rejected JSON responses. It is not a local membership denial.
+          throw Object.assign(new Error(`Skill market credentials rejected (${upstreamStatus})`), {
+            statusCode: upstreamStatus, marketRejected: true,
+          });
+        };
+        const { request, database } = await fixture(t, { marketService });
+        const response = failingMethod === 'listSkillMarket'
+          ? await request('/skill-presets/market?complete=true')
+          : await request('/skill-presets', { method: 'POST', body: { sourceRef: MARKET_SKILL.id } });
+        assert.equal(failedMarketCalls, 1);
+        assert.equal((await request('/capabilities')).status, 200, 'the live tenant administrator retains access');
+        assert.equal(database.prepare('SELECT COUNT(*) AS count FROM tenant_skill_presets').get().count, 0);
+        assert.equal(response.error, `技能市场请求失败：Skill market credentials rejected (${upstreamStatus})`);
+        assert.equal(response.status, 502,
+          'upstream auth failures must not trigger the tenant API adapter onForbidden handler');
+      });
+    }
+  }
+});
+
+
+test('tenant market requests require prod_code without falling back to the local tenant code', async (t) => {
+  for (const prodCode of [null, '', '   ']) {
+    await t.test(`prod_code=${JSON.stringify(prodCode)}`, async (t) => {
+      const { request, database, marketService } = await fixture(t);
+      const created = await request('/skill-presets', { method: 'POST', body: { sourceRef: MARKET_SKILL.id } });
+      assert.equal(created.status, 200);
+      database.prepare('UPDATE tenants SET prod_code=? WHERE id=10').run(prodCode);
+      const rowsBefore = database.prepare('SELECT * FROM tenant_skill_presets').all();
+      const callsBefore = marketService.calls.length;
+      for (const operation of [
+        { resource: '/skill-presets/market?complete=true' },
+        { resource: '/skill-presets', method: 'POST', body: { sourceRef: MARKET_SKILL.id } },
+        { resource: `/skill-presets/${created.preset.id}/validate`, method: 'POST' },
+      ]) {
+        const response = await request(operation.resource, operation);
+        assert.equal(response.status, 400, operation.resource);
+        assert.match(response.error, /prod_code/, 'explain the missing external tenant configuration');
+      }
+      assert.equal((await request('/capabilities')).status, 200);
+      assert.equal(marketService.calls.length, callsBefore, 'no market call may use the local tenant code as fallback');
+      assert.deepEqual(database.prepare('SELECT * FROM tenant_skill_presets').all(), rowsBefore);
+    });
+  }
+});
+
+test('local access revocation takes precedence over simultaneous market authentication failures', async (t) => {
+  for (const upstreamStatus of [401, 403]) {
+    for (const action of ['list', 'create']) {
+      for (const localState of ['revoked', 'inactive']) {
+        await t.test(`${action}: upstream ${upstreamStatus}, user ${localState}`, async (t) => {
+          const { request, database, marketService } = await fixture(t);
+          const rowsBefore = database.prepare('SELECT * FROM tenant_skill_presets').all();
+          const method = action === 'list' ? 'listSkillMarket' : 'downloadRemoteSkillFiles';
+          marketService[method] = async () => {
+            if (localState === 'revoked') {
+              database.prepare("UPDATE tenant_users SET role='member' WHERE tenant_id=10 AND user_id=2").run();
+            } else {
+              database.prepare('UPDATE users SET is_active=0 WHERE id=2').run();
+            }
+            throw Object.assign(new Error('Market credentials rejected while access changed'), {
+              statusCode: upstreamStatus, marketRejected: true,
+            });
+          };
+          const response = action === 'list'
+            ? await request('/skill-presets/market')
+            : await request('/skill-presets', { method: 'POST', body: { sourceRef: MARKET_SKILL.id } });
+          assert.equal(response.status, localState === 'revoked' ? 403 : 401);
+          assert.doesNotMatch(response.error, /技能市场请求失败/);
+          assert.deepEqual(database.prepare('SELECT * FROM tenant_skill_presets').all(), rowsBefore);
+        });
+      }
+    }
+  }
 });
