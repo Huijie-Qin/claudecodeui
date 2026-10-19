@@ -36,7 +36,7 @@ const database = new Database(':memory:');
 database.exec(`CREATE TABLE users(id INTEGER PRIMARY KEY,username TEXT,is_active INTEGER DEFAULT 1,is_system_admin INTEGER DEFAULT 0);
   ${MULTITENANCY_SCHEMA_SQL} ${HOOK_CONFIG_SCHEMA_SQL}
   INSERT INTO users(id,username,is_system_admin) VALUES(1,'系统管理员',1),(2,'林晨 · 租户管理员',0),(3,'陈晓 · 普通成员',0);
-  INSERT INTO tenants(id,code,name) VALUES(10,'example','示例租户'),(20,'other','其他租户');
+  INSERT INTO tenants(id,code,prod_code,name) VALUES(10,'example','preview-market-example','示例租户'),(20,'other','preview-market-other','其他租户');
   INSERT INTO tenant_users(tenant_id,user_id,role,permission,status) VALUES(10,2,'tenant_admin','edit','active'),(20,2,'member','edit','active'),(10,3,'member','edit','active');`);
 const [{ createMultitenancyDb }, { createTenantsRouter }] = await Promise.all([
   import('../server/database/multitenancy-db.js'), import('../server/routes/tenants.js'),
@@ -52,7 +52,7 @@ const previewMarketSkills = [
   { id: 'preview-market-report-outline', skillId: 'preview-market-report-outline', name: 'preview-report-outline', displayName: '模拟市场 · 报告提纲', description: '仅模拟数据：根据分析需求整理报告提纲。', nspPath: 'preview/skills/report-outline', createUserId: 'preview-author', version: 1, sourceType: 'skill-market-api' },
 ];
 const requirePreviewMarketContext = ({ tenantCode, accountId } = {}) => {
-  if (tenantCode !== 'example' || !database.prepare('SELECT id FROM users WHERE username = ?').get(accountId || '')) {
+  if (tenantCode !== 'preview-market-example' || !database.prepare('SELECT id FROM users WHERE username = ?').get(accountId || '')) {
     throw Object.assign(new Error('模拟技能市场仅供示例租户的预览账号使用'), { statusCode: 403 });
   }
 };

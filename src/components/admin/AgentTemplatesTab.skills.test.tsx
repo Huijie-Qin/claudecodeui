@@ -49,10 +49,12 @@ async function setup(t: TestContext, {
   validation = json({ preset: { ...preset, lastValidationStatus: 'healthy' }, validation: { status: 'healthy' } }),
   initialRefs,
   createResponse,
+  saveResponse,
 }: {
   market?: Response; presets?: Response; catalog?: Response; validation?: Response;
   initialRefs?: Array<{ tenantId: number; presetId: number }>;
   createResponse?: Promise<Response>;
+  saveResponse?: (body: Record<string, unknown>) => Response | Promise<Response>;
 } = {}) {
   const existingTemplate = {
     id: 91, name: '已有模板', category: '通用', tenantIds: [7], skillPresetRefs: initialRefs || [],
@@ -81,8 +83,8 @@ async function setup(t: TestContext, {
     if (path === `${base}/skill-presets` && method === 'POST') return createResponse || json({ preset });
     if (path === `${base}/skill-presets/31/validate`) return validation.clone();
     if (path === `${base}/skill-presets/31/publish`) return json({ preset: { ...preset, status: 'published', lastValidationStatus: 'healthy' } });
-    if (path === `${base}/agent-templates` && method === 'POST') return json({ template: { ...body, id: 91 } });
-    if (path === `${base}/agent-templates/91` && method === 'PUT') return json({ template: { ...body, id: 91 } });
+    if (path === `${base}/agent-templates` && method === 'POST') return saveResponse?.(body!) || json({ template: { ...body, id: 91 } });
+    if (path === `${base}/agent-templates/91` && method === 'PUT') return saveResponse?.(body!) || json({ template: { ...body, id: 91 } });
     assert.fail(`Unexpected request: ${method} ${path}`);
   };
   await act(async () => {
@@ -121,7 +123,14 @@ async function setup(t: TestContext, {
     await act(async () => tree.root.findByProps({ 'aria-label': `移除 ${label}` }).props.onClick());
   };
   const buttonDisabled = (label: string) => Boolean(tree.root.findAllByType('button').find((node: TestNode) => textContent(node) === label)?.props.disabled);
-  return { requests, selectSkill, save, removeSkill, click, buttonDisabled, text: () => textContent(tree.root) };
+  const skillSelected = () => Boolean(tree.root.findAllByType('button')
+    .find((node: TestNode) => textContent(node).startsWith(skill.displayName))?.props['aria-pressed']);
+  const editorDisabled = () => tree.root.findAllByType('fieldset').some((node: TestNode) => node.props.disabled);
+  const changeName = async (value: string) => {
+    await act(async () => tree.root.findByProps({ placeholder: '例如：应用市场分析专家' }).props.onChange({ target: { value } }));
+  };
+  const name = () => tree.root.findByProps({ placeholder: '例如：应用市场分析专家' }).props.value;
+  return { requests, selectSkill, save, removeSkill, click, buttonDisabled, skillSelected, editorDisabled, changeName, name, text: () => textContent(tree.root) };
 }
 
 test('tenant skill API keeps all requests bound to its tenant and uses market paging options', async () => {
@@ -242,3 +251,33 @@ test('a failed validation cannot publish or select an imported draft skill', asy
   assert.deepEqual(f.requests.filter((request) => request.method === 'POST').map((request) => request.path), [`${base}/skill-presets/31/validate`]);
   assert.deepEqual((await f.save())?.skillPresetRefs, []);
 });
+
+
+for (const initiallySelected of [false, true]) {
+  test(`saving a template locks edits and prevents ${initiallySelected ? 'removing' : 'adding'} a skill until the save completes`, async (t) => {
+    let finishSave!: () => void;
+    const f = await setup(t, {
+      initialRefs: initiallySelected ? [{ tenantId: 7, presetId: 31 }] : [],
+      presets: json({ presets: [{ ...preset, status: 'published' }] }),
+      saveResponse: (body) => new Promise<Response>((resolve) => {
+        finishSave = () => resolve(json({ template: { ...body, id: 91 } }));
+      }),
+    });
+    const submitted = await f.save();
+    assert.equal(f.buttonDisabled('保存草稿'), true);
+    // Invoke handlers directly as well as checking the native form lock, so a
+    // callback already queued when saving began cannot mutate the submitted state.
+    await f.selectSkill();
+    assert.equal(f.skillSelected(), initiallySelected, 'a pending save must reject skill changes');
+    await f.changeName('保存中不应覆盖');
+    assert.equal(f.name(), '已有模板');
+    assert.equal(f.editorDisabled(), true, 'all native editor controls are disabled together');
+    assert.deepEqual(submitted?.skillPresetRefs, initiallySelected ? [{ tenantId: 7, presetId: 31 }] : []);
+    assert.equal(f.requests.filter((request) => request.path.includes('/skill-presets') && request.method === 'POST').length, 0);
+    await act(async () => { finishSave(); });
+    assert.equal(f.skillSelected(), initiallySelected);
+    assert.equal(f.editorDisabled(), false);
+    await f.selectSkill();
+    assert.equal(f.skillSelected(), !initiallySelected, 'skill controls unlock after the response is applied');
+  });
+}

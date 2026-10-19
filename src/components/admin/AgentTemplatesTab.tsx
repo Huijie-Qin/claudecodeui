@@ -425,11 +425,12 @@ export default function AgentTemplatesTab({
   };
 
   const update = <K extends keyof Omit<AgentTemplate, 'id'>>(key: K, value: Omit<AgentTemplate, 'id'>[K]) => {
+    if (savingRef.current) return;
     setEditing((previous) => previous ? { ...previous, [key]: value } : previous);
   };
 
   const toggleTenant = (tenantId: number) => {
-    if (tenantManaged) return;
+    if (savingRef.current || tenantManaged) return;
     if (!editing) return;
     const tenant = activeTenants.find((item) => item.id === tenantId);
     const selected = editing.tenantIds.includes(tenantId);
@@ -464,6 +465,7 @@ export default function AgentTemplatesTab({
   };
 
   const togglePreset = (kind: 'skillPresetRefs' | 'mcpPresetRefs', preset: Preset) => {
+    if (savingRef.current) return;
     setEditing((previous) => {
       if (!previous || !previous.tenantIds.includes(preset.tenantId)) return previous;
       const refs = previous[kind];
@@ -510,6 +512,7 @@ export default function AgentTemplatesTab({
   };
 
   const saveMcpToolSettings = (preset: Preset, toolSettings: McpTemplateToolSettings) => {
+    if (savingRef.current) return;
     setEditing((previous) => {
       if (!previous) return previous;
       return {
@@ -524,7 +527,7 @@ export default function AgentTemplatesTab({
   };
 
   const toggleSkill = async (skill: SkillCandidate) => {
-    if (!editing || !editing.tenantIds.includes(skill.tenantId)) return;
+    if (savingRef.current || !editing || !editing.tenantIds.includes(skill.tenantId)) return;
     const selected = skill.presetId
       ? editing.skillPresetRefs.some((ref) => ref.tenantId === skill.tenantId && ref.presetId === skill.presetId)
       : false;
@@ -837,9 +840,9 @@ export default function AgentTemplatesTab({
   const dataAgentSelected = !tenantManaged && editing.tenantIds.some((id) => isDataAgentTenant(activeTenants.find((item) => item.id === id)));
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4 pb-10">
+    <fieldset disabled={isSaving} aria-busy={isSaving} aria-label="Agent 模板配置" className="mx-auto min-w-0 max-w-6xl space-y-4 border-0 p-0 pb-10">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><button type="button" onClick={closeEditor} disabled={isSaving} className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:cursor-wait disabled:opacity-50"><ChevronLeft className="h-4 w-4" />返回模板列表</button><h2 className="text-xl font-semibold text-foreground">配置 Agent 模板</h2></div>
+        <div><button type="button" onClick={() => { if (!savingRef.current) closeEditor(); }} disabled={isSaving} className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:cursor-wait disabled:opacity-50"><ChevronLeft className="h-4 w-4" />返回模板列表</button><h2 className="text-xl font-semibold text-foreground">配置 Agent 模板</h2></div>
         <div className="flex gap-2"><Button variant="secondary" onClick={() => void save(false)} disabled={isSaving || isReadingFolders || preparingSkillKeys.size > 0}><Save className="h-4 w-4" />保存草稿</Button><Button onClick={() => void save(true)} disabled={isSaving || isReadingFolders || preparingSkillKeys.size > 0}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}发布模板</Button></div>
       </div>
       {preparingSkillKeys.size > 0 ? <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在准备 {preparingSkillKeys.size} 个 Skill，完成后可保存模板。</div> : null}
@@ -856,6 +859,7 @@ export default function AgentTemplatesTab({
             required
             value={isAddingCategory ? '__new__' : editing.category}
             onChange={(event) => {
+              if (savingRef.current) return;
               setEditorError(null);
               if (event.target.value === '__new__') {
                 setIsAddingCategory(true);
@@ -915,7 +919,7 @@ export default function AgentTemplatesTab({
           {dataAgentSelected ? <div className="mt-2 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">已选择 DataAgent管理：发布后该模板默认对全部租户可见。</div> : null}
         </div>
 
-        {editing.tenantIds.length > 0 ? <div className="flex flex-wrap gap-2">{editing.tenantIds.map((tenantId) => { const tenant = activeTenants.find((item) => item.id === tenantId); return <button key={tenantId} type="button" onClick={() => setCatalogTenantId(tenantId)} className={cn('rounded-md border px-3 py-1.5 text-sm', catalogTenantId === tenantId ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-muted-foreground')}>{tenant?.name || tenantId}</button>; })}</div> : null}
+        {editing.tenantIds.length > 0 ? <div className="flex flex-wrap gap-2">{editing.tenantIds.map((tenantId) => { const tenant = activeTenants.find((item) => item.id === tenantId); return <button key={tenantId} type="button" onClick={() => { if (!savingRef.current) setCatalogTenantId(tenantId); }} className={cn('rounded-md border px-3 py-1.5 text-sm', catalogTenantId === tenantId ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-muted-foreground')}>{tenant?.name || tenantId}</button>; })}</div> : null}
 
         {isCatalogLoading ? (
           <div className="flex items-center justify-center gap-2 rounded-md border border-dashed border-border p-10 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在加载该租户的能力目录…</div>
@@ -936,7 +940,7 @@ export default function AgentTemplatesTab({
                   </div>
                 ) : null}
               </div>
-              <PresetList key={`${selectedCatalogTenant.id}:mcps`} title="MCP 工具" itemLabel="MCP" emptyText="该租户暂无测试通过的已发布 MCP" presets={catalog.mcps} refs={editing.mcpPresetRefs} onToggle={(preset) => togglePreset('mcpPresetRefs', preset)} onConfigure={(preset) => setConfiguringMcp(preset)} />
+              <PresetList key={`${selectedCatalogTenant.id}:mcps`} title="MCP 工具" itemLabel="MCP" emptyText="该租户暂无测试通过的已发布 MCP" presets={catalog.mcps} refs={editing.mcpPresetRefs} onToggle={(preset) => togglePreset('mcpPresetRefs', preset)} onConfigure={(preset) => { if (!savingRef.current) setConfiguringMcp(preset); }} />
             </div>
             {catalog.mcps.some((preset) => isSqlCheckMcp(preset) && editing.mcpPresetRefs.some((ref) => ref.tenantId === preset.tenantId && ref.presetId === preset.id)) ? (
               <AgentTemplateSqlCheckSettings
@@ -968,7 +972,7 @@ export default function AgentTemplatesTab({
         onSave={(toolSettings) => saveMcpToolSettings(configuringMcp, toolSettings)}
       /> : null}
       <ToastNotice toast={toast} onClose={() => setToast(null)} />
-    </div>
+    </fieldset>
   );
 }
 

@@ -44,12 +44,29 @@ export function createTenantManagementRouter({ database = db, hooks = hookConfig
     }
   };
   const skillMarketContext = (context) => {
-    const tenant = database.prepare('SELECT code FROM tenants WHERE id = ?').get(context.tenantId);
+    const tenant = database.prepare('SELECT prod_code FROM tenants WHERE id = ?').get(context.tenantId);
     const user = database.prepare('SELECT username FROM users WHERE id = ?').get(context.userId);
-    if (!tenant?.code || !user?.username) {
-      throw Object.assign(new Error('技能市场需要租户编码和用户账号'), { statusCode: 400 });
+    const tenantCode = String(tenant?.prod_code || '').trim();
+    if (!tenantCode) {
+      throw Object.assign(new Error('技能市场需要配置租户的 prod_code'), { statusCode: 400 });
     }
-    return { tenantCode: String(tenant.code), accountId: String(user.username) };
+    if (!user?.username) {
+      throw Object.assign(new Error('技能市场需要用户账号'), { statusCode: 400 });
+    }
+    return { tenantCode, accountId: String(user.username) };
+  };
+  const marketRequest = async (req, operation) => {
+    try {
+      return await operation();
+    } catch (error) {
+      // A live access revocation must keep its local 401/403 semantics. A
+      // market authentication failure must not dismiss the template editor.
+      authorize(req);
+      if ([401, 403].includes(error.statusCode)) {
+        throw Object.assign(new Error(`技能市场请求失败：${error.message}`), { statusCode: 502 });
+      }
+      throw error;
+    }
   };
   const selectableSkillPreset = (req, context) => {
     const presetId = positiveId(req.params.presetId, 'presetId');
@@ -123,18 +140,18 @@ export function createTenantManagementRouter({ database = db, hooks = hookConfig
     hooks.deleteHook(req.params.hookId);
     return { success: true };
   }));
-  router.get('/:tenantId/skill-presets/market', route((req, context) => skillPresets.searchMarketSkills({
+  router.get('/:tenantId/skill-presets/market', route((req, context) => marketRequest(req, () => skillPresets.searchMarketSkills({
     searchContent: req.query.searchContent ?? req.query.q ?? '',
     page: req.query.page == null || req.query.page === '' ? 1 : positiveId(req.query.page, 'page'),
     pageSize: req.query.pageSize == null || req.query.pageSize === '' ? 20 : positiveId(req.query.pageSize, 'pageSize'),
     completeInventory: req.query.complete === 'true',
     ...skillMarketContext(context),
-  })));
+  }))));
   router.get('/:tenantId/skill-presets', route((_req, context) => ({
     presets: skillPresets.listAdminPresets({ tenantId: context.tenantId, preinstallScope: 'none' }),
   })));
   router.post('/:tenantId/skill-presets', route(async (req, context) => ({
-    preset: await skillPresets.createPreset({
+    preset: await marketRequest(req, () => skillPresets.createPreset({
       tenantId: context.tenantId,
       userId: context.userId,
       input: {
@@ -145,7 +162,7 @@ export function createTenantManagementRouter({ database = db, hooks = hookConfig
       },
       ...skillMarketContext(context),
       beforeWrite: () => authorize(req),
-    }),
+    })),
   })));
   router.post('/:tenantId/skill-presets/:presetId/validate', route((req, context) => {
     const preset = selectableSkillPreset(req, context);
