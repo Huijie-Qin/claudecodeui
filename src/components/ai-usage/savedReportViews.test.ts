@@ -46,3 +46,13 @@ test('bad or unavailable storage cannot prevent report access; invalid dates fal
   const restricted = new SavedReportViews({ getItem() { throw Error(); }, setItem() { throw Error(); }, removeItem() { throw Error(); } });
   assert.doesNotThrow(() => { restricted.bind(10, 2); restricted.set('usage', { queryKey: '', value: { groupBy: 'user' } }); restricted.clear(); });
 });
+
+
+test('integration detail sorting and page size survive reload without retaining rows or the current page', () => {
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
+  const first = new SavedReportViews(storage); first.bind(10, 2);
+  first.set('integration-details', { queryKey: 'old-batch', value: { page: 4, pageSize: 50, sort: { sortBy: 'refreshedAt', sortDir: 'asc' }, items: [{ secret: 'not-persisted' }] } });
+  const restored = new SavedReportViews(storage); restored.bind(10, 2);
+  assert.deepEqual(restored.get('integration-details'), { queryKey: '', value: { page: 1, pageSize: 50, sort: { sortBy: 'refreshedAt', sortDir: 'asc' } } });
+});

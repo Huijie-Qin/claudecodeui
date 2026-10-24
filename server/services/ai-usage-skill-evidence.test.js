@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
 import { collectSkillEvidence, reconcileSkillEvidence } from './ai-usage-skill-evidence.js';
 
 const scope = { tenant_id: 1, user_id: 2, workspace_id: 3, provider: 'claude', provider_session_id: 'session-1' };
@@ -288,4 +289,91 @@ test('malformed/mismatched scope facts and untimestamped contexts cannot generat
     { ...native, occurred_at: null }]), []);
   assert.deepEqual(reconcile([], { contexts: [context('tool', 'native', { occurred_at: null }),
     context('request', 'req', { session_id: null })], bindings: [binding()] }), []);
+});
+
+test('Claude response wrappers preserve native Skill evidence, identities and business timestamps', () => {
+  const state = {};
+  const wrapped = data => ({ type: 'claude-response', timestamp: '2026-09-20T00:00:00Z', data });
+  const facts = [...collect(wrapped(user('req', '/report')), { state }),
+    ...collect(wrapped(tool('call')), { state })];
+  assert.equal(facts[0].occurred_at, start);
+  assert.equal(facts[0].value.requestId, 'req');
+  assert.equal(facts[1].occurred_at, later);
+  assert.equal(facts[1].value.toolUseId, 'call');
+  assert.equal(facts[1].value.requestId, 'req');
+  assert.equal(reconcile(facts).length, 1);
+  assert.deepEqual(facts, [...collect(user('req', '/report'), { state: {} }),
+    ...collect(tool('call'), { state: { requestId: 'req', origin: 'user' } })]);
+  const noTime = { ...tool('time-from-envelope'), timestamp: undefined };
+  assert.equal(collect({ type: 'claude-response', timestamp: later, data: noTime })[0].occurred_at, later);
+  const fallback = collect({ type: 'claude-response', data: user(null, '/report', { timestamp: undefined }) },
+    { fallbackId: 'provider-id', fallbackTime: start });
+  assert.equal(fallback[0].value.requestId, 'provider-id');
+  assert.equal(fallback[0].occurred_at, start);
+});
+
+test('wrapped inherited, malformed, metadata and Hook records keep their existing exclusions', () => {
+  const wrapped = data => ({ type: 'claude-response', data });
+  for (const raw of [{ ...wrapped(tool('outer-inherited')), inherited: true },
+    wrapped({ ...tool('inner-inherited'), inherited: true }),
+    wrapped({ ...tool('fork'), forkedFrom: { sessionId: 'parent' } }),
+    wrapped({ ...tool('message-inherited'), message: { ...tool('message-inherited').message, inherited: true } }),
+    wrapped(null), wrapped([]), wrapped('invalid'),
+    wrapped(user('metadata', '/report', { isMeta: true }))]) assert.deepEqual(collect(raw), []);
+  const state = {};
+  collect(wrapped(user('hook', '<ccui-hook-recovery>internal</ccui-hook-recovery>')), { state });
+  const facts = collect(wrapped(tool('hook-call')), { state });
+  assert.equal(facts[0].value.origin, 'hook');
+  assert.deepEqual(reconcile(facts), []);
+});
+
+test('native user and assistant roles override conflicting normalized roles for Skill evidence', () => {
+  const nativeTool = tool('native', 'report', { role: 'user' });
+  nativeTool.message.role = 'user';
+  assert.equal(collect(nativeTool)[0].value.toolUseId, 'native');
+  const nativeUser = user('req', '/report', { role: 'assistant' });
+  nativeUser.message.role = 'assistant';
+  assert.equal(collect(nativeUser)[0].value.kind, 'slash');
+  assert.deepEqual(collect({ ...tool('user-echo'), type: 'user', role: 'assistant' }), []);
+  assert.deepEqual(collect({ type: 'assistant', role: 'user', uuid: 'ai-slash', timestamp: start,
+    message: { role: 'user', content: '/report' } }), []);
+  assert.deepEqual(collect({ type: 'user', kind: 'tool_use', timestamp: start, toolId: 'echo',
+    toolName: 'Skill', toolInput: { skill: 'report' } }), []);
+});
+
+test('only an explicit scoped historical resolver validates slash candidates without runtime bindings', () => {
+  const isHistoricalSkill = candidate => candidate.scope.tenant_id === scope.tenant_id
+    && candidate.skillName === 'report' && candidate.occurredAt >= start;
+  const facts = slash('historic');
+  assert.deepEqual(reconcile(facts), []);
+  const rows = reconcile(facts, { isHistoricalSkill });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].value.invocationKind, 'slash');
+  assert.equal(rows[0].subject_id, null, 'Evidence correlation leaves final publisher/identity resolution to enrich');
+  assert.equal(rows[0].value.publisherUserId, null);
+  assert.deepEqual(reconcile(collect(user('builtin', '/help')), { isHistoricalSkill }), []);
+  assert.deepEqual(reconcile(collect(user('mention', 'please use /report')), { isHistoricalSkill }), []);
+  assert.deepEqual(reconcile(facts, { isHistoricalSkill: () => false }), []);
+  const otherScope = { ...scope, tenant_id: 9 };
+  assert.deepEqual(reconcile(collectSkillEvidence(otherScope, user('other-tenant', '/report'), options),
+    { isHistoricalSkill }), []);
+  assert.deepEqual(reconcile(collect(user('too-early', '/report', { timestamp: '2026-09-01T00:00:00Z' })),
+    { isHistoricalSkill }), []);
+});
+
+test('historical slash validation preserves tool dedupe, trusted origins and source exclusions', () => {
+  const isHistoricalSkill = candidate => candidate.skillName === 'report';
+  const state = {};
+  const facts = slash('req', { state });
+  const native = collect(tool('call'), { state });
+  const rows = reconcile([...facts, ...facts, ...native, ...native], { isHistoricalSkill });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].value.toolUseId, 'call');
+  for (const excluded of ['hook', 'agent_graph', 'top_skill']) {
+    assert.deepEqual(reconcile(facts, { isHistoricalSkill,
+      contexts: [context('request', 'req', { origin: excluded })] }), []);
+  }
+  assert.deepEqual(reconcile([{ ...facts[0], value: { ...facts[0].value, origin: 'unknown' } }],
+    { isHistoricalSkill }), []);
+  assert.equal(reconcile([], { isHistoricalSkill, contexts: [context('request', 'known')] }).length, 1);
 });

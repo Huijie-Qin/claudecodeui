@@ -2,7 +2,7 @@ import type { UsageFilters } from './filterState';
 import type { ReportViewEntry } from './reportViewState';
 import { defaultUsageRange, validateUsageRange } from './usageUtils';
 
-const keys = /^(?:usage|skills|hooks|templates|code|demo-code|filters:(?:usage|skills|hooks|templates|code)|hook:[^\s]{1,200}|template:[^\s]{1,200})$/;
+const keys = /^(?:usage|integration-details|skills|hooks|templates|code|demo-code|filters:(?:usage|skills|hooks|templates|code)|hook:[^\s]{1,200}|template:[^\s]{1,200})$/;
 const groups = ['user', 'workspace', 'day', 'week', 'month', 'skill', 'publisher', 'hook', 'template'];
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 

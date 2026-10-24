@@ -123,6 +123,9 @@ CREATE TABLE IF NOT EXISTS ai_skill_binding_history (
 CREATE INDEX IF NOT EXISTS idx_ai_skill_history_lookup ON ai_skill_binding_history(tenant_id,workspace_id,local_name,valid_from);
 CREATE INDEX IF NOT EXISTS idx_ai_skill_history_remote ON ai_skill_binding_history(tenant_id,remote_skill_id,workspace_id);
 CREATE INDEX IF NOT EXISTS idx_ai_skill_publication_publisher ON ai_skill_publications(tenant_id,skill_id,status,first_published_at);
+CREATE INDEX IF NOT EXISTS idx_ai_skill_publication_operation ON ai_skill_publications(tenant_id,operation_id);
+CREATE INDEX IF NOT EXISTS idx_ai_skill_publication_name ON ai_skill_publications(tenant_id,skill_name,status,first_published_at);
+CREATE INDEX IF NOT EXISTS idx_ai_skill_publish_event_name ON ai_skill_publish_events(tenant_id,skill_name,status,published_at);
 `;
 
 function exists(database, table) {

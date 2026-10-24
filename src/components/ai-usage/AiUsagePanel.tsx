@@ -9,22 +9,21 @@ import AnalysisPanel from './AnalysisPanel';
 import SummaryCards from './SummaryCards';
 import DemoCodeReport from './DemoCodeReport';
 import CodeReport from './CodeReport';
-import ReportTrend from './ReportTrend';
+import IntegrationDetails from './IntegrationDetails';
 import './reportTheme.css';
 import SkillsReport from './SkillsReport';
 import TemplateReport from './TemplateReport';
 import { ReportViewContext } from './ReportViewContext';
 import HookReportPanel from './HookReportPanel';
 import Overlay from './ReportOverlay';
-import MetricDefinition from './MetricDefinition';
 import { MetricDefinitionAccess } from './metricDefinitionAccess';
 import { browserReportViews, savedFilters } from './savedReportViews';
 import WorkbookDownload from './WorkbookDownload';
 import { reportTabOrder } from './analysisState';
 import { usageFilterParams, type UsageFilters } from './filterState';
 import { isUsageAccessFailure, usageFailureKey } from './requestState';
-import { assertPublishedBatch, coverageStatus, dateInZone, defaultUsageRange, validateUsageRange } from './usageUtils';
-import type { ReportTab, UsageCapabilities, UsageList, UsageRow, UsageStatus } from './types';
+import { coverageStatus, dateInZone, defaultUsageRange, validateUsageRange } from './usageUtils';
+import type { ReportTab, UsageCapabilities, UsageRow, UsageStatus } from './types';
 
 const inputClass = 'h-9 min-w-0 rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring/30';
 const panelClass = 'rounded-xl border border-border bg-card';
@@ -41,8 +40,6 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
   tabRef.current = tab;
   const [filters, setFilterState] = useState<UsageFilters>({ from: '', to: '', userName: '', workspaceName: '' });
   const [draft, setDraft] = useState(filters);
-  const [trendMetric, setTrendMetric] = useState<'sessionCount' | 'dau' | 'mau'>('sessionCount');
-  const [trend, setTrend] = useState<UsageRow[]>([]);
   const [selectedHook, setSelectedHook] = useState<UsageRow | null>(null);
   const [refreshConfirmOpen, setRefreshConfirmOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
@@ -50,7 +47,6 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [rangeError, setRangeError] = useState('');
-  const requestEpoch = useRef(0);
   const snapshotKey = `${tenantId}:${scope}:${status?.batchId}:${tab}:${JSON.stringify(filters)}:${revision}`;
   const [loadedKey, setLoadedKey] = useState('');
   const through = status?.dataThroughDate || (status?.dataThrough ? dateInZone(new Date(new Date(status.dataThrough).getTime() - 1).toISOString(), status.timeZone) : '');
@@ -66,8 +62,7 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
 
   const onAccessError = useCallback(() => {
     viewStore.clear();
-    requestEpoch.current += 1;
-    setTrend([]); setSelectedHook(null); setRefreshConfirmOpen(false); setStatusOpen(false); setDefinitionsOpen(false);
+    setSelectedHook(null); setRefreshConfirmOpen(false); setStatusOpen(false); setDefinitionsOpen(false);
     setCapabilities(null); setStatus(null); setLoadedKey('');
     setError('accessChanged'); setRevision((value) => value + 1);
   }, [viewStore]);
@@ -75,7 +70,7 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
-    setCapabilities(null); setStatus(null); setTrend([]); setLoadedKey('');
+    setCapabilities(null); setStatus(null); setLoadedKey('');
     void (async () => {
       try {
         const nextCapabilities = await usageRequest<UsageCapabilities>('capabilities', { tenantId }, controller.signal);
@@ -112,29 +107,9 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
 
   useEffect(() => {
     if (!status?.batchId || !capabilities?.canViewTenant || !filters.from || !filters.to) return;
-    const controller = new AbortController();
-    const epoch = ++requestEpoch.current;
-    const batchId = status.batchId;
-    setLoading(true); setError('');
-    const params = { tenantId, scope, batchId, ...usageFilterParams(filters) };
-    void (async () => {
-      try {
-        if (tab === 'usage') {
-          const nextTrend = await usageRequest<UsageList>('trend', params, controller.signal);
-          if (controller.signal.aborted || epoch !== requestEpoch.current) return;
-          assertPublishedBatch(nextTrend, batchId);
-          setTrend(nextTrend.items || []);
-        } else { setTrend([]); }
-        setLoadedKey(snapshotKey);
-      } catch (caught) {
-        if (controller.signal.aborted || epoch !== requestEpoch.current) return;
-        setTrend([]);
-        if (isUsageAccessFailure(caught)) onAccessError();
-        else setError(usageFailureKey(caught, caught instanceof Error && caught.message === 'batchMismatch' ? 'batchMismatch' : 'requestFailed'));
-      } finally { if (!controller.signal.aborted && epoch === requestEpoch.current) setLoading(false); }
-    })();
-    return () => controller.abort();
-  }, [tenantId, scope, status?.batchId, capabilities, filters, tab, revision, snapshotKey, onAccessError]);
+    setLoadedKey(snapshotKey);
+    setLoading(false);
+  }, [status?.batchId, capabilities?.canViewTenant, filters.from, filters.to, snapshotKey]);
 
   const formatTime = (value?: string) => value ? new Date(value).toLocaleString(i18n.language, { timeZone: status?.timeZone || 'Asia/Shanghai', hour12: false }) : '—';
   const ready = loadedKey === snapshotKey && !error;
@@ -143,7 +118,7 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
   const excludedSessionCount = status?.batchId && typeof excludedCount === 'number' && Number.isSafeInteger(excludedCount) && excludedCount > 0 ? excludedCount : 0;
   const analysisParams = { tenantId, scope, batchId: status?.batchId, ...usageFilterParams(filters) };
   const childKey = `${tenantId}:${scope}:${tab}:${status?.batchId}:${JSON.stringify(filters)}:${revision}`;
-  const analysisPanel = tab === 'skills' || tab === 'hooks' || tab === 'templates' || tab === 'code' ? null : <AnalysisPanel key={childKey} tab={tab} params={analysisParams} onAccessError={onAccessError} />;
+  const analysisPanel = tab === 'usage' || tab === 'skills' || tab === 'hooks' || tab === 'templates' || tab === 'code' ? null : <AnalysisPanel key={childKey} tab={tab} params={analysisParams} onAccessError={onAccessError} />;
   const visibleTabs: (ReportTab | 'code')[] = capabilities?.simulation || capabilities?.codeReportAvailable ? ['usage', 'code', ...reportTabOrder.slice(1)] : [...reportTabOrder];
   // Updated fixture servers exercise the same topic-table API as production.
   // Retain only the old offline HTML's explicit demo mode when no API exists.
@@ -176,18 +151,7 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
     </form>}
     <div id="ai-usage-tab-panel" role="tabpanel" aria-labelledby={`ai-report-tab-${tab}`} aria-busy={loading} className="space-y-4">
       {tab === 'hooks' && ready && status?.batchId && <AnalysisPanel key={childKey} tab="hooks" hookDirectory params={analysisParams} onAccessError={onAccessError} onDetails={setSelectedHook} />}
-      {!status?.batchId ? <div className={`${panelClass} px-6 py-16 text-center`}><CalendarClock className="mx-auto h-9 w-9 text-muted-foreground/60" /><h3 className="mt-4 font-medium">{loading ? t('loading') : t('noBatch')}</h3><p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-muted-foreground">{t('noBatchHint')}</p></div> : loading && !ready ? <div className="flex items-center justify-center gap-2 py-20 text-sm text-muted-foreground"><RefreshCw className="h-4 w-4 animate-spin" />{t('loading')}</div> : tab === 'usage' ? <>
-        <section className="ai-report-trend">
-          <header><h3>{t('trendTitle')}</h3>
-            <select className={inputClass} aria-label={t('trendMetric')} value={trendMetric} onChange={(event) => setTrendMetric(event.target.value as typeof trendMetric)}>
-              {(['sessionCount','dau','mau'] as const).map((key) => <option key={key} value={key}>{t(key)}</option>)}
-            </select>
-          </header>
-          {ready && trend.length ? <ReportTrend rows={trend.filter(row => Boolean(row.date)).map(row => ({ date: String(row.date), value: typeof row[trendMetric] === 'number' ? row[trendMetric] as number : null }))} series={[{ key: 'value', label: t(trendMetric) }]} unit={t(trendMetric)} label={t('trendTitle')} /> : <p className="py-12 text-center text-sm text-muted-foreground">{t('empty')}</p>}
-          <footer><span>{filters.from} — {filters.to}</span><MetricDefinition><span>{t('redesign.dailyTrend')}</span></MetricDefinition></footer>
-        </section>
-        {analysisPanel}
-      </> : tab === 'code' ? legacyCodeDemo ? <DemoCodeReport key={childKey} tenantId={tenantId} batchId={status.batchId} filters={filters} timeZone={status.timeZone || 'Asia/Shanghai'} onAccessError={onAccessError} /> : <CodeReport key={childKey} params={analysisParams} onAccessError={onAccessError} /> : tab === 'skills' ? <SkillsReport key={`skills:${childKey}`} params={{ ...analysisParams, timeZone: status.timeZone }} onAccessError={onAccessError} /> : tab === 'templates' ? <TemplateReport key={childKey} params={analysisParams} onAccessError={onAccessError} /> : analysisPanel}
+      {!status?.batchId ? <div className={`${panelClass} px-6 py-16 text-center`}><CalendarClock className="mx-auto h-9 w-9 text-muted-foreground/60" /><h3 className="mt-4 font-medium">{loading ? t('loading') : t('noBatch')}</h3><p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-muted-foreground">{t('noBatchHint')}</p></div> : loading && !ready ? <div className="flex items-center justify-center gap-2 py-20 text-sm text-muted-foreground"><RefreshCw className="h-4 w-4 animate-spin" />{t('loading')}</div> : tab === 'usage' ? <IntegrationDetails key={childKey} params={analysisParams} onAccessError={onAccessError} /> : tab === 'code' ? legacyCodeDemo ? <DemoCodeReport key={childKey} tenantId={tenantId} batchId={status.batchId} filters={filters} timeZone={status.timeZone || 'Asia/Shanghai'} onAccessError={onAccessError} /> : <CodeReport key={childKey} params={analysisParams} onAccessError={onAccessError} /> : tab === 'skills' ? <SkillsReport key={`skills:${childKey}`} params={{ ...analysisParams, timeZone: status.timeZone }} onAccessError={onAccessError} /> : tab === 'templates' ? <TemplateReport key={childKey} params={analysisParams} onAccessError={onAccessError} /> : analysisPanel}
     </div>
     <footer className="ai-report-note"><span>{capabilities?.simulation ? t('redesign.simulationHint') : t('todayHint')}</span>{capabilities?.canViewDefinitions === true && <Button variant="ghost" size="sm" onClick={() => setDefinitionsOpen(true)}><CircleHelp className="h-3.5 w-3.5" />{t('redesign.definitions')}</Button>}</footer>
     {statusOpen && <Overlay title={t('redesign.updates')} onClose={() => setStatusOpen(false)} compact><p className="mb-3 text-xs text-muted-foreground">{t('nonRealtime')}</p><dl className="divide-y divide-border">{[[t('dataThrough'), through || '—'], [t('lastSuccess'), formatTime(status?.lastSucceededAt || status?.generatedAt)], [t('nextRun'), status?.nextRunAt ? formatTime(status.nextRunAt) : t('notScheduled')], [t('timeZone'), status?.timeZone || '—']].map(([label, value]) => <div className="flex flex-wrap justify-between gap-3 py-3 text-sm" key={label}><dt className="text-muted-foreground">{label}</dt><dd className="font-medium tabular-nums">{value}</dd></div>)}</dl>{showPartial && <p className="ai-report-coverage-note"><AlertCircle className="h-4 w-4 shrink-0" />{t(excludedSessionCount > 0 ? 'sessionScopeConflictHint' : 'partialHint')}</p>}</Overlay>}

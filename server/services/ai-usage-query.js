@@ -5,6 +5,7 @@ import { shiftDate } from './ai-usage-config.js';
 import { reportIdentityColumns, reportIdentitySorts, reportUserNameSql, reportWorkspaceNameSql } from './ai-usage-identities.js';
 import { splitReportCte, splitSnapshotReady } from './ai-dashboard-split-query.js';
 import { createCodeReport } from './ai-usage-code-report.js';
+import { createIntegrationDetails } from './ai-usage-integration-details.js';
 
 const parseJson = (value, fallback = {}) => { try { return JSON.parse(value); } catch { return fallback; } };
 function hookDto(json) {
@@ -396,8 +397,9 @@ export function createAiUsageQueryService({ db, getScheduleStatus = () => ({}) }
     metricSql, durationSql, hookConditions, metrics });
   const hookFieldStatistics = (access, filters) => hookStatistics(access, null, filters, true);
   const { code, codeRecords } = createCodeReport({ db, context: coreContext, list });
+  const integrationDetails = createIntegrationDetails({ db, context });
   // A worker can publish through a different SQLite connection between two
   // SELECTs. Metadata, counts, totals and rows must share one read snapshot.
-  const queries = { status, context, overview, summary, trend, users, skills, code, codeRecords, hooks, hookRecords, hookStatistics, hookFieldStatistics, hookExecutions, hookExecutionRecords, templates, templateApplications, templateSessions, analysis };
+  const queries = { status, context, overview, summary, trend, users, skills, code, codeRecords, integrationDetails, hooks, hookRecords, hookStatistics, hookFieldStatistics, hookExecutions, hookExecutionRecords, templates, templateApplications, templateSessions, analysis };
   return Object.fromEntries(Object.entries(queries).map(([name, query]) => [name, db.transaction(query).deferred]));
 }

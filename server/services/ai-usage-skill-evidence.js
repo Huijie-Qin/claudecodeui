@@ -33,13 +33,17 @@ function expansionName(text) {
 }
 
 /** Capture only safe evidence. The caller owns persistence and the file checkpoint. */
-export function collectSkillEvidence(scope, message, {
+export function collectSkillEvidence(scope, raw, {
   timeZone, fallbackId, fallbackTime, subagentId = null, state = {}, includeBoundaries = false,
 } = {}) {
-  if (!message || typeof message !== 'object' || isInheritedUsageMessage(message)) return [];
-  const occurredAt = normalizeUsageTimestamp(message.timestamp || fallbackTime, timeZone);
+  if (!raw || typeof raw !== 'object' || isInheritedUsageMessage(raw)) return [];
+  const message = raw.type === 'claude-response' ? raw.data : raw;
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return [];
+  const occurredAt = normalizeUsageTimestamp(message.timestamp || raw.timestamp || fallbackTime, timeZone);
   const id = identifier(message.uuid || message.id || fallbackId);
-  const role = message.role || message.message?.role || message.type;
+  // Match SQL history parsing: native role is authoritative over stale normalized metadata.
+  const role = ['assistant', 'user'].includes(message.type) ? message.type
+    : message.role || message.message?.role;
   const content = message.message?.content ?? message.content;
   const text = contentText(content).trim();
   const isMeta = message.isMeta || message.is_meta || message.message?.isMeta || message.message?.is_meta;
@@ -76,7 +80,7 @@ export function collectSkillEvidence(scope, message, {
   }
 
   const tools = [];
-  if (message.kind === 'tool_use' && message.toolName === 'Skill') {
+  if (message.kind === 'tool_use' && message.toolName === 'Skill' && (!role || role === 'assistant')) {
     tools.push({ id: message.toolId, name: message.toolInput?.skill });
   }
   if (role === 'assistant') {
@@ -133,7 +137,8 @@ function validBinding(bindings, candidate) {
 }
 
 /** Rebuild complete correlation groups from safe evidence and trusted source metadata. */
-export function reconcileSkillEvidence({ evidence = [], contexts = [], bindings = [], timeZone } = {}) {
+export function reconcileSkillEvidence({ evidence = [], contexts = [], bindings = [], timeZone,
+  isHistoricalSkill = () => false } = {}) {
   const groups = new Map();
   const groupFor = (scope) => {
     const key = canonicalScopeKey(scope);
@@ -245,7 +250,8 @@ export function reconcileSkillEvidence({ evidence = [], contexts = [], bindings 
       && a.subagentId === b.subagentId && a.skillName === b.skillName;
     const invocations = [...tools];
     for (const slash of facts.filter((candidate) => candidate.kind === 'slash')) {
-      const bound = validBinding(bindings, slash);
+      // Historical validation is supplied only by the curated, scoped backfill resolver.
+      const bound = validBinding(bindings, slash) || isHistoricalSkill(slash);
       const native = tools.find((tool) => exactMatch(slash, tool));
       const expanded = expansions.some((expansion) => exactMatch(slash, expansion));
       if (!(bound || (!slash.synthetic && (native || expanded)))) continue;

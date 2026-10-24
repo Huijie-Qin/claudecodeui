@@ -205,3 +205,22 @@ test('HTTP Skill, execution and business field endpoints stay scoped and use exa
   assert.equal(hookReport.body.items[0].sum, 7);
   assert.equal((await request('/hooks/hook-a/records?tenantId=10&fieldKey=missing')).body.total, 0);
 });
+
+
+test('HTTP integration details use live tenant/self authorization and return published raw records', async t => {
+  const { request, batch, row, db } = await httpFixture(t);
+  batch();
+  row({ id: 'sql-3', dataset: 'sql_generations', userId: 3, value: { generatedLines: 5 } });
+  row({ id: 'sql-4', dataset: 'sql_generations', userId: 4, value: { generatedLines: 7 } });
+  const url = '/integration-details?tenantId=10&batchId=batch-1';
+  const all = await request(`${url}&scope=tenant&pageSize=1&sortBy=generatedSqlLines`);
+  assert.equal(all.status, 200); assert.equal(all.body.total, 2); assert.equal(all.body.items[0].generatedSqlLines, 7);
+  assert.equal(all.body.integrationDetailVersion, 1);
+  assert.equal(all.headers.get('cache-control'), 'private, no-store');
+  const self = await request(url, { userId: 3 });
+  assert.equal(self.body.total, 1); assert.equal(self.body.items[0].userId, 3);
+  assert.equal((await request(`${url}&scope=tenant&canViewTenant=true`, { userId: 3 })).status, 403);
+  assert.equal((await request('/integration-details?tenantId=20')).status, 403);
+  db.exec("UPDATE tenant_users SET role='member' WHERE user_id=2");
+  assert.equal((await request(`${url}&scope=tenant`)).status, 403);
+});

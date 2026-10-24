@@ -237,7 +237,8 @@ export async function runAiUsageWindow({ database, config, now = () => new Date(
                     WHERE tenant_id=? AND dataset=? AND stat_date=? AND row_key>? AND ${durationSourceFilterSql('f')}
                     ORDER BY row_key LIMIT ?
                   ) SELECT * FROM (
-                    SELECT f.*,ROW_NUMBER() OVER(PARTITION BY f.row_key ORDER BY f.priority DESC,f.source_key) AS choice
+                    SELECT f.*,ROW_NUMBER() OVER(PARTITION BY f.row_key ORDER BY
+                      CASE WHEN f.dataset='skill_publications' THEN f.occurred_at END ASC,f.priority DESC,f.source_key) AS choice
                     FROM ai_usage_fact_rows f JOIN next_keys k ON k.row_key=f.row_key
                     WHERE f.tenant_id=? AND f.dataset=? AND f.stat_date=? AND ${durationSourceFilterSql('f')}
                   ) WHERE choice=1 ORDER BY row_key`).all(tenant.id, part.dataset, part.stat_date, target.cursor,

@@ -10,6 +10,7 @@ import { isInheritedUsageMessage } from './ai-usage-inheritance.js';
 import { collectSkillEvidence } from './ai-usage-skill-evidence.js';
 import { createAiUsageSkillIndexer } from './ai-usage-skill-indexer.js';
 import { createSkillPublisherResolver } from './ai-usage-skill-publishers.js';
+import { createHistoricalSkillResolver, HISTORICAL_SKILL_PUBLICATION_PREFIX } from './ai-usage-skill-history.js';
 import { parseSqlGeneration } from './ai-usage-sql.js';
 import { createTranscriptDurationTracker, transcriptTurnRows } from './ai-usage-transcript-duration.js';
 import { readTranscriptCompletionMarkers } from './ai-usage-transcript-markers.js';
@@ -24,6 +25,7 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
   const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((row) => row.name));
   const scopeNames = new Map();
   const resolvePublisher = createSkillPublisherResolver(db, tenantId);
+  const resolveHistoricalSkill = createHistoricalSkillResolver(db, tenantId);
 
   function enrich(row) {
     if (row.dataset === 'skill_evidence') return row;
@@ -48,16 +50,18 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
         WHERE tenant_id=? AND workspace_id=? AND local_name=? AND valid_from<=?
         AND (valid_to IS NULL OR valid_to>?) ORDER BY valid_from DESC LIMIT 1`)
         .get(tenantId, row.workspace_id, row.value.skillName, row.occurred_at, row.occurred_at);
-      if (binding) {
-        const publisherUserId = resolvePublisher(binding, row.occurred_at);
-        row.subject_id = binding.remote_skill_id;
-        row.value = { ...row.value, skillId: binding.remote_skill_id,
-          callerUserName: row.value.userName,
-          userName: publisherUserId ? db.prepare('SELECT username FROM users WHERE id=?').get(publisherUserId)?.username ?? null : null,
-          publisherUserId, attribution: publisherUserId ? 'confirmed' : 'unresolved' };
-        // Contributions belong to the publisher. The caller remains a separate dimension.
-        row.user_id = publisherUserId;
-      } else row.user_id = null;
+      const historical = binding ? null : resolveHistoricalSkill(row.value.skillName, row.occurred_at);
+      const publisherUserId = binding ? resolvePublisher(binding, row.occurred_at)
+        : historical.match?.publisherUserId ?? null;
+      const skillId = binding?.remote_skill_id ?? historical?.match?.skillId ?? null;
+      row.subject_id = skillId;
+      row.value = { ...row.value, skillId, callerUserName: row.value.userName,
+        userName: publisherUserId ? db.prepare('SELECT username FROM users WHERE id=?').get(publisherUserId)?.username ?? null : null,
+        publisherUserId, attribution: publisherUserId ? 'confirmed' : 'unresolved',
+        attributionSource: publisherUserId ? binding ? 'binding_history' : 'historical_publication' : null,
+        attributionReason: publisherUserId ? null : binding ? 'publisher_unresolved' : historical.reason };
+      // Contributions belong to the publisher. The caller remains a separate dimension.
+      row.user_id = publisherUserId;
     }
     return row;
   }
@@ -108,7 +112,7 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
   }
 
   function sourceRows(change) {
-    if (change.source_type === 'skill_session' || change.source_type === 'skill_binding') return [];
+    if (['skill_session', 'skill_binding', 'skill_history'].includes(change.source_type)) return [];
     const source = bootstrapSources.find((entry) => entry.type === change.source_type);
     if (!source || !tables.has(source.table)) return [];
     const row = db.prepare(`SELECT * FROM ${source.table} WHERE ${source.key}=?`).get(change.source_key);
@@ -223,6 +227,16 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
           const rows = sourceRows(change).map(enrich);
           if (change.source_type === 'publication' || change.source_type === 'publication_event') {
             const eventSource = change.source_type === 'publication_event';
+            resolveHistoricalSkill.clear();
+            // Coalesce all imported publication changes into one metadata pass;
+            // old calls often have NO binding history to locate their workspaces.
+            if ((!eventSource && change.source_key.startsWith(HISTORICAL_SKILL_PUBLICATION_PREFIX))
+              || db.prepare('SELECT 1 FROM ai_skill_publications WHERE tenant_id=? AND operation_id GLOB ? LIMIT 1')
+                .get(tenantId, `${HISTORICAL_SKILL_PUBLICATION_PREFIX}*`)) {
+              db.prepare(`INSERT INTO ai_usage_source_changes(tenant_id,source_type,source_key)
+                VALUES(?,'skill_history','tenant') ON CONFLICT(tenant_id,source_type,source_key)
+                DO UPDATE SET generation=generation+1`).run(tenantId);
+            }
             // Late confirmation/correction also affects calls in OTHER users'
             // workspaces. Queue metadata only; the next skills stage repairs
             // the historical partitions without rescanning message bodies.
@@ -237,6 +251,14 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
           }
           if (change.source_type === 'skill_session') db.prepare(`INSERT INTO ai_usage_dirty_skill_sessions(tenant_id,session_key)
             VALUES(?,?) ON CONFLICT(tenant_id,session_key) DO UPDATE SET generation=generation+1`).run(tenantId, change.source_key);
+          if (change.source_type === 'skill_history') {
+            db.prepare(`INSERT INTO ai_usage_dirty_skill_sessions(tenant_id,session_key)
+              SELECT tenant_id,session_key FROM ai_usage_fact_rows
+              WHERE tenant_id=? AND dataset='skill_evidence' AND session_key IS NOT NULL
+              UNION SELECT tenant_id,json_array(tenant_id,workspace_id,user_id,provider,session_id)
+              FROM ai_usage_skill_context WHERE tenant_id=? AND session_id IS NOT NULL
+              ON CONFLICT(tenant_id,session_key) DO UPDATE SET generation=generation+1`).run(tenantId, tenantId);
+          }
           if (change.source_type === 'skill_binding') {
             db.prepare(`INSERT INTO ai_usage_dirty_skill_sessions(tenant_id,session_key)
               SELECT DISTINCT tenant_id,session_key FROM ai_usage_fact_rows
@@ -551,7 +573,8 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
     }
   }
 
-  const skills = createAiUsageSkillIndexer({ store, config, batch, checkpoint, checkWindow, enrich });
+  const skills = createAiUsageSkillIndexer({ store, config, batch, checkpoint, checkWindow, enrich,
+    isHistoricalSkill: candidate => Boolean(resolveHistoricalSkill(candidate.skillName, candidate.occurredAt).match) });
 
   function coverage() {
     const statuses = db.prepare(`SELECT terminal_status,COUNT(*) AS count FROM ai_usage_turn_facts
@@ -576,7 +599,12 @@ export function createAiUsageIndexer({ store, config, batch, checkpoint, checkWi
         (julianday(merged_at)<julianday(?) AND
           (additions IS NULL OR typeof(additions) NOT IN ('integer','real') OR additions<0
             OR additions>9007199254740991 OR additions!=CAST(additions AS INTEGER))))`).get(tenantId, batch.target_through).n : 0;
-    return { sessions: 'partial', duration: counts.completed || readableMain ? 'partial' : 'unavailable', durationSource: 'native_transcript', capturedTurns: captured, skillPublications: publications ? 'partial' : 'unavailable',
+    const invocationDiagnostics = db.prepare(`SELECT COALESCE(json_extract(value_json,'$.attributionReason'),'publisher_unresolved') AS reason,
+      COUNT(DISTINCT row_key) AS count FROM ai_usage_fact_rows
+      WHERE tenant_id=? AND dataset='skill_invocations' AND occurred_at<? AND user_id IS NULL
+      GROUP BY reason`).all(tenantId, batch.target_through);
+    return { skillInvocationDiagnostics: Object.fromEntries(invocationDiagnostics.map(row => [row.reason, row.count])),
+      sessions: 'partial', duration: counts.completed || readableMain ? 'partial' : 'unavailable', durationSource: 'native_transcript', capturedTurns: captured, skillPublications: publications ? 'partial' : 'unavailable',
       skillInvocations: 'partial', generatedSql: tables.has('agent_session_messages') || tables.has('agent_session_runtime') ? 'partial' : 'unavailable',
       generatedSqlSource: 'session_sql', hooks: tables.has('hook_data_records') ? 'complete' : 'unavailable', hookExecutions: tables.has('hook_executions') ? 'complete' : 'unavailable',
       templates: tables.has('workspace_agent_template_snapshots') ? 'complete' : 'unavailable',
