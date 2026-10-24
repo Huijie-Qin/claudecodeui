@@ -327,6 +327,12 @@ test('copying preserves explicit subagent choices and historical event defaults'
   assert.equal(createHookCopyDraft({ ...draft, eventName: 'Stop' } as HookConfig, '旧 Stop Hook 副本').includeSubagents, false);
 });
 
+test('new Hooks deliver context by default and copies preserve an explicit disabled switch', () => {
+  assert.equal(createEmptyHook('Stop').injectToContext, true);
+  assert.equal(createHookCopyDraft(draft as HookConfig, '旧配置副本').injectToContext, true);
+  assert.equal(createHookCopyDraft({ ...draft, injectToContext: false } as HookConfig, '独立执行副本').injectToContext, false);
+});
+
 test('subagent labels distinguish opt-in, historical defaults, and native child events', () => {
   assert.equal(getHookSubagentLabel(createEmptyHook('PreToolUse')), '仅主代理');
   assert.equal(getHookSubagentLabel({ eventName: 'PreToolUse' }), '主代理和子代理');

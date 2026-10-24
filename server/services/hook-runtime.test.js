@@ -14,6 +14,195 @@ import { createHookRuntimeSession, mergeSdkHooks } from './hook-runtime.js';
 import { executeHookScript } from './hook-script-executor.js';
 import { buildMcpLoopReplacement, createMcpLoopService } from './mcp-loop-service.js';
 
+test('muted messages and Skills still execute independently for main and child without feedback', async () => {
+  for (const agentId of [undefined, 'child']) {
+    const database = createDatabase();
+    const isolated = [];
+    const hook = { id: 'hook-1', eventName: 'Stop', includeSubagents: true, injectToContext: false,
+      postActions: [
+        { id: 'message', type: 'send_agent_message', config: { messageTemplate: 'PRIVATE MESSAGE' } },
+        { id: 'skill', type: 'invoke_skill', config: { skillId: 'builtin:test', skillName: 'test', argumentsTemplate: 'PRIVATE ARGS' } },
+      ],
+    };
+    try {
+      const runtime = createHookRuntimeSession({ hooks: [hook], database, userId: 1,
+        skillContentLoader: async () => 'PRIVATE SKILL',
+        enqueueAgentMessage: () => assert.fail('Must not enqueue main turn'),
+        enqueueSkillRecovery: () => assert.fail('Must not enqueue main Skill'),
+        prepareSubagentSkillRecovery: () => assert.fail('Must not deliver child feedback'),
+        executeIsolatedAgent: async ({ action, modelContent }) => {
+          isolated.push([action.type, modelContent]);
+          return { executed: true, executionMode: 'isolated', result: 'PRIVATE RESULT' };
+        },
+      });
+      const event = { hook_event_name: agentId ? 'SubagentStop' : 'Stop', agent_id: agentId };
+      assert.deepEqual(await runtime.executeHook(hook, event), {});
+      assert.deepEqual(isolated, [['send_agent_message', 'PRIVATE MESSAGE'], ['invoke_skill', 'PRIVATE SKILL']]);
+      const execution = database.prepare('SELECT * FROM hook_executions').get();
+      assert.equal(execution.status, 'succeeded');
+      for (const action of Object.values(JSON.parse(execution.actions_json))) {
+        assert.equal(action.output.executed, true);
+        assert.equal(action.output.scheduled, false);
+        assert.equal(action.output.result, 'PRIVATE RESULT');
+      }
+      assert.deepEqual(await runtime.executeHook(hook, event), {});
+      assert.equal(isolated.length, 2, 'duplicate callbacks do not duplicate task side effects');
+    } finally { database.close(); }
+  }
+});
+
+test('muted MCP and record actions execute and persist while their bound context is withheld', async () => {
+  const database = createDatabase();
+  const literal = value => ({ source: 'literal', value });
+  const hook = { id: 'hook-1', eventName: 'PostToolUse', injectToContext: false,
+    postActions: [
+      { id: 'mcp', type: 'call_mcp_tool', config: { toolName: 'notify', inputs: { recipient: literal('local-test') } } },
+      { id: 'record', type: 'write_record', config: { recordType: 'notice', fields: { result: { source: 'reference', path: 'actions.mcp.output' } } } },
+    ], claudeResponse: { bindings: { 'hookSpecificOutput.additionalContext': { source: 'template', template: '{{actions.mcp.output}}' } } },
+  };
+  try {
+    let calls = 0;
+    const runtime = createHookRuntimeSession({ database, userId: 1, mcpCaller: async ({ input }) => {
+      calls++; assert.deepEqual(input, { recipient: 'local-test' }); return { sent: true, result: 'PRIVATE MCP' };
+    } });
+    assert.deepEqual(await runtime.executeHook(hook, { hook_event_name: 'PostToolUse' }), {});
+    assert.equal(calls, 1);
+    assert.match(database.prepare('SELECT data_json FROM hook_data_records').get().data_json, /PRIVATE MCP/);
+    assert.equal(database.prepare('SELECT response_json FROM hook_executions').get().response_json, '{}');
+  } finally { database.close(); }
+});
+
+test('muted reviewer and subagent loops retain audit results without injecting feedback or tool output', async () => {
+  const database = createDatabase();
+  try {
+    const runtime = createHookRuntimeSession({ database, userId: 1,
+      reviewCompletion: async () => ({ complete: false, reason: 'PRIVATE REVIEW', nextStep: 'PRIVATE NEXT' }),
+      enqueueMcpLoop: async ({ onProgress }) => {
+        assert.equal(typeof onProgress, 'function');
+        return { scheduled: true, status: 'succeeded', toolUseResult: { data: 'PRIVATE LOOP' } };
+      },
+    });
+    const review = { id: 'hook-1', eventName: 'Stop', injectToContext: false,
+      postActions: [{ id: 'review', type: 'review_completion', config: { maxReviews: 2 } }] };
+    assert.deepEqual(await runtime.executeHook(review, { hook_event_name: 'Stop' }), { continue: false });
+    for (const agentId of [undefined, 'child']) {
+      const loop = { id: 'hook-1', eventName: 'PostToolUse', injectToContext: false, includeSubagents: true,
+        postActions: [{ id: 'loop', type: 'mcp_loop_run', config: {} }] };
+      assert.deepEqual(await runtime.executeHook(loop, { hook_event_name: 'PostToolUse', agent_id: agentId }), {});
+    }
+    const executions = database.prepare('SELECT actions_json, response_json FROM hook_executions').all();
+    assert.ok(executions.every(row => !row.response_json.includes('PRIVATE')));
+    assert.ok(executions.every(row => row.actions_json.includes('PRIVATE')));
+  } finally { database.close(); }
+});
+
+test('whole-action response templates expose loop file references while retaining other actions and audit results', async () => {
+  const resultFile = '/workspace/.cloudcli/hook-results/mcp-loops/job-1.json';
+  for (const template of ['{{actions}}', '{{actions.loop.output}}']) {
+    const database = createDatabase();
+    const hook = { id: 'hook-1', eventName: 'PostToolUse', includeSubagents: true,
+      postActions: [
+        { id: 'loop', type: 'mcp_loop_run', config: {} },
+        { id: 'other', type: 'call_mcp_tool', config: { toolName: 'other', inputs: {} } },
+      ],
+      claudeResponse: { bindings: { 'hookSpecificOutput.additionalContext': { source: 'template', template } } },
+    };
+    try {
+      const runtime = createHookRuntimeSession({ hooks: [hook], database, userId: 1,
+        enqueueMcpLoop: async () => ({ scheduled: true, status: 'succeeded', resultFile,
+          lastResult: { message: 'PRIVATE LOOP BODY' }, error: 'PRIVATE LOOP ERROR',
+          toolUseResult: { resultFile },
+        }),
+        mcpCaller: async () => ({ message: 'OTHER ACTION RESULT' }),
+      });
+      const response = await runtime.executeHook(hook, { hook_event_name: 'PostToolUse', agent_id: 'child' });
+      assert.deepEqual(JSON.parse(response.hookSpecificOutput.additionalContext), template === '{{actions}}'
+        ? { loop: { output: { resultFile } }, other: { output: { message: 'OTHER ACTION RESULT' } } }
+        : { resultFile });
+      assert.deepEqual(JSON.parse(response.hookSpecificOutput.updatedMCPToolOutput[0].text), { resultFile });
+      assert.doesNotMatch(JSON.stringify(response), /PRIVATE LOOP/);
+      const execution = database.prepare('SELECT * FROM hook_executions').get();
+      assert.equal(execution.status, 'succeeded');
+      const actions = JSON.parse(execution.actions_json);
+      assert.deepEqual(actions.loop.output.lastResult, { message: 'PRIVATE LOOP BODY' });
+      assert.equal(actions.loop.output.error, 'PRIVATE LOOP ERROR');
+      assert.equal(actions.loop.output.resultFile, resultFile);
+      assert.deepEqual(actions.other.output, { message: 'OTHER ACTION RESULT' });
+      assert.doesNotMatch(execution.response_json, /PRIVATE LOOP/);
+    } finally { database.close(); }
+  }
+});
+
+test('direct and interpolated loop-result bindings are unresolved instead of injecting business data', async () => {
+  for (const binding of [
+    { source: 'reference', path: 'actions.loop.output.lastResult' },
+    { source: 'reference', path: 'actions.loop.output.lastResult.message' },
+    { source: 'template', template: 'Result: {{actions.loop.output.lastResult.message}}' },
+  ]) {
+    const database = createDatabase();
+    const hook = { id: 'hook-1', eventName: 'PostToolUse', includeSubagents: true,
+      postActions: [{ id: 'loop', type: 'mcp_loop_run', config: {} }],
+      claudeResponse: { bindings: { 'hookSpecificOutput.additionalContext': binding } },
+    };
+    const resultFile = '/workspace/.cloudcli/hook-results/mcp-loops/job-1.json';
+    try {
+      const runtime = createHookRuntimeSession({ database, userId: 1,
+        enqueueMcpLoop: async () => ({ scheduled: true, resultFile,
+          lastResult: { message: 'PRIVATE LOOP BODY' }, toolUseResult: { resultFile } }),
+      });
+      const response = await runtime.executeHook(hook, { hook_event_name: 'PostToolUse', agent_id: 'child' });
+      assert.equal(response.hookSpecificOutput.additionalContext, undefined);
+      assert.deepEqual(JSON.parse(response.hookSpecificOutput.updatedMCPToolOutput[0].text), { resultFile });
+      const execution = database.prepare('SELECT status, actions_json FROM hook_executions').get();
+      assert.equal(execution.status, 'succeeded', 'Unresolved bindings are skipped without failing the Hook');
+      assert.deepEqual(JSON.parse(execution.actions_json).loop.output.lastResult, { message: 'PRIVATE LOOP BODY' });
+    } finally { database.close(); }
+  }
+});
+
+test('loop response projections contain no payload when no result file exists', async () => {
+  const database = createDatabase();
+  const hook = { id: 'hook-1', eventName: 'PostToolUse',
+    postActions: [{ id: 'loop', type: 'mcp_loop_run', config: {} }],
+    claudeResponse: { bindings: { 'hookSpecificOutput.additionalContext': { source: 'template', template: '{{actions}}' } } },
+  };
+  try {
+    const runtime = createHookRuntimeSession({ database, userId: 1,
+      enqueueMcpLoop: async () => ({ scheduled: false, lastResult: { message: 'PRIVATE LOOP BODY' } }),
+    });
+    const response = await runtime.executeHook(hook, { hook_event_name: 'PostToolUse' });
+    assert.deepEqual(JSON.parse(response.hookSpecificOutput.additionalContext), { loop: { output: {} } });
+    const execution = database.prepare('SELECT status, actions_json FROM hook_executions').get();
+    assert.equal(execution.status, 'succeeded');
+    assert.deepEqual(JSON.parse(execution.actions_json).loop.output.lastResult, { message: 'PRIVATE LOOP BODY' });
+  } finally { database.close(); }
+});
+
+test('independent StopFailure holds completion until task settlement and releases waits on audit failure', async () => {
+  const database = createDatabase();
+  let finish;
+  const task = new Promise(resolve => { finish = resolve; });
+  const waits = [];
+  const hook = { id: 'hook-1', eventName: 'StopFailure', injectToContext: false,
+    postActions: [{ id: 'message', type: 'send_agent_message', config: { messageTemplate: 'Recover' } }] };
+  try {
+    const runtime = createHookRuntimeSession({ database, userId: 1,
+      executeIsolatedAgent: async () => task, onExecutionWait: entry => waits.push(entry),
+    });
+    const pending = runtime.executeHook(hook, { hook_event_name: 'StopFailure' });
+    assert.deepEqual(waits.map(entry => entry.waiting), [true]);
+    finish({ executed: true, executionMode: 'isolated', result: 'PRIVATE' });
+    assert.deepEqual(await pending, {});
+    assert.deepEqual(waits.map(entry => entry.waiting), [true, false]);
+    assert.equal(waits[0].id, waits[1].id);
+    const failing = createHookRuntimeSession({ database: { prepare: () => { throw new Error('PRIVATE DATABASE FAILURE'); } },
+      onExecutionWait: entry => waits.push(entry),
+    });
+    assert.deepEqual(await failing.executeHook(hook, { hook_event_name: 'StopFailure' }), {});
+    assert.deepEqual(waits.slice(-2).map(entry => entry.waiting), [true, false]);
+  } finally { database.close(); }
+});
+
 test('subagent inheritance filters tool callbacks before scripts, variables, or audit side effects', async () => {
   for (const eventName of ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied']) {
     for (const includeSubagents of [false, true, undefined]) {

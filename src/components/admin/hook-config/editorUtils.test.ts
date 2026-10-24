@@ -59,6 +59,12 @@ test('personal variable edits change the draft signature', () => {
   }));
 });
 
+test('context switch edits mark the draft dirty and omitted values retain the enabled default', () => {
+  const draft: HookConfigDraft = { name: 'Hook', description: '', eventName: 'Stop', matcher: {}, extensionLogic: null, postActions: [], claudeResponse: { bindings: {} } };
+  assert.equal(createHookDraftSignature(draft), createHookDraftSignature({ ...draft, injectToContext: true }));
+  assert.notEqual(createHookDraftSignature(draft), createHookDraftSignature({ ...draft, injectToContext: false }));
+});
+
 test('draft signatures track subagent edits and preserve equivalent historical defaults', () => {
   const draft: HookConfigDraft = { name: 'Hook', description: '', eventName: 'PreToolUse', matcher: {}, extensionLogic: null, postActions: [], claudeResponse: { bindings: {} } };
   assert.equal(createHookDraftSignature(draft), createHookDraftSignature({ ...draft, includeSubagents: true }));

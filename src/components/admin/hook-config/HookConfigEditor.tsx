@@ -1957,6 +1957,30 @@ export default function HookConfigEditor({
                 </p>
               )}
             </div>
+            <div className="mt-4 flex items-start justify-between gap-4 rounded-xl border border-border bg-muted/20 px-3 py-3">
+              <div className="min-w-0">
+                <p id="hook-inject-context-label" className="text-xs font-medium text-foreground">结果进入对话上下文</p>
+                <p id="hook-inject-context-description" className="mt-1 text-xs leading-5 text-muted-foreground">
+                  关闭后，Hook 仍会执行，结果保留在执行记录中；Skill 和 Agent 消息在独立上下文执行，不向当前对话追加过程、结果或后续回合。
+                  校验拒绝和参数修改仍生效；未通过的结束校验会直接结束本轮，不自动返工。
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={hook.injectToContext !== false}
+                aria-labelledby="hook-inject-context-label"
+                aria-describedby="hook-inject-context-description"
+                disabled={busy}
+                onClick={() => updateDraft({ injectToContext: hook.injectToContext === false })}
+                className={cn(
+                  'relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50',
+                  hook.injectToContext !== false ? 'bg-primary' : 'bg-muted-foreground/30',
+                )}
+              >
+                <span className={cn('inline-block h-4 w-4 rounded-full bg-white transition-transform', hook.injectToContext !== false ? 'translate-x-[18px]' : 'translate-x-0.5')} />
+              </button>
+            </div>
             <HookUserVariablesEditor variables={hook.userVariables || []} onChange={(userVariables) => updateDraft({ userVariables })} />
           </Section>
 

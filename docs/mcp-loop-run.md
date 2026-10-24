@@ -1,7 +1,7 @@
 # Hook MCP 后置循环（`mcp_loop_run`）实现与维护手册
 
 > 文档状态：当前实现说明 + 接手改造指南<br>
-> 最后核对：2026-08-29<br>
+> 最后核对：2026-10-23（终态结果文件回传；其他历史说明保留）<br>
 > 适用范围：CCUI Claude Agent、Hook `PostToolUse`、Hook MCP 目录
 
 本文中“当前实现”描述已经存在的代码；第 15 节带有“建议、推荐、未来”措辞的内容是改造方案，尚未实现。
@@ -35,7 +35,7 @@
 3. CCUI 暂停当前 Agent 回合；
 4. CCUI 在后台使用**同一个 MCP 工具、同一组参数**进行短连接轮询；
 5. 每次成功取得结果后运行 Python 终止脚本；
-6. 脚本返回 `success` 或 `failed` 后，CCUI 把最后结果注入原 Claude 会话并恢复 Agent。
+6. 脚本返回 `success` 或 `failed` 后，CCUI 将最后结果保存为工作区 JSON 文件，只将文件路径交给原 Claude 会话并恢复 Agent。
 
 当前实现的核心特征：
 
@@ -46,7 +46,7 @@
 - 每轮轮询都是一次独立 MCP 连接，调用完成立即关闭；
 - 等待期间不占用模型连接，也不持续占用 MCP 连接；
 - 同一 Claude 会话最多有一个活动循环；
-- 原 MCP 卡片保留首次结果，最终结果显示在 Hook 卡片；
+- 原 MCP 卡片保留首次结果，Hook 卡片显示最终结果文件引用；
 - 每轮脚本输入、输出、判断结果与错误都会保存到 `mcp_loop_attempts`，管理员可在 Hook 执行记录详情中查看；
 - 循环任务记录保存在 SQLite，但 Agent 自动恢复所需上下文仍有一部分只存在内存中，因此 **CCUI 进程重启后的自动恢复尚不可靠**。
 
@@ -87,7 +87,7 @@ flowchart LR
     S -->|进度消息| UI[Hook 卡片]
     S -->|逐轮结构化日志| LOG[CCUI 服务日志]
     S -->|终态| R[Agent Resume Adapter]
-    R -->|同一 sessionId + 最终结果| A
+    R -->|同一 sessionId + 结果文件路径| A
     R --> UI
 ```
 
@@ -519,33 +519,31 @@ flowchart TD
 
 ### 10.2 最终结果如何返回
 
-终态时后端创建一个规范化 `tool_result` 消息：
+自 2026-10-23 起，循环终态先写入工作区文件：
 
-```json
-{
-  "origin": "hook",
-  "toolId": "<原 tool_use_id>",
-  "mcpLoopReplacement": true,
-  "mcpLoopJobId": "<job id>"
-}
+```text
+.cloudcli/hook-results/mcp-loops/<jobId>.json
 ```
 
-同时给恢复后的 Claude 发送内部 payload：
+文件保存 `mcpLoop`、`replacesToolUseId`、`status`、`attempts`、`elapsedMs`、完整 `result` 以及可选 `error`。成功、业务失败、超时和单任务取消都使用这个格式。任务整体被用户停止时不恢复对话。
+
+只有文件写入成功后才回传路径。主代理同一批并行循环全部结束后，使用原会话恢复，并发送文件引用：
 
 ```xml
-<ccui-mcp-loop-result job-id="..." tool-use-id="..." status="succeeded">
-  {"mcpLoop":true,"replacesToolUseId":"...","status":"succeeded","attempts":3,"elapsedMs":120000,"result":{...}}
+<ccui-mcp-loop-results count="1">
+<ccui-mcp-loop-result job-id="..." tool-use-id="...">
+{"resultFile":"/workspace/.cloudcli/hook-results/mcp-loops/<jobId>.json"}
 </ccui-mcp-loop-result>
+</ccui-mcp-loop-results>
 ```
 
-模型会被明确要求继续原用户请求，并且不要自动再次调用同一个状态工具。
+本地执行返回宿主工作区绝对路径；Docker 执行返回容器可读的 `/workspace/...` 路径。消息不含结果正文、错误正文或逐轮日志。模型按需使用 Read 读取文件；读取后的内容作为正常工具结果进入上下文，不属于自动注入。
 
-| 终态来源 | 模型侧工具结果 |
-|---|---|
-| 脚本判断 `success` | 最后一次 MCP 原始结果 |
-| 脚本判断 `failed`，无基础设施错误 | 最后一次 MCP 原始结果 |
-| 连续调用/脚本错误 | 包含状态、最后结果和错误的循环 wrapper |
-| `timed_out` / `cancelled` | 循环 wrapper |
+子代理循环也只通过 `updatedMCPToolOutput` 返回 `{resultFile}`，交给原子代理继续处理，不恢复主代理。页面中的 `mcpLoopReplacement` 消息同样只保存文件引用，完整结果仍可在循环任务审计记录中查看。
+
+`claudeResponse` 的绑定使用模型专用数据：循环 action 的 output 只包含 `resultFile`。旧的 `lastResult`、`error` 或整个 output 模板不会再把正文带进上下文；审计记录仍保留完整数据。
+
+关闭 Hook 的 `injectToContext` 时，循环继续执行并保存结果文件，但文件路径也不回传主/子代理。文件写入失败会明确结束失败处理，不退回到正文注入，也不发送不存在的文件路径。
 
 ### 10.3 当前重启恢复缺口
 
@@ -596,7 +594,7 @@ Resume context is unavailable for completed job <job-id>
 │ get_task_status · 已轮询 3 次 · 02:10          │
 │                                  [取消等待]    │
 │                                                │
-│ 完成后：最终结果                               │
+│ 完成后：最终结果文件路径                       │
 │ { "task_id": "...", "status":"success" } │
 └──────────────────────────────────────────────┘
 ```
@@ -605,10 +603,10 @@ Resume context is unavailable for completed job <job-id>
 
 - 原 MCP 卡片反映首次真实调用，仍显示 `running`；
 - 循环结果不覆盖原 MCP 卡片；
-- `mcpLoopReplacement` 对模型生效，并在 Hook 卡片显示最终结果；
+- `mcpLoopReplacement` 在 Hook 卡片显示结果文件引用；模型通过恢复消息收到同一文件路径；
 - Hook 卡片运行中只显示累计轮次，不显示每轮完整结果。
 
-前端会先收集 `mcpLoopReplacement`，按 `mcpLoopJobId` 把最终结果关联到 Hook activity。构造原 MCP tool card 时，优先保留非 replacement 的原始 `tool_result`。
+前端会先收集 `mcpLoopReplacement`，按 `mcpLoopJobId` 把结果文件引用关联到 Hook activity。构造原 MCP tool card 时，优先保留非 replacement 的原始 `tool_result`。
 
 ## 12. 逐轮执行日志
 
@@ -687,7 +685,7 @@ ORDER BY started_at_ms DESC;
 | 每轮都报鉴权错误 | 检查 MCP `headersHelper`、helperEnv、Agent 的 `USER_KEY` 和 Docker helper 执行环境 |
 | 三轮后失败 | 查看 `attempt_failed.failureStage`；默认连续错误上限为 3 |
 | Hook 执行显示成功，但任务还在等待 | 正常；Hook 记录的是入队成功，循环终态在 `mcp_loop_jobs` |
-| 原 MCP 卡片仍显示 `running` | 正常；最终结果设计为显示在 Hook 卡片 |
+| 原 MCP 卡片仍显示 `running` | 正常；结果文件引用显示在 Hook 卡片 |
 | 轮询间隔比配置更长 | 正常；实际间隔包含 MCP 调用耗时和最多约 1 秒 scheduler 延迟 |
 | 数据库显示终态但 Agent 未继续 | 查找 `Resume context is unavailable` 或 `Agent resume failed` |
 | 页面看不到每轮结果 | 确认查看的是管理员 Hook 执行记录详情，并刷新详情；历史版本部署前产生的轮次没有明细 |

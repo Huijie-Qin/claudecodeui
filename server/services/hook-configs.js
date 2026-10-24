@@ -764,6 +764,9 @@ function validateHookReferences(hook) {
 function normalizeHookInput(input, { strict = false } = {}) {
   if (!isPlainObject(input)) throw createHttpError('Hook payload must be an object');
   const eventName = normalizeEventName(input.eventName);
+  if (input.injectToContext !== undefined && typeof input.injectToContext !== 'boolean') {
+    throw createHttpError('injectToContext must be boolean');
+  }
   if (input.includeSubagents !== undefined && typeof input.includeSubagents !== 'boolean') {
     throw createHttpError('includeSubagents must be boolean');
   }
@@ -778,6 +781,7 @@ function normalizeHookInput(input, { strict = false } = {}) {
       allowEmpty: true,
     }),
     eventName,
+    injectToContext: input.injectToContext !== false,
     includeSubagents: input.includeSubagents === true,
     matcher,
     userVariables: normalizeHookUserVariables(input.userVariables),
@@ -830,6 +834,7 @@ function mapHookRow(row) {
     defaultShowInChat: row.default_show_in_chat !== 0,
     bindingController: row.binding_controller === 'sql_check' ? 'sql_check' : 'admin',
     eventName: row.event_name,
+    injectToContext: row.inject_to_context !== 0,
     includeSubagents: resolveIncludeSubagents({
       eventName: row.event_name,
       includeSubagents: row.include_subagents == null ? undefined : row.include_subagents === 1,
@@ -919,6 +924,7 @@ function publishedHookConfig(hook) {
     description: hook.description || '',
     userVariables: hook.userVariables || [],
     eventName: hook.eventName,
+    injectToContext: hook.injectToContext !== false,
     includeSubagents: resolveIncludeSubagents(hook),
     matcher: hook.matcher || {},
     extensionLogic: hook.extensionLogic || null,
@@ -936,6 +942,7 @@ function mapPublishedHookVersionRow(row) {
     description: config.description || '',
     userVariables: config.userVariables || [],
     eventName: config.eventName,
+    injectToContext: config.injectToContext !== false,
     includeSubagents: resolveIncludeSubagents(config),
     matcher: config.matcher || {},
     extensionLogic: config.extensionLogic || null,
@@ -2895,8 +2902,8 @@ export function createHookConfigService({
         INSERT INTO hooks (
           id, name, description, status, event_name, include_subagents, matcher_json,
           extension_logic_json, post_actions_json, claude_response_json, user_variables_json,
-          binding_controller, created_by, updated_by, owner_tenant_id
-        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          binding_controller, created_by, updated_by, owner_tenant_id, inject_to_context
+        ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         )
         .run(
@@ -2914,6 +2921,7 @@ export function createHookConfigService({
           userId,
           userId,
           ownerTenantId,
+          normalized.injectToContext ? 1 : 0,
         );
       return getHook(hookId);
     },
@@ -2922,6 +2930,7 @@ export function createHookConfigService({
       const existing = requireHook(hookId);
       const normalized = normalizeWithMcpIdentity({
         ...input,
+        injectToContext: input?.injectToContext === undefined ? existing.injectToContext : input.injectToContext,
         includeSubagents: input?.includeSubagents === undefined && input?.eventName === existing.eventName
           ? existing.includeSubagents
           : input?.includeSubagents,
@@ -2932,7 +2941,7 @@ export function createHookConfigService({
         UPDATE hooks
         SET name = ?, description = ?, status = 'draft', event_name = ?, include_subagents = ?,
             matcher_json = ?, extension_logic_json = ?, post_actions_json = ?,
-            claude_response_json = ?, user_variables_json = ?,
+            claude_response_json = ?, user_variables_json = ?, inject_to_context = ?,
             updated_by = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `,
@@ -2947,6 +2956,7 @@ export function createHookConfigService({
           JSON.stringify(normalized.postActions),
           JSON.stringify(normalized.claudeResponse),
           JSON.stringify(normalized.userVariables),
+          normalized.injectToContext ? 1 : 0,
           userId,
           hookId,
         );

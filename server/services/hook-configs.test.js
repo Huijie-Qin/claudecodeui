@@ -101,6 +101,33 @@ test('subagent switch persists across edits and immutable published versions', (
   } finally { database.close(); }
 });
 
+test('context delivery defaults on and persists through legacy clients and published snapshots', () => {
+  const { database, service } = createFixture();
+  try {
+    const created = service.createHook({ userId: 1, input: publishableHook() });
+    assert.equal(created.injectToContext, true);
+    service.publishHook({ hookId: created.id, userId: 1 });
+    const oldSnapshot = JSON.parse(database.prepare('SELECT config_json FROM hook_published_versions WHERE hook_id = ?').get(created.id).config_json);
+    delete oldSnapshot.injectToContext;
+    database.prepare('UPDATE hook_published_versions SET config_json = ? WHERE hook_id = ?').run(JSON.stringify(oldSnapshot), created.id);
+    assert.equal(service.getPublishedHookVersion({ hookId: created.id, version: 1 }).injectToContext, true);
+    assert.equal(service.updateHook({ hookId: created.id, userId: 1,
+      input: publishableHook({ injectToContext: false }),
+    }).injectToContext, false);
+    service.publishHook({ hookId: created.id, userId: 1 });
+    assert.equal(service.getPublishedHookVersion({ hookId: created.id, version: 2 }).injectToContext, false);
+    assert.equal(service.getPublishedHookVersion({ hookId: created.id, version: 1 }).injectToContext, true);
+    assert.equal(service.updateHook({ hookId: created.id, userId: 1,
+      input: publishableHook({ description: 'Older client edit' }),
+    }).injectToContext, false);
+    assert.throws(() => service.createHook({ userId: 1, input: publishableHook({ injectToContext: 'false' }) }), /must be boolean/);
+    database.exec('ALTER TABLE hooks DROP COLUMN inject_to_context');
+    migrateHookConfigurationModel(database);
+    migrateHookConfigurationModel(database);
+    assert.equal(service.getHook(created.id).injectToContext, true);
+  } finally { database.close(); }
+});
+
 test('legacy subagent defaults preserve tool callbacks without adding Stop callbacks', () => {
   const { database, service } = createFixture();
   try {
@@ -2540,7 +2567,7 @@ test('configuration migration replaces legacy gates, actions, and advanced scrip
         .prepare('PRAGMA table_info(hooks)')
         .all()
         .map((column) => column.name),
-      ['id', 'owner_tenant_id', 'include_subagents', 'user_variables_json', 'extension_logic_json', 'post_actions_json', 'claude_response_json', 'show_in_chat', 'default_enabled', 'default_show_in_chat'],
+      ['id', 'owner_tenant_id', 'include_subagents', 'inject_to_context', 'user_variables_json', 'extension_logic_json', 'post_actions_json', 'claude_response_json', 'show_in_chat', 'default_enabled', 'default_show_in_chat'],
     );
     assert.equal(
       database

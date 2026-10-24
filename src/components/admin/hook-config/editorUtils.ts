@@ -15,6 +15,7 @@ export function createHookDraftSignature(hook: HookConfigDraft): string {
     userVariables: hook.userVariables || [],
     eventName: hook.eventName,
     includeSubagents: resolveIncludeSubagents(hook),
+    injectToContext: hook.injectToContext !== false,
     matcher: hook.matcher,
     extensionLogic: hook.extensionLogic,
     postActions: hook.postActions,

@@ -75,11 +75,13 @@ import { createMcpRuntimeDiagnostics } from './services/mcp-runtime-diagnostics.
 import { hookConfigService } from './services/hook-configs.js';
 import { hookMcpCatalogService } from './services/hook-mcp-catalog.js';
 import { createHookRuntimeSession, mergeSdkHooks } from './services/hook-runtime.js';
+import { runIsolatedHookAgent } from './services/hook-isolated-agent.js';
 import { reviewHookCompletion } from './services/hook-completion-review.js';
 import { createClaudeQueryWithHookFallback, createRequiredHookError, isRequiredHook } from './services/claude-hook-policy.js';
 import { resolveMcpToolConfirmation } from './services/mcp-tool-confirmation.js';
 import { hookWorkspaceResourcesService } from './services/hook-workspace-resources.js';
-import { buildMcpLoopReplacement, mcpLoopService } from './services/mcp-loop-service.js';
+import { mcpLoopService } from './services/mcp-loop-service.js';
+import { writeMcpLoopResultFile } from './services/mcp-loop-result-file.js';
 import {
   buildMcpLoopBatchModelContent,
   createMcpLoopToolBatchTracker,
@@ -1992,6 +1994,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
             activeHooks
               .filter((hook) => (
                 hook.eventName === 'PostToolUse'
+                && hook.injectToContext !== false
                 && hook.postActions?.some((action) => action.type === 'mcp_loop_run')
               ))
               .map((hook) => hook.matcher?.value),
@@ -2054,13 +2057,15 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
               workspacePath,
               runtimeContext.mode,
             );
-            if (event?.agent_id) skillUsageCapture.markSubagentHook({ agentId: event.agent_id });
+            if (event?.agent_id && hook.injectToContext !== false) skillUsageCapture.markSubagentHook({ agentId: event.agent_id });
             return [
               '<ccui-hook-recovery>',
               `Hook: ${hook.name} (${hook.id})`,
               `Execution: ${executionId}`,
               `Skill root: ${runtimeSkillDirectory}`,
-              event?.agent_id
+              hook.injectToContext === false
+                ? 'Execute this Hook task independently; do not continue or write messages to the parent conversation.'
+                : event?.agent_id
                 ? 'Continue in this same subagent with its complete conversation context.'
                 : 'Continue in this original session with its complete conversation context.',
               'Treat the Skill root above as the base directory for every relative reference and script path in SKILL.md.',
@@ -2132,9 +2137,27 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
               };
             },
             prepareSubagentSkillRecovery: prepareSkillRecoveryContent,
-            onSubagentLoopWait: ({ id, waiting }) => {
+            executeIsolatedAgent: async (request) => {
+              const content = request.action.type === 'invoke_skill'
+                ? await prepareSkillRecoveryContent(request) : request.modelContent;
+              return runIsolatedHookAgent({
+                prompt: [content, '', '<hook-trigger-context>', JSON.stringify({
+                  userTask: command,
+                  event: request.event,
+                }).slice(0, 32_000), '</hook-trigger-context>'].join('\n'),
+                sdkOptions,
+                signal: request.signal,
+                onLog: request.onLog,
+              });
+            },
+            onExecutionWait: ({ id, waiting }) => {
               if (waiting) pendingInteractions.begin(id);
-              else pendingInteractions.end(id);
+              else {
+                pendingInteractions.end(id);
+                // Result/idle may have arrived while a StopFailure task was
+                // running. Re-arm completion even if no SDK event follows it.
+                schedulePendingTurnCompletion();
+              }
             },
             enqueueSkillRecovery: async ({
               hook,
@@ -2263,8 +2286,9 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
               onProgress,
             }) => {
               const isSubagentLoop = Boolean(event?.agent_id);
+              const waitInline = isSubagentLoop || hook.injectToContext === false;
               const loopSessionId = event?.session_id || capturedSessionId || sessionId;
-              if (!isSubagentLoop) mcpLoopToolBatchTracker.addExpected(event?.tool_use_id);
+              if (!waitInline) mcpLoopToolBatchTracker.addExpected(event?.tool_use_id);
               const activeSession = loopSessionId ? getSession(loopSessionId) : null;
               if (!activeSession) {
                 throw new Error('Original Claude session is unavailable for mcp_loop_run');
@@ -2292,12 +2316,12 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
                     : null,
                   headersHelperRunner,
                   scriptEnv: environment,
-                  ...(isSubagentLoop ? {
+                  ...(waitInline ? {
                     onProgress,
-                    scriptContext: {
+                    scriptContext: isSubagentLoop ? {
                       agent_id: event.agent_id,
                       agent_type: event.agent_type || null,
-                    },
+                    } : {},
                   } : {}),
                 },
               });
@@ -2307,21 +2331,20 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
                   status: scheduled.status,
                   initialResult: scheduled.initialResult,
                 };
-                if (isSubagentLoop) {
+                if (waitInline) {
                   Object.assign(result, {
-                    deliveredTo: 'subagent',
-                    agentId: event.agent_id,
+                    deliveredTo: hook.injectToContext === false ? 'audit_only' : 'subagent',
+                    ...(isSubagentLoop ? { agentId: event.agent_id } : {}),
                     attemptCount: 0,
                     elapsedMs: 0,
                     lastResult: scheduled.initialResult,
-                    toolUseResult: scheduled.initialResult,
                   });
                 }
                 return result;
               }
 
               const job = scheduled.job;
-              if (isSubagentLoop) {
+              if (waitInline) {
                 let terminalJob;
                 inlineSubagentMcpLoopJobs.add(job.id);
                 try {
@@ -2337,18 +2360,19 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
                 } finally {
                   inlineSubagentMcpLoopJobs.delete(job.id);
                 }
-                const replacement = buildMcpLoopReplacement(terminalJob);
+                const resultReference = await writeMcpLoopResultFile(terminalJob, { mode: runtimeContext.mode });
                 return {
                   scheduled: true,
                   jobId: terminalJob.id,
-                  deliveredTo: 'subagent',
-                  agentId: event.agent_id,
+                  deliveredTo: hook.injectToContext === false ? 'audit_only' : 'subagent',
+                  ...(isSubagentLoop ? { agentId: event.agent_id } : {}),
                   status: terminalJob.status,
                   attemptCount: terminalJob.attemptCount,
                   elapsedMs: Math.max(0, (terminalJob.completedAtMs || Date.now()) - terminalJob.startedAtMs),
                   initialResult: terminalJob.initialResult,
                   lastResult: terminalJob.lastResult,
-                  toolUseResult: replacement.toolUseResult,
+                  ...resultReference,
+                  toolUseResult: resultReference,
                   ...(terminalJob.error ? { error: terminalJob.error } : {}),
                 };
               }
@@ -2372,6 +2396,7 @@ async function queryClaudeSDKInternal(command, { clientMessageId, images: _image
               const loopContext = {
                 jobId: job.id,
                 sessionId: loopSessionId,
+                resultFileOptions: { mode: runtimeContext.mode },
                 runtimeOptions,
                 writer: ws,
                 activity,
@@ -3238,18 +3263,17 @@ function isMcpLoopSessionBatchTerminal(suspension) {
     && [...suspension.jobIds].every((jobId) => suspension.terminalJobs.has(jobId));
 }
 
-function emitMcpLoopTerminalResult(context, job) {
-  const replacement = buildMcpLoopReplacement(job);
+function emitMcpLoopTerminalResult(context, job, resultReference) {
   const replacementMessage = createNormalizedMessage({
     id: `mcp_loop_replacement_${job.id}`,
     kind: 'tool_result',
     sessionId: job.sessionId,
     provider: 'claude',
     origin: 'hook',
-    toolId: replacement.toolId,
-    content: replacement.content,
-    toolUseResult: replacement.toolUseResult,
-    isError: replacement.isError,
+    toolId: job.toolUseId,
+    content: JSON.stringify(resultReference),
+    toolUseResult: resultReference,
+    isError: false,
     mcpLoopReplacement: true,
     mcpLoopJobId: job.id,
   });
@@ -3341,10 +3365,19 @@ async function resumeClaudeSessionAfterMcpLoopBatch(suspension) {
   suspension.resuming = true;
 
   const jobs = [...suspension.jobIds].map((jobId) => suspension.terminalJobs.get(jobId));
-  const modelContent = buildMcpLoopBatchModelContent(jobs);
   const jobIds = jobs.map((job) => job.id);
 
   try {
+    const savedJobs = await Promise.all(jobs.map(async (job) => ({
+      ...job,
+      ...await writeMcpLoopResultFile(job, mcpLoopContextsByJob.get(job.id)?.resultFileOptions),
+    })));
+    assertMcpLoopResumeNotStopped({ mcpLoopResumeControl: suspension });
+    const modelContent = buildMcpLoopBatchModelContent(savedJobs);
+    for (const job of savedJobs) {
+      const context = mcpLoopContextsByJob.get(job.id);
+      if (context) emitMcpLoopTerminalResult(context, job, { resultFile: job.resultFile });
+    }
     await queryClaudeSDK(modelContent, {
       ...suspension.runtimeOptions,
       sessionId: suspension.sessionId,
@@ -3426,7 +3459,7 @@ async function handleMcpLoopTerminalJob(job) {
     return;
   }
 
-  emitMcpLoopTerminalResult(context, job);
+  emitMcpLoopActivity(context, job, job.status === 'succeeded' ? 'succeeded' : 'failed', job.error);
   await resumeClaudeSessionAfterMcpLoopBatch(suspension);
 }
 
