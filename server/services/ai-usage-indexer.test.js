@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import Database from 'better-sqlite3';
 
+import { backfillSkillPublications } from '../../scripts/backfill-ai-skill-publications.mjs';
 import { migrateAiUsageSchema } from '../database/ai-usage-schema.js';
 
 import { runAiUsageWindow } from './ai-usage-batches.js';
@@ -497,4 +498,133 @@ test('fork accounting upgrade retracts already indexed inherited interactions fr
   assert.equal(f.facts().filter((row) => row.dataset === 'interactions').length, 1);
   assert.ok(!f.facts().some((row) => row.session_key === logicalSessionKey(forkScope)));
   assert.deepEqual(f.database.prepare('SELECT session_id FROM ai_session_summary').all(), [{ session_id: 'session-a' }]);
+});
+
+
+test('name-only publication backfill repairs old native Skill calls without bindings, dedupes copies and survives full rebuild', async (t) => {
+  const f = await fixture(t);
+  f.database.exec(`INSERT INTO users VALUES(2,'historical-publisher');
+    CREATE TABLE tenant_users(tenant_id INTEGER,user_id INTEGER);
+    INSERT INTO tenant_users VALUES(1,1),(1,2);`);
+  const first = skillTool('first');
+  const second = { type: 'claude-response', data: skillTool('second', '2026-09-11T04:01:00.000Z'),
+    uuid: 'wrapped', timestamp: '2026-09-11T04:01:00.000Z' };
+  const messages = [userMessage('slash', undefined, '/report'), first, first,
+    userMessage('slash-only', '2026-09-11T03:00:00.000Z', '/report'),
+    userMessage('request', '2026-09-11T04:00:00.000Z', 'run the skill'), second,
+    userMessage('builtin', '2026-09-11T05:00:00.000Z', '/help'),
+    userMessage('hook', '2026-09-11T06:00:00.000Z', '<ccui-hook-recovery>automated</ccui-hook-recovery>'),
+    skillTool('hook-tool', '2026-09-11T06:01:00.000Z')];
+  await f.write('session-a', messages);
+  for (const message of messages) f.addCopy(message);
+  assert.equal((await f.run()).published, 1);
+  assert.equal(skillReport(f).length, 2);
+  assert.ok(skillReport(f).every(row => row.user_id === null));
+  const records = [{ tenantId: 1, username: 'historical-publisher', skillName: 'report',
+    firstPublishedAt: '2026-09-01 08:00:00' }];
+  const imported = backfillSkillPublications(f.database, records, { apply: true, now: '2026-09-12T00:00:00Z' });
+  assert.equal(imported.inserted, 1);
+  assert.ok(imported.rows[0].skillId.startsWith('historical:'));
+  // Source data and files do not change: the publication must queue old unbound sessions.
+  f.nextNight(); assert.equal((await f.run()).published, 1);
+  assert.equal(skillReport(f).length, 3);
+  assert.ok(skillReport(f).every(row => row.subject_id === imported.rows[0].skillId && row.user_id === 2
+    && row.value.callerUserId === 1 && row.value.callerUserName === 'alice'
+    && row.value.attributionSource === 'historical_publication'));
+  const query = createAiUsageQueryService({ db: f.database });
+  const access = { tenantId: 1, userId: 2, scope: 'tenant', canViewTenant: true };
+  const skill = query.skills(access, { from: '2026-09-01', to: '2026-09-12' }).items[0];
+  assert.equal(skill.invocationCount, 3); assert.equal(skill.publishedSkillCount, 1); assert.equal(skill.callerCount, 1);
+  const repeated = backfillSkillPublications(f.database, records, { apply: true, now: '2026-09-12T00:00:00Z' });
+  assert.equal(repeated.unchanged, 1); assert.equal(repeated.inserted, 0);
+  f.nextNight();
+  const full = readAiUsageConfig({ AI_USAGE_ENABLED: 'true', AI_USAGE_INCREMENTAL_ENABLED: 'false' });
+  assert.equal((await f.run({ config: full })).published, 1);
+  assert.equal(query.skills(access, { from: '2026-09-01', to: '2026-09-13' }).items[0].invocationCount, 3);
+  assert.equal(f.database.prepare('SELECT COUNT(*) n FROM ai_skill_publications').get().n, 1);
+});
+
+test('competing or removed historical publications retract old attribution without changed transcripts', async (t) => {
+  const f = await fixture(t);
+  f.database.exec(`INSERT INTO users VALUES(2,'author'),(3,'other-author');
+    CREATE TABLE tenant_users(tenant_id INTEGER,user_id INTEGER);
+    INSERT INTO tenant_users VALUES(1,2),(1,3);`);
+  const imported = backfillSkillPublications(f.database, [{ tenantId: 1, userId: 2, skillName: 'report',
+    firstPublishedAt: '2026-09-01 08:00:00' }], { apply: true, now: '2026-09-11T00:00:00Z' });
+  await f.write('session-a', [userMessage('slash', undefined, '/report'), skillTool('one'),
+    userMessage('only-slash', '2026-09-11T03:00:00Z', '/report')]);
+  assert.equal((await f.run()).published, 1);
+  assert.equal(skillReport(f).length, 2);
+  assert.ok(skillReport(f).every(row => row.user_id === 2));
+  f.database.exec(`INSERT INTO ai_skill_publications VALUES('other',1,3,'other-id','report',
+    '2026-09-01T00:00:00Z','confirmed','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z')`);
+  f.nextNight(); assert.equal((await f.run()).published, 1);
+  assert.equal(skillReport(f).length, 1);
+  assert.equal(skillReport(f)[0].user_id, null);
+  assert.equal(skillReport(f)[0].value.attributionReason, 'historical_name_ambiguous');
+  const batch = f.database.prepare('SELECT coverage_json FROM ai_usage_batches WHERE id=(SELECT active_batch_id FROM ai_usage_tenant_state WHERE tenant_id=1)').get();
+  assert.equal(JSON.parse(batch.coverage_json).skillInvocationDiagnostics.historical_name_ambiguous, 1);
+  f.database.exec("DELETE FROM ai_skill_publications WHERE operation_id='other'");
+  f.nextNight(); assert.equal((await f.run()).published, 1);
+  assert.equal(skillReport(f).length, 2);
+  assert.ok(skillReport(f).every(row => row.user_id === 2));
+  f.database.prepare('DELETE FROM ai_skill_publications WHERE operation_id=?').run(imported.rows[0].operationId);
+  f.nextNight(); assert.equal((await f.run()).published, 1);
+  assert.equal(skillReport(f).length, 1);
+  assert.equal(skillReport(f)[0].user_id, null);
+  assert.equal(skillReport(f)[0].value.attributionReason, 'historical_mapping_missing');
+});
+
+test('historical name fallback cannot override an effective remote binding with an unknown author', async (t) => {
+  const f = await fixture(t);
+  f.database.exec(`INSERT INTO users VALUES(2,'author');
+    CREATE TABLE tenant_users(tenant_id INTEGER,user_id INTEGER);
+    INSERT INTO tenant_users VALUES(1,2);
+    INSERT INTO ai_skill_binding_history(tenant_id,workspace_id,local_name,remote_skill_id,valid_from)
+      VALUES(1,10,'report','unrelated-remote','2026-09-01T00:00:00Z');`);
+  backfillSkillPublications(f.database, [{ tenantId: 1, userId: 2, skillName: 'report',
+    firstPublishedAt: '2026-09-01 08:00:00' }], { apply: true, now: '2026-09-11T00:00:00Z' });
+  await f.write('session-a', [userMessage('req'), skillTool('tool')]);
+  assert.equal((await f.run()).published, 1);
+  assert.equal(skillReport(f)[0].subject_id, 'unrelated-remote');
+  assert.equal(skillReport(f)[0].user_id, null);
+  assert.equal(skillReport(f)[0].value.attributionReason, 'publisher_unresolved');
+});
+
+
+test('v17 re-reads unchanged v16 histories and safely restarts a paused old-version candidate', async (t) => {
+  const f = await fixture(t);
+  f.database.exec(`INSERT INTO users VALUES(2,'author');
+    CREATE TABLE tenant_users(tenant_id INTEGER,user_id INTEGER);
+    INSERT INTO tenant_users VALUES(1,2);`);
+  backfillSkillPublications(f.database, [{ tenantId: 1, userId: 2, skillName: 'report',
+    firstPublishedAt: '2026-09-01 08:00:00' }], { apply: true, now: '2026-09-11T00:00:00Z' });
+  await f.write('session-a', [userMessage('request'), { type: 'claude-response', data: skillTool('wrapped') }]);
+  const old = { ...config, calculationVersion: config.calculationVersion.replace(/_skill_history_v17$/, '') };
+  assert.notEqual(old.calculationVersion, config.calculationVersion);
+  assert.equal((await f.run({ config: old })).published, 1);
+  // Model the actual v16 cache: the file is indexed to EOF, but wrapped Skill
+  // events had no collected evidence or published invocation. Do not alter bytes.
+  f.database.exec(`DELETE FROM ai_usage_fact_rows WHERE dataset IN ('skill_evidence','skill_invocations');
+    DELETE FROM ai_usage_report_rows WHERE dataset='skill_invocations';
+    DELETE FROM ai_dashboard_integration_detail WHERE skill_call_count IS NOT NULL;
+    DELETE FROM ai_dashboard_skill_invocation_detail;
+    DELETE FROM ai_usage_dirty_skill_sessions; DELETE FROM ai_usage_source_changes;`);
+  f.nextNight(); assert.equal((await f.run({ config: old })).published, 1);
+  assert.equal(skillReport(f).length, 0, 'same-version incremental cache remains unchanged');
+  const active = f.database.prepare('SELECT active_batch_id FROM ai_usage_tenant_state WHERE tenant_id=1').get().active_batch_id;
+  f.nextNight();
+  await f.run({ config: old, shouldStop: () => Boolean(f.database.prepare(`SELECT 1 FROM ai_usage_batches
+    WHERE status='running' AND json_extract(progress_json,'$.stage')='skills'`).get()) });
+  assert.equal(f.database.prepare("SELECT COUNT(*) n FROM ai_usage_batches WHERE status='paused'").get().n, 1);
+  await f.run({ shouldStop: () => Boolean(f.database.prepare(`SELECT 1 FROM ai_usage_batches
+    WHERE status='running' AND calculation_version=? AND json_extract(progress_json,'$.stage')='transcripts'`)
+    .get(config.calculationVersion)) });
+  assert.equal(f.database.prepare('SELECT active_batch_id FROM ai_usage_tenant_state WHERE tenant_id=1').get().active_batch_id, active);
+  assert.equal(f.database.prepare('SELECT COUNT(*) n FROM ai_dashboard_skill_invocation_detail').get().n, 0);
+  assert.equal(f.database.prepare('SELECT COUNT(*) n FROM ai_skill_publications').get().n, 1);
+  assert.equal((await f.run()).published, 1);
+  assert.equal(skillReport(f).length, 1);
+  assert.equal(skillReport(f)[0].value.toolUseId, 'wrapped');
+  assert.equal(skillReport(f)[0].user_id, 2);
 });

@@ -36,52 +36,49 @@ test('all report sheets use independent applied filters, current authorization/b
   assert.equal(specs[5].params.fieldKey, 'lines');
   assert.equal(specs[5].metric, 'average');
   assert.ok(specs[0].columns.every(col => col.key !== 'activeUserCount'));
-  assert.equal(specs[0].columns.find(col => col.key === 'activeDurationMs')?.exportValue?.({ activeDurationMs: 1250 }), 1.25);
+  assert.equal(specs[0].columns.find(col => col.key === 'aiActiveDurationMs')?.exportValue?.({ aiActiveDurationMs: 1250 }), 1.25);
   assert.doesNotMatch(JSON.stringify(specs), /hookExecutions|unapplied|old-batch/);
 });
 
-test('workbook includes unvisited tabs, fixed overview, every matching page and trend; numbers stay numeric', async () => {
+test('workbook exports all integration detail pages with nulls, exact units and Shanghai times, alongside other tabs', async () => {
   const views = new SavedReportViews(); const specs = workbookSpecs({ ...base, views });
   const seen: Record<string, number[]> = {};
   const request = (async (endpoint: string, params: Record<string, unknown> = {}) => {
     if (endpoint === 'capabilities') return { canExport: true, canViewTenant: true };
     if (endpoint === 'summary') { assert.deepEqual(params, { tenantId: 10, scope: 'tenant', batchId: 'published' }); return summary; }
     if (endpoint === 'status') return { batchId: 'published' };
-    if (endpoint === 'trend') return { batchId: 'published', items: [{ date: '2026-09-12', sessionCount: 2, dau: 1, mau: 3 }] };
-    const id = `${endpoint}:${params.dataset || ''}`; (seen[id] ||= []).push(Number(params.page));
-    const total = params.dataset === 'usage' ? 205 : 1;
+    assert.notEqual(endpoint, 'trend'); // The first tab now displays sparse detail rows.
+    (seen[endpoint] ||= []).push(Number(params.page));
+    const total = endpoint === 'integration-details' ? 205 : 1;
     const start = (Number(params.page) - 1) * 100;
-    return { batchId: 'published', groupBy: params.groupBy, total, includeZeroUsers: true, skillGroupingVersion: 1, codeReportVersion: 1,
-      summary: { sessionCount: 205, activeDurationMs: 1250, activeUserCount: 205 },
-      items: Array.from({ length: Math.min(100, total - start) }, (_, i) => ({ groupLabel: `用户 ${start + i}`, sessionCount: 1, activeDurationMs: 500, firstPublishedAt: '2026-09-12T01:02:03Z' })) };
+    return { batchId: 'published', groupBy: params.groupBy, total, integrationDetailVersion: 1, skillGroupingVersion: 1, codeReportVersion: 1,
+      items: Array.from({ length: Math.min(100, total - start) }, (_, i) => ({ id: `row-${start + i}`, statDate: '2026-09-12',
+        userName: `用户 ${start + i}`, aiActiveDurationMs: 1250, generatedSqlLines: 0, submittedCodeLines: null,
+        occurredAt: '2026-09-12 09:02:03', refreshedAt: '2026-09-13 02:10:00' })) };
   }) as typeof usageRequest;
   const sheets = await collectWorkbook({ ...base, specs, request, signal: signal() });
-  assert.equal(sheets.length, 7);
-  assert.deepEqual(seen['analysis:usage'], [1, 2, 3]);
+  assert.equal(sheets.length, 6);
+  assert.deepEqual(seen['integration-details'], [1, 2, 3]);
   assert.equal(sheets[0].title, 'summaryTitle');
   assert.deepEqual(sheets[0].rows[2], ['summarySessions', 999, '2026-08-14', '2026-09-12']);
-  assert.equal(sheets[1].rows.filter(row => String(row[0]).startsWith('用户 ')).length, 205);
-  assert.deepEqual(sheets[1].rows.find(row => row[0] === '用户 204'), ['用户 204', 1, 0.5]);
-  assert.deepEqual(sheets[1].rows.at(-1), ['用户 204', 1, 0.5]);
-  assert.deepEqual(sheets[2].rows.slice(sheets[2].detailHeaderRow), [['group.day', 'sessionCount', 'dau', 'mau'], ['2026-09-12', 2, 1, 3]]);
-  assert.deepEqual(sheets[1].rows[sheets[1].summaryHeaderRows![0] + 1], [205, 1.25, 205]);
+  const detail = sheets[1];
+  assert.equal(detail.detailRowCount, 205);
+  assert.equal(metadata(detail).groupBy, 'integration.factGrain');
+  assert.equal(detail.summaryHeaderRows!.length, 0); // Sparse facts are not relabeled as aggregate totals.
+  assert.deepEqual(detail.rows.at(-1)!.slice(0, 6), ['2026-09-12', '用户 204', null, 1.25, 0, null]);
+  assert.equal(detail.rows.at(-1)![10], shanghaiExcelTime('2026-09-12 09:02:03'));
+  assert.equal(detail.rows.at(-1)![11], shanghaiExcelTime('2026-09-13 02:10:00'));
   for (const sheet of sheets.slice(1)) {
     assert.deepEqual(sheet.headerRows, [sheet.detailHeaderRow]);
-    assert.ok(sheet.detailHeaderRow! > 3);
     assert.equal(sheet.rows.length, sheet.detailHeaderRow! + sheet.detailRowCount! + 1);
-    assert.equal(sheet.rows[0][0], 'workbook.information');
     assert.equal(sheet.rows[sheet.detailHeaderRow! - 1][0], 'workbook.details');
-    assert.deepEqual(sheet.rows.slice(sheet.detailHeaderRow! - 3, sheet.detailHeaderRow! - 1), [[], []]);
   }
   const workbook = XLSX.read(await workbookBytes(sheets), { type: 'array', cellNF: true });
-  assert.equal(workbook.SheetNames.length, 7);
-  assert.equal(workbook.Sheets.usage.A2.v, 'group.user');
+  assert.equal(workbook.SheetNames.length, 6);
   assert.match(workbook.Sheets.usage.A1.v, /from：2026-08-14/);
-  assert.match(workbook.Sheets.usage.A1.v, /sessionCount：205/);
-  assert.match(workbook.Sheets.usage.A1.v, /workbook.durationSeconds：1.25/);
-  assert.match(workbook.Sheets.usage.A1.v, /activeUserCount：205/);
-  const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[1]], { header: 1 });
-  assert.deepEqual(rows.find(row => (row as unknown[])[0] === '用户 204'), ['用户 204', 1, 0.5]);
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets.usage, { header: 1, defval: null });
+  const last = rows.find(row => row[1] === '用户 204')!;
+  assert.equal(last[3], 1.25); assert.equal(last[4], 0); assert.equal(last[5], null);
 });
 
 test('permission loss, changed batch, incomplete pages and total limits abort the whole workbook', async () => {
@@ -356,7 +353,7 @@ test('each sheet retains its own filters and exact API totals above a separate d
     if (endpoint === 'status') return { batchId: 'published' };
     if (endpoint === 'trend') return { batchId: 'published', items: [] };
     return { batchId: 'published', groupBy: params.groupBy, total: 1, includeZeroUsers: true,
-      skillGroupingVersion: 1, codeReportVersion: 1, hookReportVersion: 1,
+      integrationDetailVersion: 1, skillGroupingVersion: 1, codeReportVersion: 1, hookReportVersion: 1,
       summary: { sessionCount: 8, activeUserCount: 2, activeDurationMs: 1250, generatedLines: 17, submittedLines: 0 },
       items: [{ groupLabel: '小王', sessionCount: 1, activeDurationMs: 1000, average: 2.5, label: 'SQL 行数', key: 'sqlLines' }],
       ...(endpoint === 'code' ? { trend: [{ date: '2026-09-02', generatedLines: 17, submittedLines: 0 }] } : {}) };
@@ -372,7 +369,7 @@ test('each sheet retains its own filters and exact API totals above a separate d
     assert.ok(sheet.rows.every(row => row.length <= spec.columns.length));
   }
   const usage = sheets.find(sheet => sheet.title === 'usage')!;
-  assert.deepEqual(usage.rows[usage.summaryHeaderRows![0] + 1], [8, 1.25, 2]); // Not the sum of the single detail row.
+  assert.equal(usage.summaryHeaderRows!.length, 0); // Direct sparse facts have no invented aggregate summary.
   const hook = sheets.find(sheet => sheet.title.startsWith('SQL ·'))!;
   assert.equal(metadata(hook).numberField, 'sqlLines');
   assert.equal(metadata(hook)['workbook.statistic'], 'hookReportFields.avg');

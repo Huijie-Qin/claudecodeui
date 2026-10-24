@@ -192,3 +192,8 @@ html.dark body.ai-report-preview #root > div > header :is(select,button) { backg
 @media(pointer:coarse) { .ai-report :is(button,input,select), .ai-report-dialog :is(button,input,select){min-height:44px;} .ai-report :is(input,select), .ai-report-dialog :is(input,select){font-size:16px;} }
 @media(max-width:900px) { .ai-report-appbar {margin:-20px -20px 20px;padding:13px 20px;} .ai-report-heading-actions{gap:4px;} .ai-report-status-label{display:none;} .ai-report-local-controls{justify-content:flex-start;} }
 @media(max-width:600px) { .ai-report-appbar{margin:-14px -14px 18px;padding:12px 14px;} .ai-report-breadcrumb{gap:7px;font-size:11px;} .ai-report-appbar-note{display:none;} .ai-report-filters input[type=date],.ai-report-filters input[type=text]{width:100%;} .ai-report-section-head{padding:14px;} .ai-report-local-controls{width:100%;gap:8px;} .ai-report-local-controls>label{flex-wrap:wrap;gap:4px;} .ai-report-totals{justify-content:flex-start;} .ai-report-totals>div{gap:8px 18px;} .ai-report-heading h2{font-size:24px;} .ai-report-heading-actions{width:100%;} .ai-report-heading-actions>button:first-child{padding-left:0;} }
+
+/* Keep stored business dates/times readable while the integration table scrolls. */
+.ai-report-integration td:nth-child(1),
+.ai-report-integration td:nth-child(11),
+.ai-report-integration td:nth-child(12) { white-space:nowrap; }

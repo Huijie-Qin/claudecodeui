@@ -4,6 +4,7 @@ import { analysisGroups, analysisMetrics, defaultReportSort, visibleAnalysisMetr
 import type { usageRequest } from './client';
 import { usageFilterParams, type UsageFilters } from './filterState';
 import { reportGroupLabel } from './groupingState';
+import { integrationDetailColumns } from './integrationDetailColumns';
 import { collectExportRows, maxExportRows } from './reportExport';
 import type { ReportColumn, ReportSort } from './ReportTable';
 import type { ReportViewStore } from './reportViewState';
@@ -19,7 +20,7 @@ export type WorkbookSheet = {
   summaryHeaderRows?: number[]; detailHeaderRow?: number; detailRowCount?: number; sectionRows?: number[];
   metadataHeaderRows?: number[];
 };
-type ListResult = UsageList & { summary?: UsageRow; trend?: UsageRow[]; includeZeroUsers?: boolean; skillGroupingVersion?: number; codeReportVersion?: number; hookReportVersion?: number };
+type ListResult = UsageList & { summary?: UsageRow; trend?: UsageRow[]; includeZeroUsers?: boolean; skillGroupingVersion?: number; codeReportVersion?: number; hookReportVersion?: number; integrationDetailVersion?: number };
 type Tab = 'usage' | 'code' | 'skills' | 'hooks' | 'templates';
 
 export function workbookSpecs({ tenantId, batchId, through, views, codeAvailable, t }: {
@@ -42,7 +43,10 @@ export function workbookSpecs({ tenantId, batchId, through, views, codeAvailable
       : column(key, t(tab === 'hooks' && key === 'activeUserCount' ? 'recordUserCount' : key));
     return { title: t(tab), endpoint: 'analysis', params, columns: [labelColumn(groupBy, params), ...visibleAnalysisMetrics(tab, groupBy).map(metricColumn)], metrics: [...analysisMetrics[tab]] };
   };
-  const specs = [analysis('usage')];
+  const integration = views.get('integration-details')?.value || {};
+  const specs: WorkbookSpec[] = [{ title: t('usage'), endpoint: 'integration-details',
+    params: { ...base('usage'), ...((integration.sort || { sortBy: 'statDate', sortDir: 'desc' }) as ReportSort) },
+    columns: integrationDetailColumns(t, true) }];
   if (codeAvailable) {
     const saved = views.get('code')?.value || {};
     const groupBy = ['user', 'workspace', 'day', 'week', 'month'].includes(String(saved.groupBy)) ? String(saved.groupBy) : 'user';
@@ -147,6 +151,7 @@ export async function collectWorkbook({ specs, tenantId, batchId, request, signa
     if ((spec.params.includeZeroUsers && first.includeZeroUsers !== true)
       || (spec.endpoint === 'skills' && first.skillGroupingVersion !== 1)
       || (spec.endpoint === 'code' && first.codeReportVersion !== 1)
+      || (spec.endpoint === 'integration-details' && first.integrationDetailVersion !== 1)
       || (spec.endpoint.endsWith('/field-statistics') && first.hookReportVersion !== 1)) throw new Error('exportChanged');
     count += first.total;
     if (count > maxExportRows) throw new Error('exportTooLarge');
@@ -157,7 +162,7 @@ export async function collectWorkbook({ specs, tenantId, batchId, request, signa
     const info: ReportInfo[] = [
       { title: t('from'), value: cell(spec.params.from), dateOnly: true },
       { title: t('to'), value: cell(spec.params.to), dateOnly: true },
-      { title: t('groupBy'), value: t(`group.${spec.params.groupBy}`) },
+      { title: t('groupBy'), value: spec.endpoint === 'integration-details' ? t('integration.factGrain') : t(`group.${spec.params.groupBy}`) },
       { title: t('userName'), value: cell(spec.params.userSearch || t('all')) },
       { title: t('workspaceName'), value: cell(spec.params.workspaceSearch || t('all')) },
       { title: t('search'), value: cell(spec.params.search || t('all')) },
@@ -178,11 +183,12 @@ export async function collectWorkbook({ specs, tenantId, batchId, request, signa
     const { rows, dateCells } = sheet;
     for (const row of data) {
       const values = spec.columns.map((col, index) => {
-        if (['firstPublishedAt', 'lastInvokedAt'].includes(col.key) && row[col.key]) {
+        if (['firstPublishedAt', 'lastInvokedAt', 'occurredAt', 'refreshedAt'].includes(col.key) && row[col.key]) {
           const serial = shanghaiExcelTime(row[col.key]);
           if (serial !== null) dateCells!.push({ row: rows.length, col: index });
           return serial;
         }
+        if (col.key === 'statDate' && row[col.key]) dateCells!.push({ row: rows.length, col: index, dateOnly: true });
         return cell(col.exportValue ? col.exportValue(row) : row[col.key]);
       });
       rows.push(values);

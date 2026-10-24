@@ -6,7 +6,7 @@ const json = (value, fallback = {}) => { try { return JSON.parse(value); } catch
 // Persist small source references, not bodies or an ever-growing JSON progress
 // payload. Correlation is atomic per request (or unassociated tool), never per
 // entire conversation. A long conversation resumes at its next metadata page.
-export function createAiUsageSkillIndexer({ store, config, batch, checkpoint, checkWindow, enrich }) {
+export function createAiUsageSkillIndexer({ store, config, batch, checkpoint, checkWindow, enrich, isHistoricalSkill }) {
   const db = store.database;
   const tenantId = batch.tenant_id;
   const addItem = db.prepare(`INSERT OR IGNORE INTO ai_usage_skill_work_items
@@ -137,7 +137,7 @@ export function createAiUsageSkillIndexer({ store, config, batch, checkpoint, ch
           .all(...scope, group.startsWith('request:') ? group.slice(8) : ''));
         const bindings = db.prepare('SELECT * FROM ai_skill_binding_history WHERE tenant_id=? AND workspace_id=?')
           .all(tenantId, scope[1]);
-        const rows = reconcileSkillEvidence({ evidence, contexts, bindings, timeZone: config.timeZone }).map(enrich);
+        const rows = reconcileSkillEvidence({ evidence, contexts, bindings, isHistoricalSkill, timeZone: config.timeZone }).map(enrich);
         checkWindow();
         store.transaction(() => {
           store.assertLease(batch);

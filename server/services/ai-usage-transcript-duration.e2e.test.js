@@ -429,7 +429,7 @@ test('a history rebuild paused between file chunks preserves old published metri
 test('upgrading an already published v15 cache rebuilds corrected history and preserves its snapshot until publication', async t => {
   const f = await fixture(t);
   f.db.exec('ALTER TABLE agent_session_runtime ADD COLUMN id INTEGER');
-  const legacyConfig = { ...config, calculationVersion: config.calculationVersion.replace(/_transcript_content_v16$/, '') };
+  const legacyConfig = { ...config, calculationVersion: config.calculationVersion.replace(/_transcript_content_v16.*$/, '') };
   assert.notEqual(legacyConfig.calculationVersion, config.calculationVersion);
   await f.write(originalHistory());
   assert.equal((await f.run({ config: legacyConfig })).published, 1);

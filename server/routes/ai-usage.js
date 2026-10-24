@@ -19,6 +19,7 @@ export function createAiUsageRouter({ db, getScheduleStatus = () => ({}), access
   for (const endpoint of ['overview', 'summary', 'trend', 'users', 'skills', 'hooks', 'templates', 'analysis', 'code']) {
     router.get(`/${endpoint}`, (req, res) => res.json(queryService[endpoint](req.aiUsageAccess, req.query)));
   }
+  router.get('/integration-details', (req, res) => res.json(queryService.integrationDetails(req.aiUsageAccess, req.query)));
   router.get('/code-records', (req, res) => res.json(queryService.codeRecords(req.aiUsageAccess, req.query)));
   router.get('/hook-field-statistics', (req, res) => res.json(queryService.hookFieldStatistics(req.aiUsageAccess, req.query)));
   router.get('/hook-executions', (req, res) => res.json(queryService.hookExecutions(req.aiUsageAccess, req.query)));
