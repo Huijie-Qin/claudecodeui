@@ -8,7 +8,7 @@ import { integrationDetailColumns } from './integrationDetailColumns';
 import { collectExportRows, maxExportRows } from './reportExport';
 import type { ReportColumn, ReportSort } from './ReportTable';
 import type { ReportViewStore } from './reportViewState';
-import { savedFilters } from './savedReportViews';
+import { savedFilters, sharedReportFilters } from './savedReportViews';
 import { assertUsageSummary, type UsageSummary } from './summaryState';
 import type { AnalysisTab, UsageCapabilities, UsageList, UsageRow } from './types';
 import { assertPublishedBatch } from './usageUtils';
@@ -21,13 +21,13 @@ export type WorkbookSheet = {
   metadataHeaderRows?: number[];
 };
 type ListResult = UsageList & { summary?: UsageRow; trend?: UsageRow[]; includeZeroUsers?: boolean; skillGroupingVersion?: number; codeReportVersion?: number; hookReportVersion?: number; integrationDetailVersion?: number };
-type Tab = 'usage' | 'code' | 'skills' | 'hooks' | 'templates';
 
 export function workbookSpecs({ tenantId, batchId, through, views, codeAvailable, t }: {
   tenantId: number; batchId: string; through: string; views: ReportViewStore; codeAvailable: boolean; t: TFunction;
 }): WorkbookSpec[] {
-  const filter = (tab: Tab) => savedFilters(views.get(`filters:${tab}`)?.value.filters, through);
-  const base = (tab: Tab, ownFilters?: UsageFilters) => ({ tenantId, scope: 'tenant', batchId, ...usageFilterParams(ownFilters || filter(tab)) });
+  const sharedFilters = sharedReportFilters(views, through);
+  const filterScope = JSON.stringify({ ...sharedFilters, userName: sharedFilters.userName.trim(), workspaceName: sharedFilters.workspaceName.trim() });
+  const base = (ownFilters: UsageFilters = sharedFilters) => ({ tenantId, scope: 'tenant', batchId, ...usageFilterParams(ownFilters) });
   const column = (key: string, title = t(key)): ReportColumn => ({ key, title });
   const labelColumn = (group: string, filters: Record<string, unknown>) => ({ key: 'groupLabel', title: t(`group.${group}`), exportValue: (row: UsageRow) => reportGroupLabel(group, row.groupLabel, filters) });
   const analysis = (tab: AnalysisTab, key: string = tab, templateId?: string): WorkbookSpec => {
@@ -35,7 +35,7 @@ export function workbookSpecs({ tenantId, batchId, through, views, codeAvailable
     const options = templateId ? ['user', 'workspace', 'day', 'week', 'month'] : analysisGroups[tab];
     const groupBy = options.includes(String(saved.groupBy) as never) ? String(saved.groupBy) : options[0];
     const sort = visibleAnalysisSort(tab, groupBy, (saved.sort || defaultReportSort(tab)) as ReportSort);
-    const params = { ...base(tab as Tab), dataset: tab, groupBy, ...sort,
+    const params = { ...base(), dataset: tab, groupBy, ...sort,
       ...(templateId ? { templateId } : {}), ...(tab !== 'usage' ? { search: String(saved.nameSearch || '') } : {}),
       ...(tab === 'usage' && groupBy === 'user' ? { includeZeroUsers: true } : {}) };
     const metricColumn = (key: string) => key === 'activeDurationMs'
@@ -45,18 +45,18 @@ export function workbookSpecs({ tenantId, batchId, through, views, codeAvailable
   };
   const integration = views.get('integration-details')?.value || {};
   const specs: WorkbookSpec[] = [{ title: t('usage'), endpoint: 'integration-details',
-    params: { ...base('usage'), ...((integration.sort || { sortBy: 'statDate', sortDir: 'desc' }) as ReportSort) },
+    params: { ...base(), ...((integration.sort || { sortBy: 'statDate', sortDir: 'desc' }) as ReportSort) },
     columns: integrationDetailColumns(t, true) }];
   if (codeAvailable) {
     const saved = views.get('code')?.value || {};
     const groupBy = ['user', 'workspace', 'day', 'week', 'month'].includes(String(saved.groupBy)) ? String(saved.groupBy) : 'user';
-    const params = { ...base('code'), groupBy, ...((saved.sort || { sortBy: 'generatedLines', sortDir: 'desc' }) as ReportSort) };
+    const params = { ...base(), groupBy, ...((saved.sort || { sortBy: 'generatedLines', sortDir: 'desc' }) as ReportSort) };
     specs.push({ title: t('codeReport.tab'), endpoint: 'code', params,
       columns: [labelColumn(groupBy, params), column('generatedLines', t('codeReport.generated')), column('submittedLines', t('codeReport.realSubmitted'))], metrics: ['generatedLines', 'submittedLines'] });
   }
   const skill = views.get('skills')?.value || {};
   const groupBy = skill.groupBy === 'publisher' ? 'publisher' : 'skill';
-  specs.push({ title: t('skillsTitle'), endpoint: 'skills', params: { ...base('skills'), groupBy, ...((skill.sort || defaultReportSort('skills')) as ReportSort), search: String(skill.search || '') },
+  specs.push({ title: t('skillsTitle'), endpoint: 'skills', params: { ...base(), groupBy, ...((skill.sort || defaultReportSort('skills')) as ReportSort), search: String(skill.search || '') },
     columns: [
       ...(groupBy === 'skill' ? [column('skillName')] : []), column('publisherName', t('publisher')),
       ...(groupBy === 'skill' ? [column('firstPublishedAt')] : []),
@@ -69,7 +69,7 @@ export function workbookSpecs({ tenantId, batchId, through, views, codeAvailable
       const hookId = key.slice(5);
       const groupBy = ['user', 'workspace', 'day', 'week', 'month', 'hook'].includes(String(saved.groupBy)) ? String(saved.groupBy) : 'user';
       const metric = ['sum', 'average', 'min', 'max'].includes(String(saved.metric)) ? String(saved.metric) : 'sum';
-      const params = { ...base('hooks', savedFilters(saved.filters, through)), groupBy, fieldKey: String(saved.fieldKey || ''),
+      const params = { ...base(saved.filterScope === filterScope ? savedFilters(saved.filters, through) : sharedFilters), groupBy, fieldKey: String(saved.fieldKey || ''),
         ...((saved.statsSort || { sortBy: 'groupLabel', sortDir: 'asc' }) as ReportSort) };
       specs.push({ title: `${saved.hookName || hookId} · ${t('hookNumericResults')}`, endpoint: `hooks/${encodeURIComponent(hookId)}/field-statistics`, params, metric,
         columns: [...(groupBy === 'hook' ? [] : [labelColumn(groupBy, params)]), column('label', t('field')), column('key', t('workbook.fieldKey')), column('postActionId', t('postAction')),

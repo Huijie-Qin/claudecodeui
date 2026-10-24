@@ -1,8 +1,8 @@
 import type { UsageFilters } from './filterState';
-import type { ReportViewEntry } from './reportViewState';
+import type { ReportViewEntry, ReportViewStore } from './reportViewState';
 import { defaultUsageRange, validateUsageRange } from './usageUtils';
 
-const keys = /^(?:usage|integration-details|skills|hooks|templates|code|demo-code|filters:(?:usage|skills|hooks|templates|code)|hook:[^\s]{1,200}|template:[^\s]{1,200})$/;
+const keys = /^(?:usage|integration-details|skills|hooks|templates|code|demo-code|filters:(?:shared|usage|skills|hooks|templates|code)|hook:[^\s]{1,200}|template:[^\s]{1,200})$/;
 const groups = ['user', 'workspace', 'day', 'week', 'month', 'skill', 'publisher', 'hook', 'template'];
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
@@ -17,12 +17,31 @@ export function savedFilters(value: unknown, through: string): UsageFilters {
     workspaceName: typeof filters.workspaceName === 'string' ? filters.workspaceName.slice(0, 150) : '' };
 }
 
+const legacyFilterKeys = ['usage', 'skills', 'hooks', 'templates', 'code'].map(tab => `filters:${tab}`);
+
+export function saveSharedReportFilters(views: ReportViewStore, next: UsageFilters): void {
+  // Retire old tab snapshots so neither reload nor export can revive them.
+  for (const key of legacyFilterKeys) views.delete(key);
+  views.set('filters:shared', { queryKey: '', value: { filters: { ...next } } });
+}
+
+export function sharedReportFilters(views: ReportViewStore, through: string): UsageFilters {
+  // Older releases have no last-applied timestamp. Prefer the landing tab,
+  // then the first available tab in a deterministic order for one-time migration.
+  const key = views.has('filters:shared') ? 'filters:shared' : legacyFilterKeys.find(key => views.has(key));
+  const next = savedFilters(key ? views.get(key)?.value.filters : undefined, through);
+  if (key !== 'filters:shared' || JSON.stringify(views.get(key)?.value.filters) !== JSON.stringify(next)
+    || legacyFilterKeys.some(key => views.has(key))) saveSharedReportFilters(views, next);
+  return next;
+}
+
 // Persist only applied preferences. No result rows, auth tokens or stale batches.
 function preferences(value: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { page: 1 };
   for (const key of ['search', 'nameSearch', 'fieldKey', 'hookId', 'hookName']) {
     if (typeof value[key] === 'string') out[key] = value[key].slice(0, 200);
   }
+  if (typeof value.filterScope === 'string') out.filterScope = value.filterScope.slice(0, 1000);
   if (groups.includes(String(value.groupBy))) out.groupBy = value.groupBy;
   if (['sum', 'average', 'min', 'max'].includes(String(value.metric))) out.metric = value.metric;
   if ([10, 20, 50, 100].includes(Number(value.pageSize))) out.pageSize = value.pageSize;

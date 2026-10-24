@@ -9,6 +9,8 @@ import { useMetricDefinitions } from './metricDefinitionAccess';
 import { nextReportSort } from './analysisState';
 import { useReportView } from './ReportViewContext';
 import { savedFilters } from './savedReportViews';
+import ReportDateInput from './ReportDateInput';
+import { normalizeUsageDate } from './dateInput';
 import { usageRequest } from './client';
 import { usageFilterParams, type UsageFilters } from './filterState';
 import { hookNumberColumns } from './HookNumberColumns';
@@ -32,13 +34,14 @@ export default function HookReportPanel({ row, params, through, onAccessError }:
   const { t, i18n } = useTranslation('aiUsage');
   const showDefinitions = useMetricDefinitions();
   const initialFilters: UsageFilters = { from: String(params.from || ''), to: String(params.to || ''), userName: String(params.userSearch || ''), workspaceName: String(params.workspaceSearch || '') };
+  const filterScope = JSON.stringify(initialFilters);
   const [saved, setSaved] = useReportView(`hook:${row.hookId}`, JSON.stringify(params), {
-    page: 1, filters: initialFilters, groupBy: 'user' as typeof groups[number], metric: 'sum' as HookNumberMetric, fieldKey: '',
+    page: 1, filters: initialFilters, filterScope: '', groupBy: 'user' as typeof groups[number], metric: 'sum' as HookNumberMetric, fieldKey: '',
     hookId: String(row.hookId), hookName: row.hookName || String(row.hookId),
     statsSort: { sortBy: 'groupLabel', sortDir: 'asc' } as ReportSort,
     recordSort: { sortBy: 'occurredAt', sortDir: 'desc' } as ReportSort,
   });
-  const [filters, setFilters] = useState(() => savedFilters(saved.filters, through));
+  const [filters, setFilters] = useState(() => saved.filterScope === filterScope ? savedFilters(saved.filters, through) : initialFilters);
   const [draft, setDraft] = useState(filters);
   const [groupBy, setGroupBy] = useState<typeof groups[number]>(saved.groupBy);
   const [metric, setMetric] = useState<HookNumberMetric>(saved.metric);
@@ -72,7 +75,7 @@ export default function HookReportPanel({ row, params, through, onAccessError }:
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [queryKey, id, groupBy, statsSort, recordSort, statsPage, recordsPage, onAccessError]);
-  useEffect(() => { setSaved(old => ({ ...old, filters, groupBy, metric, fieldKey, statsSort, recordSort })); }, [filters, groupBy, metric, fieldKey, statsSort, recordSort, setSaved]);
+  useEffect(() => { setSaved(old => ({ ...old, filters, filterScope, groupBy, metric, fieldKey, statsSort, recordSort })); }, [filters, filterScope, groupBy, metric, fieldKey, statsSort, recordSort, setSaved]);
   const resetPages = () => { setStatsPage(1); setRecordsPage(1); };
   const fields = Array.from(new Map((data?.statistics.availableFields || []).map((field) => [field.key, field])).values());
   const businessColumns = Array.from(new Map((data?.records.items || []).flatMap((item) => reportFields(item.fields)).map((field) => [field.key, field])).values())
@@ -91,11 +94,11 @@ export default function HookReportPanel({ row, params, through, onAccessError }:
   ];
   return <section className="space-y-5" aria-label={t('singleHookReport')}>
     <MetricDefinition><details className="ai-report-help"><summary>{t('redesign.definitions')}</summary><p>{t('singleHookHint')}</p></details></MetricDefinition>
-    <form className={`${sectionClass} flex flex-wrap items-end gap-3 p-4`} aria-label={t('hookReportFilters')} onSubmit={(event) => {
-      event.preventDefault(); const problem = validateUsageRange(draft.from, draft.to, through);
-      setRangeError(problem ? `range.${problem}` : ''); if (!problem) { setFilters(draft); resetPages(); }
+    <form noValidate className={`${sectionClass} flex flex-wrap items-end gap-3 p-4`} aria-label={t('hookReportFilters')} onSubmit={(event) => {
+      event.preventDefault(); const next = { ...draft, from: normalizeUsageDate(draft.from) ?? draft.from, to: normalizeUsageDate(draft.to) ?? draft.to }; setDraft(next); const problem = validateUsageRange(next.from, next.to, through);
+      setRangeError(problem ? `range.${problem}` : ''); if (!problem) { setFilters(next); resetPages(); }
     }}>
-      {(['from', 'to'] as const).map((key) => <label key={key} className="flex flex-col gap-1.5 text-xs text-muted-foreground">{t(key)}<input type="date" className={inputClass} required max={through} value={draft[key]} onChange={(event) => setDraft({ ...draft, [key]: event.target.value })} /></label>)}
+      {(['from', 'to'] as const).map((key) => <ReportDateInput key={key} label={t(key)} calendarLabel={t('chooseDate', { label: t(key) })} max={through} value={draft[key]} onChange={(value) => setDraft(old => ({ ...old, [key]: value }))} />)}
       {(['userName', 'workspaceName'] as const).map((key) => <label key={key} className="flex flex-col gap-1.5 text-xs text-muted-foreground">{t(key)}<input type="text" className={`${inputClass} w-40`} maxLength={150} placeholder={t('nameSearchPlaceholder')} value={draft[key]} onChange={(event) => setDraft({ ...draft, [key]: event.target.value })} /></label>)}
       <Button type="submit" variant="outline" disabled={loading}>{t('apply')}</Button><Button type="button" variant="ghost" onClick={() => { setDraft(initialFilters); setFilters(initialFilters); setFieldKey(''); resetPages(); setRangeError(''); }}>{t('resetFilters')}</Button>
       {rangeError ? <p role="alert" className="w-full text-xs text-destructive">{t(rangeError)}</p> : <MetricDefinition><p className="w-full text-xs text-muted-foreground">{t('hookReportFilterHint')}</p></MetricDefinition>}
