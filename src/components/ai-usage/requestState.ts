@@ -8,6 +8,7 @@ export function isUsageAccessFailure(error: unknown): boolean {
 export function usageFailureKey(error: unknown, fallback = 'requestFailed'): string {
   if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'reportUpdated') return 'batchMismatch';
   if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'integrationNotReady') return 'integrationNotReady';
+  if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'sessionDetailsNotReady') return 'sessionDetailsNotReady';
   if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'splitNotReady') return 'splitNotReady';
   return fallback;
 }

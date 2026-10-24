@@ -6,11 +6,12 @@ import { Button } from '../../shared/view/ui';
 
 import { usageRequest } from './client';
 import { collectWorkbook, workbookBytes, workbookSpecs } from './reportWorkbook';
+import type { ReportTenantId } from './types';
 import type { ReportViewStore } from './reportViewState';
 import { isUsageAccessFailure, usageFailureKey } from './requestState';
 
 export default function WorkbookDownload({ tenantId, batchId, through, views, codeAvailable, disabled, onAccessError }: {
-  tenantId: number; batchId: string; through: string; views: ReportViewStore; codeAvailable: boolean; disabled: boolean; onAccessError: () => void;
+  tenantId: ReportTenantId; batchId: string; through: string; views: ReportViewStore; codeAvailable: boolean; disabled: boolean; onAccessError: () => void;
 }) {
   const { t } = useTranslation('aiUsage');
   const controller = useRef<AbortController | null>(null);

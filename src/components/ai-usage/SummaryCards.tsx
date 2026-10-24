@@ -8,7 +8,7 @@ import { usageRequest, UsageApiError } from './client';
 import { isUsageAccessFailure, usageFailureKey } from './requestState';
 import { assertUsageSummary, summaryPeriods, summaryRequestParams, type UsageSummary } from './summaryState';
 import { displayReportValue } from './usageUtils';
-import type { UsageCapabilities } from './types';
+import type { ReportTenantId, UsageCapabilities } from './types';
 
 const cards = [
   { key: 'sessionCount', title: 'summarySessions', hint: 'summaryRange', period: 'rolling', icon: MessageSquare },
@@ -18,7 +18,7 @@ const cards = [
 ] as const;
 
 export default function SummaryCards({ tenantId, batchId, capabilities, onAccessError }: {
-  tenantId: number; batchId: string; capabilities: UsageCapabilities; onAccessError: () => void;
+  tenantId: ReportTenantId; batchId: string; capabilities: UsageCapabilities; onAccessError: () => void;
 }) {
   const showDefinitions = useMetricDefinitions();
   const { t } = useTranslation('aiUsage');
@@ -49,7 +49,7 @@ export default function SummaryCards({ tenantId, batchId, capabilities, onAccess
   return <section aria-label={t('summaryTitle')} aria-busy={loading} className="ai-report-summary space-y-3">
     <header className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <h3 className="text-sm font-semibold">{t('summaryTitle')} · {t('tenantScope')}</h3>
+        <h3 className="text-sm font-semibold">{t('summaryTitle')} · {t(tenantId === 'all' ? 'allTenants' : 'tenantScope')}</h3>
         <p className="ai-report-summary-cutoff">{t('dataThrough')} <span>{periods.cutoff}</span></p>
       </div>
       <MetricDefinition><p className="text-xs text-muted-foreground">{t('summaryHint')}</p></MetricDefinition>

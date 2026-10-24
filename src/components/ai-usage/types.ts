@@ -1,7 +1,8 @@
+export type ReportTenantId = number | 'all';
 export type UsageScope = 'self' | 'tenant';
 export type ReportTab = 'usage' | 'skills' | 'hookExecutions' | 'hooks' | 'templates';
 export type AnalysisTab = Exclude<ReportTab, 'skills'>;
-export type Coverage = string | { status?: string; pendingTurns?: number; sessionScope?: 'partial' | 'complete'; excludedSessionCount?: number; [key: string]: unknown };
+export type Coverage = string | { status?: string; pendingTurns?: number; sessionScope?: 'partial' | 'complete'; excludedSessionCount?: number; allTenants?: { total: number; published: number; missing: number; stale: number }; [key: string]: unknown };
 export type UsageCapabilities = { userId?: number; canViewDefinitions?: boolean; canViewTenant: boolean; canExport: boolean; exportConfigured: boolean; defaultScope?: UsageScope; simulation?: boolean; codeReportAvailable?: boolean };
 export type UsageStatus = {
   batchId: string | null; dataThrough?: string; dataThroughDate?: string; generatedAt?: string;

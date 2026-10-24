@@ -1,5 +1,5 @@
 import { assertPublishedBatch } from './usageUtils';
-import type { UsageCapabilities, UsageRow, UsageScope } from './types';
+import type { ReportTenantId, UsageCapabilities, UsageRow, UsageScope } from './types';
 
 export type UsageSummary = UsageRow & {
   batchId: string; summaryVersion: number; scope: UsageScope;
@@ -26,7 +26,7 @@ export function summaryPeriods(summary: UsageSummary | null) {
 }
 
 // Deliberately accept no report filters, pagination, grouping or selected scope.
-export function summaryRequestParams(tenantId: number, batchId: string, capabilities: UsageCapabilities) {
+export function summaryRequestParams(tenantId: ReportTenantId, batchId: string, capabilities: UsageCapabilities) {
   return { tenantId, batchId, scope: capabilities.canViewTenant ? 'tenant' as const : 'self' as const };
 }
 

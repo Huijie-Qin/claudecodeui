@@ -112,7 +112,7 @@ export function createAiUsageAnalysis({ db, context, durationSql, hookConditions
     // the fact source, so distinct totals/activity cannot be inflated.
     const zeroUsers = includeZeroUsers ? `UNION ALL
       SELECT CAST(u.id AS TEXT) AS groupKey, u.username AS groupLabel, ${keys.map((field) => `0 AS ${field}`).join(',')}
-      FROM users u WHERE EXISTS (SELECT 1 FROM tenant_users m WHERE m.user_id=u.id AND m.tenant_id=@tenant)
+      FROM users u WHERE EXISTS (SELECT 1 FROM tenant_users m WHERE m.user_id=u.id AND ${ctx.tenantWhere('m')})
       AND (@self IS NULL OR u.id=@self) AND (@userId IS NULL OR u.id=@userId)
       AND u.username LIKE @search ESCAPE '\\'
       AND (@userSearch IS NULL OR u.username LIKE @userSearch ESCAPE '\\')

@@ -4,13 +4,13 @@ import { analysisGroups, analysisMetrics, defaultReportSort, visibleAnalysisMetr
 import type { usageRequest } from './client';
 import { usageFilterParams, type UsageFilters } from './filterState';
 import { reportGroupLabel } from './groupingState';
-import { integrationDetailColumns } from './integrationDetailColumns';
+import { sessionDetailColumns, sessionDetailSort } from './sessionDetailColumns';
 import { collectExportRows, maxExportRows } from './reportExport';
 import type { ReportColumn, ReportSort } from './ReportTable';
 import type { ReportViewStore } from './reportViewState';
 import { savedFilters, sharedReportFilters } from './savedReportViews';
 import { assertUsageSummary, type UsageSummary } from './summaryState';
-import type { AnalysisTab, UsageCapabilities, UsageList, UsageRow } from './types';
+import type { AnalysisTab, ReportTenantId, UsageCapabilities, UsageList, UsageRow } from './types';
 import { assertPublishedBatch } from './usageUtils';
 
 export type WorkbookSpec = { title: string; endpoint: string; params: Record<string, unknown>; columns: ReportColumn[]; metrics?: string[]; metric?: string };
@@ -20,10 +20,10 @@ export type WorkbookSheet = {
   summaryHeaderRows?: number[]; detailHeaderRow?: number; detailRowCount?: number; sectionRows?: number[];
   metadataHeaderRows?: number[];
 };
-type ListResult = UsageList & { summary?: UsageRow; trend?: UsageRow[]; includeZeroUsers?: boolean; skillGroupingVersion?: number; codeReportVersion?: number; hookReportVersion?: number; integrationDetailVersion?: number };
+type ListResult = UsageList & { summary?: UsageRow; trend?: UsageRow[]; includeZeroUsers?: boolean; skillGroupingVersion?: number; codeReportVersion?: number; hookReportVersion?: number; sessionDetailVersion?: number };
 
 export function workbookSpecs({ tenantId, batchId, through, views, codeAvailable, t }: {
-  tenantId: number; batchId: string; through: string; views: ReportViewStore; codeAvailable: boolean; t: TFunction;
+  tenantId: ReportTenantId; batchId: string; through: string; views: ReportViewStore; codeAvailable: boolean; t: TFunction;
 }): WorkbookSpec[] {
   const sharedFilters = sharedReportFilters(views, through);
   const filterScope = JSON.stringify({ ...sharedFilters, userName: sharedFilters.userName.trim(), workspaceName: sharedFilters.workspaceName.trim() });
@@ -43,10 +43,10 @@ export function workbookSpecs({ tenantId, batchId, through, views, codeAvailable
       : column(key, t(tab === 'hooks' && key === 'activeUserCount' ? 'recordUserCount' : key));
     return { title: t(tab), endpoint: 'analysis', params, columns: [labelColumn(groupBy, params), ...visibleAnalysisMetrics(tab, groupBy).map(metricColumn)], metrics: [...analysisMetrics[tab]] };
   };
-  const integration = views.get('integration-details')?.value || {};
-  const specs: WorkbookSpec[] = [{ title: t('usage'), endpoint: 'integration-details',
-    params: { ...base(), ...((integration.sort || { sortBy: 'statDate', sortDir: 'desc' }) as ReportSort) },
-    columns: integrationDetailColumns(t, true) }];
+  const sessions = views.get('session-details')?.value || {};
+  const specs: WorkbookSpec[] = [{ title: t('usage'), endpoint: 'session-details',
+    params: { ...base(), ...sessionDetailSort(sessions.sort) },
+    columns: sessionDetailColumns(t, true) }];
   if (codeAvailable) {
     const saved = views.get('code')?.value || {};
     const groupBy = ['user', 'workspace', 'day', 'week', 'month'].includes(String(saved.groupBy)) ? String(saved.groupBy) : 'user';
@@ -122,7 +122,7 @@ function reportLayout(title: string, columns: string[], info: ReportInfo[], tota
 }
 
 export async function collectWorkbook({ specs, tenantId, batchId, request, signal, t, onProgress }: {
-  specs: WorkbookSpec[]; tenantId: number; batchId: string; request: typeof usageRequest; signal: AbortSignal; t: TFunction;
+  specs: WorkbookSpec[]; tenantId: ReportTenantId; batchId: string; request: typeof usageRequest; signal: AbortSignal; t: TFunction;
   onProgress?: (sheet: string, count: number) => void;
 }): Promise<WorkbookSheet[]> {
   const authorize = async () => {
@@ -151,18 +151,21 @@ export async function collectWorkbook({ specs, tenantId, batchId, request, signa
     if ((spec.params.includeZeroUsers && first.includeZeroUsers !== true)
       || (spec.endpoint === 'skills' && first.skillGroupingVersion !== 1)
       || (spec.endpoint === 'code' && first.codeReportVersion !== 1)
-      || (spec.endpoint === 'integration-details' && first.integrationDetailVersion !== 1)
+      || (spec.endpoint === 'session-details' && first.sessionDetailVersion !== 1)
       || (spec.endpoint.endsWith('/field-statistics') && first.hookReportVersion !== 1)) throw new Error('exportChanged');
     count += first.total;
     if (count > maxExportRows) throw new Error('exportTooLarge');
     // Reuse the first page without weakening pagination/batch/permission checks.
-    const fetchPage: typeof usageRequest = async <T,>(endpoint: string, params: Record<string, unknown> = {}, abort?: AbortSignal) =>
-      endpoint === spec.endpoint && params.page === 1 ? first as T : request<T>(endpoint, params, abort);
+    const fetchPage: typeof usageRequest = async <T,>(endpoint: string, params: Record<string, unknown> = {}, abort?: AbortSignal) => {
+      const result = endpoint === spec.endpoint && params.page === 1 ? first as T : await request<T>(endpoint, params, abort);
+      if (endpoint === 'session-details' && (result as ListResult).sessionDetailVersion !== 1) throw new Error('exportChanged');
+      return result;
+    };
     const data = await collectExportRows({ endpoint: spec.endpoint, params: spec.params, total: first.total, signal, request: fetchPage, onProgress: n => onProgress?.(spec.title, n) });
     const info: ReportInfo[] = [
       { title: t('from'), value: cell(spec.params.from), dateOnly: true },
       { title: t('to'), value: cell(spec.params.to), dateOnly: true },
-      { title: t('groupBy'), value: spec.endpoint === 'integration-details' ? t('integration.factGrain') : t(`group.${spec.params.groupBy}`) },
+      { title: t('groupBy'), value: spec.endpoint === 'session-details' ? t('sessionDetails.factGrain') : t(`group.${spec.params.groupBy}`) },
       { title: t('userName'), value: cell(spec.params.userSearch || t('all')) },
       { title: t('workspaceName'), value: cell(spec.params.workspaceSearch || t('all')) },
       { title: t('search'), value: cell(spec.params.search || t('all')) },
@@ -183,7 +186,7 @@ export async function collectWorkbook({ specs, tenantId, batchId, request, signa
     const { rows, dateCells } = sheet;
     for (const row of data) {
       const values = spec.columns.map((col, index) => {
-        if (['firstPublishedAt', 'lastInvokedAt', 'occurredAt', 'refreshedAt'].includes(col.key) && row[col.key]) {
+        if (['firstPublishedAt', 'lastInvokedAt', 'occurredAt', 'refreshedAt', 'startTime', 'endTime'].includes(col.key) && row[col.key]) {
           const serial = shanghaiExcelTime(row[col.key]);
           if (serial !== null) dateCells!.push({ row: rows.length, col: index });
           return serial;

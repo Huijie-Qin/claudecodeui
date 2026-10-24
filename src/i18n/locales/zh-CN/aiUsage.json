@@ -1,4 +1,8 @@
 {
+  "allTenants": "所有租户",
+  "allTenantsCoverage": "已合并 {{published}} / {{total}} 个启用租户的已发布数据；{{missing}} 个暂无结果，{{stale}} 个数据截止日期较早。日期上限按最新已发布租户确定。",
+  "sessionDetailsNotReady": "当前批次尚未生成会话明细，请等待下一次夜间统计完成。",
+  "sessionDetails": {"title": "AI 会话明细", "hint": "一个会话一行，日期按会话开始日期筛选。Token、Skill 列表和实际时长为该会话完整的已发布统计。时间为北京时间；实际时长累计有效已完成轮次，不包含等待间隔。", "sessionId": "会话 ID", "totalTokens": "Token 消耗", "skills": "会话中调用的 Skill 列表", "startTime": "会话开始时间", "endTime": "会话结束时间", "activeDuration": "实际会话时长", "activeDurationSeconds": "实际会话时长（秒）", "factGrain": "一个会话一行"},
   "integration": {"title": "AI 使用与产出明细", "hint": "展示最近一次成功发布的对接明细，一条统计事实一行，同一用户可有多行。空字段表示该行不适用或未知。日期、发生时间和更新时间均为北京时间；AI 时长格式为 时:分:秒。可横向滚动查看全部字段。", "statDate": "统计日期", "skillPublishCount": "Skill 发布次数", "occurredAt": "发生时间", "refreshedAt": "更新时间", "id": "记录 ID", "tenantId": "租户 ID", "userId": "用户 ID", "workspaceId": "工作区 ID", "aiSessionId": "AI 会话 ID", "hasAiInteraction": "有效 AI 交互标识", "skillId": "Skill ID", "publisherUserId": "发布者用户 ID", "sqlRecordId": "SQL 记录 ID", "codeSubmissionId": "代码提交记录 ID", "repositoryUrl": "仓库地址", "commitSha": "提交 SHA", "factGrain": "一条统计事实一行"},
   "sessionScopeConflictNotice": "统计已更新，{{count}} 个会话因归属冲突暂未计入；修复后将在后续统计中补齐。",
   "sessionScopeConflictHint": "归属冲突会话的相关使用数据暂不计入统计，原始数据保留，其他会话正常更新。请管理员核实并修复归属；后续统计会自动复查，冲突解除后重算相关历史数据并补齐。",

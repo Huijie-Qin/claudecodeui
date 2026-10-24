@@ -9,7 +9,7 @@ import AnalysisPanel from './AnalysisPanel';
 import SummaryCards from './SummaryCards';
 import DemoCodeReport from './DemoCodeReport';
 import CodeReport from './CodeReport';
-import IntegrationDetails from './IntegrationDetails';
+import SessionDetails from './SessionDetails';
 import './reportTheme.css';
 import SkillsReport from './SkillsReport';
 import TemplateReport from './TemplateReport';
@@ -25,12 +25,12 @@ import { reportTabOrder } from './analysisState';
 import { usageFilterParams, type UsageFilters } from './filterState';
 import { isUsageAccessFailure, usageFailureKey } from './requestState';
 import { coverageStatus, dateInZone, defaultUsageRange, validateUsageRange } from './usageUtils';
-import type { ReportTab, UsageCapabilities, UsageRow, UsageStatus } from './types';
+import type { ReportTenantId, ReportTab, UsageCapabilities, UsageRow, UsageStatus } from './types';
 
 const inputClass = 'h-9 min-w-0 rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring/30';
 const panelClass = 'rounded-xl border border-border bg-card';
 
-export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
+export default function AiUsagePanel({ tenantId }: { tenantId: ReportTenantId }) {
   const { t, i18n } = useTranslation('aiUsage');
   const [capabilities, setCapabilities] = useState<UsageCapabilities | null>(null);
   const [status, setStatus] = useState<UsageStatus | null>(null);
@@ -115,6 +115,7 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
   const showPartial = status?.batchId && coverageStatus(status.coverage) !== 'complete';
   const excludedCount = typeof status?.coverage === 'object' ? status.coverage?.excludedSessionCount : undefined;
   const excludedSessionCount = status?.batchId && typeof excludedCount === 'number' && Number.isSafeInteger(excludedCount) && excludedCount > 0 ? excludedCount : 0;
+  const allTenantsCoverage = typeof status?.coverage === 'object' ? status.coverage?.allTenants : undefined;
   const analysisParams = { tenantId, scope, batchId: status?.batchId, ...usageFilterParams(filters) };
   const childKey = `${tenantId}:${scope}:${tab}:${status?.batchId}:${JSON.stringify(filters)}:${revision}`;
   const analysisPanel = tab === 'usage' || tab === 'skills' || tab === 'hooks' || tab === 'templates' || tab === 'code' ? null : <AnalysisPanel key={childKey} tab={tab} params={analysisParams} onAccessError={onAccessError} />;
@@ -139,6 +140,7 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
     </section>
     {status && ['failed', 'paused', 'running', 'disabled'].includes(status.state || '') && <p className="flex items-start gap-2 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300"><Clock3 className="mt-0.5 h-4 w-4 shrink-0" />{t(status.state || 'pending')} · {t('staleHint')}</p>}
     {Boolean(excludedSessionCount) && <p role="status" className="flex items-start gap-2 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{t('sessionScopeConflictNotice', { count: excludedSessionCount })}</p>}
+    {tenantId === 'all' && allTenantsCoverage && <p role="status" className="ai-report-coverage-note">{t('allTenantsCoverage', allTenantsCoverage)}</p>}
     {error && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{t(error)}</p>}
     {status?.batchId && capabilities && <SummaryCards key={`${tenantId}:${status.batchId}:${capabilities.canViewTenant}:${revision}`} tenantId={tenantId} batchId={status.batchId} capabilities={capabilities} onAccessError={onAccessError} />}
     <div className="ai-report-tabs" role="tablist" aria-label={t('title')}>{visibleTabs.map((key) => { const Icon = { usage: Activity, code: Code2, skills: Sparkles, hookExecutions: Activity, hooks: Webhook, templates: FileText }[key]; return <button key={key} type="button" role="tab" id={`ai-report-tab-${key}`} aria-selected={tab === key} aria-controls="ai-usage-tab-panel" className="ai-report-tab" onClick={() => selectTab(key)}><Icon className="h-4 w-4" />{t(key === 'code' ? 'codeReport.tab' : key)}</button>; })}</div>
@@ -150,7 +152,7 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
     </form>}
     <div id="ai-usage-tab-panel" role="tabpanel" aria-labelledby={`ai-report-tab-${tab}`} aria-busy={loading} className="space-y-4">
       {tab === 'hooks' && ready && status?.batchId && <AnalysisPanel key={childKey} tab="hooks" hookDirectory params={analysisParams} onAccessError={onAccessError} onDetails={setSelectedHook} />}
-      {!status?.batchId ? <div className={`${panelClass} px-6 py-16 text-center`}><CalendarClock className="mx-auto h-9 w-9 text-muted-foreground/60" /><h3 className="mt-4 font-medium">{loading ? t('loading') : t('noBatch')}</h3><p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-muted-foreground">{t('noBatchHint')}</p></div> : loading && !ready ? <div className="flex items-center justify-center gap-2 py-20 text-sm text-muted-foreground"><RefreshCw className="h-4 w-4 animate-spin" />{t('loading')}</div> : tab === 'usage' ? <IntegrationDetails key={childKey} params={analysisParams} onAccessError={onAccessError} /> : tab === 'code' ? legacyCodeDemo ? <DemoCodeReport key={childKey} tenantId={tenantId} batchId={status.batchId} filters={filters} timeZone={status.timeZone || 'Asia/Shanghai'} onAccessError={onAccessError} /> : <CodeReport key={childKey} params={analysisParams} onAccessError={onAccessError} /> : tab === 'skills' ? <SkillsReport key={`skills:${childKey}`} params={{ ...analysisParams, timeZone: status.timeZone }} onAccessError={onAccessError} /> : tab === 'templates' ? <TemplateReport key={childKey} params={analysisParams} onAccessError={onAccessError} /> : analysisPanel}
+      {!status?.batchId ? <div className={`${panelClass} px-6 py-16 text-center`}><CalendarClock className="mx-auto h-9 w-9 text-muted-foreground/60" /><h3 className="mt-4 font-medium">{loading ? t('loading') : t('noBatch')}</h3><p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-muted-foreground">{t('noBatchHint')}</p></div> : loading && !ready ? <div className="flex items-center justify-center gap-2 py-20 text-sm text-muted-foreground"><RefreshCw className="h-4 w-4 animate-spin" />{t('loading')}</div> : tab === 'usage' ? <SessionDetails key={childKey} params={analysisParams} onAccessError={onAccessError} /> : tab === 'code' ? legacyCodeDemo ? <DemoCodeReport key={childKey} tenantId={tenantId} batchId={status.batchId} filters={filters} timeZone={status.timeZone || 'Asia/Shanghai'} onAccessError={onAccessError} /> : <CodeReport key={childKey} params={analysisParams} onAccessError={onAccessError} /> : tab === 'skills' ? <SkillsReport key={`skills:${childKey}`} params={{ ...analysisParams, timeZone: status.timeZone }} onAccessError={onAccessError} /> : tab === 'templates' ? <TemplateReport key={childKey} params={analysisParams} onAccessError={onAccessError} /> : analysisPanel}
     </div>
     <footer className="ai-report-note"><span>{capabilities?.simulation ? t('redesign.simulationHint') : t('todayHint')}</span>{capabilities?.canViewDefinitions === true && <Button variant="ghost" size="sm" onClick={() => setDefinitionsOpen(true)}><CircleHelp className="h-3.5 w-3.5" />{t('redesign.definitions')}</Button>}</footer>
     {statusOpen && <Overlay title={t('redesign.updates')} onClose={() => setStatusOpen(false)} compact><p className="mb-3 text-xs text-muted-foreground">{t('nonRealtime')}</p><dl className="divide-y divide-border">{[[t('dataThrough'), through || '—'], [t('lastSuccess'), formatTime(status?.lastSucceededAt || status?.generatedAt)], [t('nextRun'), status?.nextRunAt ? formatTime(status.nextRunAt) : t('notScheduled')], [t('timeZone'), status?.timeZone || '—']].map(([label, value]) => <div className="flex flex-wrap justify-between gap-3 py-3 text-sm" key={label}><dt className="text-muted-foreground">{label}</dt><dd className="font-medium tabular-nums">{value}</dd></div>)}</dl>{showPartial && <p className="ai-report-coverage-note"><AlertCircle className="h-4 w-4 shrink-0" />{t(excludedSessionCount > 0 ? 'sessionScopeConflictHint' : 'partialHint')}</p>}</Overlay>}

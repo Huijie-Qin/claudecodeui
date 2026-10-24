@@ -41,7 +41,7 @@ import {
   Tooltip,
 } from '../../shared/view/ui';
 import { useAuth } from '../auth/context/AuthContext';
-import AiUsagePanel from '../ai-usage/AiUsagePanel';
+import AdminAiUsagePanel from '../ai-usage/AdminAiUsagePanel';
 
 import {
   buildTenantMembershipPayload,
@@ -415,7 +415,6 @@ export default function AdminPanel() {
   const [batchGrantSummary, setBatchGrantSummary] = useState<AdminBatchSummary | null>(null);
   const [batchGrantResults, setBatchGrantResults] = useState<AdminBatchMembershipResult[]>([]);
   const [activeTab, setActiveTab] = useState<AdminTab>('users');
-  const [reportTenantId, setReportTenantId] = useState('');
   const [hasOpenedSkillPresets, setHasOpenedSkillPresets] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<AdminToast>(null);
@@ -1345,16 +1344,7 @@ export default function AdminPanel() {
           ) : null}
 
           {activeTab === 'aiUsage' ? (
-            <div className="h-full overflow-y-auto">
-              <label className="mx-5 mt-4 flex items-center gap-3 text-sm">
-                {t('fields.tenant')}
-                <select className="h-9 max-w-xs rounded-md border border-input bg-background px-3" value={reportTenantId || String(currentTenant?.id || '')} onChange={(event) => setReportTenantId(event.target.value)}>
-                  <option value="">{t('common.select')}</option>
-                  {tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
-                </select>
-              </label>
-              {Number(reportTenantId || currentTenant?.id) > 0 && <AiUsagePanel key={`${currentUserId}:${reportTenantId || currentTenant?.id}`} tenantId={Number(reportTenantId || currentTenant?.id)} />}
-            </div>
+            <AdminAiUsagePanel tenants={tenants} currentTenantId={currentTenant?.id} userId={currentUserId} />
           ) : null}
 
           {activeTab === 'aiCode' ? (

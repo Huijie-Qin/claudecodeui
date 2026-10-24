@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto';
+
+import { publishedTenantWhere } from './ai-usage-tenant-scope.js';
+import { createSessionDetails } from './ai-usage-session-details.js';
 import { aiUsageError, positiveId } from './ai-usage-access.js';
 import { createAiUsageAnalysis, reportOrder } from './ai-usage-analysis.js';
 import { skillReport } from './ai-usage-skill-report.js';
@@ -20,7 +24,7 @@ const actorSql = `CASE WHEN r.dataset = 'skill_invocations' THEN json_extract(r.
 const durationSql = `CASE WHEN dataset = 'turns' AND json_extract(value_json, '$.status') = 'completed' THEN COALESCE(json_extract(value_json, '$.durationMs'), 0) ELSE 0 END`;
 const metricSql = `COUNT(DISTINCT CASE WHEN dataset = 'interactions' THEN session_key END) AS sessionCount,
   COALESCE(SUM(${durationSql}), 0) AS activeDurationMs,
-  COUNT(DISTINCT CASE WHEN dataset = 'skill_publications' THEN subject_id END) AS publishedSkillCount,
+  COUNT(DISTINCT CASE WHEN dataset = 'skill_publications' THEN CASE WHEN subject_id IS NULL THEN NULL WHEN @allTenants=1 THEN json_array(tenant_id,subject_id) ELSE subject_id END END) AS publishedSkillCount,
   SUM(CASE WHEN dataset = 'skill_invocations' AND actor_id IS NOT NULL THEN 1 ELSE 0 END) AS skillInvocationCount`;
 const activitySql = (endOnly = false) => `COUNT(DISTINCT CASE WHEN dataset='active_users' ${endOnly ? 'AND stat_date=@to' : ''}
   AND json_extract(value_json,'$.isDau')=1 THEN actor_id END) AS dau,
@@ -51,13 +55,83 @@ export function createAiUsageQueryService({ db, getScheduleStatus = () => ({}) }
     return batch || null;
   }
 
+  function allSnapshot() {
+    const tenants = db.prepare(`SELECT b.*,t.id AS tenant_id,s.active_batch_id,s.data_revision
+      FROM tenants t LEFT JOIN ai_usage_tenant_state s ON s.tenant_id=t.id
+      LEFT JOIN ai_usage_batches b ON b.id=s.active_batch_id AND b.tenant_id=t.id AND b.status='published'
+      WHERE t.status='active' ORDER BY t.id`).all();
+    const members = db.prepare(`SELECT m.tenant_id,m.user_id,m.role,m.status,u.is_active,u.username
+      FROM tenant_users m JOIN tenants t ON t.id=m.tenant_id AND t.status='active'
+      LEFT JOIN users u ON u.id=m.user_id ORDER BY m.tenant_id,m.user_id`).all();
+    // Live labels and immediate privacy removals also change result ordering or
+    // membership. Include these small identity/tombstone tables in the token so
+    // a workbook cannot skip/repeat rows while paginating a published batch.
+    const users = db.prepare('SELECT id,username,is_active FROM users ORDER BY id').all();
+    const workspaces = db.prepare(`SELECT w.id,w.tenant_id,w.display_name,w.status FROM workspaces w
+      JOIN tenants t ON t.id=w.tenant_id AND t.status='active' ORDER BY w.tenant_id,w.id`).all();
+    const suppressed = db.prepare(`SELECT s.tenant_id,s.dataset,s.row_key FROM ai_usage_suppressed_rows s
+      JOIN tenants t ON t.id=s.tenant_id AND t.status='active' ORDER BY s.tenant_id,s.dataset,s.row_key`).all();
+    const indexColumns = new Set(db.prepare('PRAGMA table_info(session_index)').all().map(column => column.name));
+    const hasSessionIndex = ['tenant_id', 'workspace_id', 'user_id', 'provider', 'provider_session_id', 'status']
+      .every(column => indexColumns.has(column));
+    const deletedSessions = hasSessionIndex ? db.prepare(`SELECT s.tenant_id,s.workspace_id,s.user_id,s.provider,s.provider_session_id
+      FROM session_index s JOIN tenants t ON t.id=s.tenant_id AND t.status='active' WHERE s.status='deleted'
+      ORDER BY s.tenant_id,s.workspace_id,s.user_id,s.provider,s.provider_session_id`).all() : [];
+    const batches = tenants.filter(row => row.id != null);
+    const batchId = batches.length ? `all:${createHash('sha256').update(JSON.stringify({ tenants, members, users, workspaces, suppressed, deletedSessions })).digest('hex')}` : null;
+    return { tenants, batches, batchId };
+  }
+
+  function allStatus(access, requestedBatch, snapshot = allSnapshot()) {
+    if (requestedBatch != null && (typeof requestedBatch !== 'string' || !requestedBatch || requestedBatch.length > 160)) {
+      throw aiUsageError(400, 'invalidFilter', 'Invalid batchId');
+    }
+    if (requestedBatch && requestedBatch !== snapshot.batchId) throw aiUsageError(409, 'reportUpdated', 'Reports or tenant membership changed; reload before querying or exporting');
+    const schedule = getScheduleStatus() || {};
+    const batches = snapshot.batches;
+    const through = batches.map(b => b.target_through).filter(Boolean).sort().at(-1) || null;
+    const missing = snapshot.tenants.length - batches.length;
+    const stale = batches.filter(b => b.target_through < through).length;
+    const values = batches.map(b => parseJson(b.coverage_json));
+    const coverage = {};
+    for (const key of new Set(values.flatMap(value => Object.keys(value)))) {
+      const parts = values.map(value => value[key]);
+      if (/Version$/.test(key)) coverage[key] = parts.every(value => typeof value === 'number') ? Math.min(...parts) : null;
+      else if (['excludedSessionCount', 'pendingTurns', 'incompleteTurns', 'failedTurns', 'cancelledTurns', 'unsupportedTurns', 'skippedDurationRecords'].includes(key)) {
+        coverage[key] = parts.reduce((sum, value) => sum + (Number.isSafeInteger(value) && value >= 0 ? value : 0), 0);
+      } else if (['durationSource', 'generatedSqlSource'].includes(key)) coverage[key] = parts.every(value => value === parts[0]) ? parts[0] : 'mixed';
+      else if (['skillInvocationDiagnostics', 'capturedTurns'].includes(key)) {
+        coverage[key] = {};
+        for (const part of parts) for (const [reason, count] of Object.entries(part || {})) {
+          if (Number.isSafeInteger(count) && count >= 0) Object.defineProperty(coverage[key], reason, { value: (Object.hasOwn(coverage[key], reason) ? coverage[key][reason] : 0) + count, enumerable: true, configurable: true });
+        }
+      } else if (key === 'reasons') coverage[key] = [...new Set(parts.flatMap(value => Array.isArray(value) ? value : []))];
+      else if (parts.some(value => ['complete', 'partial', 'unavailable'].includes(value))) {
+        coverage[key] = parts.every(value => value === 'unavailable') ? 'unavailable'
+          : !missing && !stale && parts.every(value => value === 'complete') ? 'complete' : 'partial';
+      }
+    }
+    if (coverage.excludedSessionCount > 0) coverage.sessionScope = 'partial';
+    coverage.allTenants = { total: snapshot.tenants.length, published: batches.length, missing, stale };
+    coverage.dateUpperBound = 'latest_published_tenant';
+    coverage.status = !batches.length ? 'unavailable' : missing || stale || Object.values(coverage).some(value => value === 'partial' || value === 'unavailable') ? 'partial' : 'complete';
+    const oldest = key => batches.map(batch => batch[key]).filter(Boolean).sort()[0] || null;
+    const timeZone = schedule.timeZone || 'Asia/Shanghai';
+    return { ...schedule, tenantId: access.tenantId, scope: access.scope, batchId: snapshot.batchId,
+      timeZone, dataThrough: through, dataThroughDate: through ? dayInZone(Date.parse(through)-1,timeZone) : null,
+      generatedAt: oldest('completed_at'), lastSucceededAt: oldest('completed_at'), sourceReadAt: oldest('source_read_at'),
+      calculationVersion: batches.length && batches.every(batch => batch.calculation_version === batches[0].calculation_version) ? batches[0].calculation_version : null,
+      coverage, state: schedule.state || (batches.length ? 'idle' : 'not_generated') };
+  }
+
   function status(access, batchId) {
+    if (access.tenantId === 'all') return allStatus(access, batchId);
     const schedule = getScheduleStatus() || {};
     const batch = batchFor(access, batchId);
     const rawCoverage = batch ? parseJson(batch.coverage_json) : {};
     // Tenant-wide diagnostic counts must not become an activity side channel in self scope.
     const coverage = access.scope === 'self'
-      ? Object.fromEntries(['sessions', 'duration', 'skillPublications', 'skillInvocations', 'activeUsers', 'hooks', 'hookExecutions', 'templates', 'integrationVersion', 'generatedSql', 'submittedCode', 'reasons']
+      ? Object.fromEntries(['sessions', 'duration', 'skillPublications', 'skillInvocations', 'activeUsers', 'hooks', 'hookExecutions', 'templates', 'integrationVersion', 'sessionSummaryVersion', 'generatedSql', 'submittedCode', 'reasons']
         .filter((key) => rawCoverage[key] !== undefined).map((key) => [key, rawCoverage[key]]))
       : { ...rawCoverage };
     if (batch && (rawCoverage.sessionScope !== undefined || rawCoverage.excludedSessionCount !== undefined)) {
@@ -95,8 +169,10 @@ export function createAiUsageQueryService({ db, getScheduleStatus = () => ({}) }
   }
 
   function context(access, filters = {}, { publicationHistory = false, split = false } = {}) {
-    const meta = status(access, filters.batchId);
-    if (split && meta.batchId && !splitSnapshotReady(db, access.tenantId, meta.batchId)) {
+    const snapshot = access.tenantId === 'all' ? allSnapshot() : null;
+    const meta = snapshot ? allStatus(access, filters.batchId, snapshot) : status(access, filters.batchId);
+    const publishedBatches = snapshot ? snapshot.batches : [batchFor(access, meta.batchId)].filter(Boolean);
+    if (split && meta.batchId && publishedBatches.some(batch => !splitSnapshotReady(db, batch.tenant_id, batch.id))) {
       throw aiUsageError(409, 'splitNotReady', 'Topic details have not been published for this batch; migrate or refresh the report');
     }
     if (split && (filters.provider || filters.groupBy === 'provider')) {
@@ -122,7 +198,7 @@ export function createAiUsageQueryService({ db, getScheduleStatus = () => ({}) }
     const userSearch = filters.userSearch ? `%${filters.userSearch.replace(/[\\%_]/g, '\\$&')}%` : null;
     if (filters.workspaceSearch != null && (typeof filters.workspaceSearch !== 'string' || filters.workspaceSearch.length > 150)) throw aiUsageError(400, 'invalidFilter', 'Invalid workspace search');
     const workspaceSearch = filters.workspaceSearch ? `%${filters.workspaceSearch.replace(/[\\%_]/g, '\\$&')}%` : null;
-    const params = { batch: meta.batchId, tenant: access.tenantId, from, to, self: access.scope === 'self' ? access.userId : null, provider, userId, workspaceId, search, userSearch, workspaceSearch };
+    const params = { batch: meta.batchId, tenant: access.tenantId === 'all' ? null : access.tenantId, allTenants: access.tenantId === 'all' ? 1 : 0, from, to, self: access.scope === 'self' ? access.userId : null, provider, userId, workspaceId, search, userSearch, workspaceSearch };
     // Apply ownership before grouping/counts/pagination, including numeric daily
     // projections and direct record/export requests. The scope comes only from
     // server-resolved access, never from a request filter or report JSON.
@@ -130,8 +206,8 @@ export function createAiUsageQueryService({ db, getScheduleStatus = () => ({}) }
     if (ownedHooksOnly) params.hookOwnerTenant = positiveId(access.hookOwnerTenantId);
     // Facts remain report projections. Live Hook definitions are consulted only
     // to authorize ownership, not to recalculate or read raw business records.
-    const cte = `${split ? splitReportCte + ',' : 'WITH'} scoped_report AS (SELECT r.*, ${actorSql} AS actor_id FROM ${split ? 'split_report' : 'ai_usage_report_rows'} r
-      WHERE r.tenant_id = @tenant AND @batch=(SELECT active_batch_id FROM ai_usage_tenant_state WHERE tenant_id=@tenant)
+    const cte = `${split ? splitReportCte + ',' : 'WITH'} scoped_report AS (SELECT r.tenant_id, CASE WHEN @allTenants=1 THEN json_array(r.tenant_id,r.row_key) ELSE r.row_key END AS row_key, r.stat_date,r.user_id,r.workspace_id,r.subject_id, CASE WHEN @allTenants=1 AND r.session_key IS NOT NULL THEN json_array(r.tenant_id,r.session_key) ELSE r.session_key END AS session_key,r.occurred_at,r.dataset,r.value_json, ${actorSql} AS actor_id FROM ${split ? 'split_report' : 'ai_usage_report_rows'} r
+      WHERE ${publishedTenantWhere('r')}
       AND (r.stat_date BETWEEN @from AND @to${publicationHistory ? " OR (r.dataset='skill_publications' AND r.stat_date<=@to)" : ''})
       AND (@self IS NULL OR ${actorSql} = @self)
       AND (@userId IS NULL OR ${actorSql} = @userId)
@@ -145,7 +221,7 @@ export function createAiUsageQueryService({ db, getScheduleStatus = () => ({}) }
       report AS (SELECT * FROM scoped_report report
         WHERE (@userSearch IS NULL OR ${reportUserNameSql('actor_id')} LIKE @userSearch ESCAPE '\\')
         AND (@workspaceSearch IS NULL OR ${reportWorkspaceNameSql} LIKE @workspaceSearch ESCAPE '\\'))`;
-    return { meta: { ...meta, from, to }, params, cte, page, pageSize };
+    return { meta: { ...meta, from, to }, params, cte, page, pageSize, tenantWhere: publishedTenantWhere, publishedBatches };
   }
 
   const coreContext = (access, filters, options = {}) => context(access, filters, { ...options, split: true });
@@ -176,7 +252,7 @@ export function createAiUsageQueryService({ db, getScheduleStatus = () => ({}) }
     // Include its full history, while sessions/activity retain the fixed 30 days.
     const row = db.prepare(`${ctx.cte} SELECT
       COUNT(DISTINCT CASE WHEN dataset='interactions' THEN session_key END) AS sessionCount,
-      COUNT(DISTINCT CASE WHEN dataset='skill_publications' THEN subject_id END) AS publishedSkillCount,
+      COUNT(DISTINCT CASE WHEN dataset='skill_publications' THEN CASE WHEN subject_id IS NULL THEN NULL WHEN @allTenants=1 THEN json_array(tenant_id,subject_id) ELSE subject_id END END) AS publishedSkillCount,
       ${activitySql(true)} FROM report WHERE dataset IN ('interactions','skill_publications','active_users')`).get(ctx.params);
     const generated = ['complete', 'partial'].includes(ctx.meta.coverage.activeUsers);
     return { ...meta, sessionCount: row.sessionCount,
@@ -212,7 +288,7 @@ export function createAiUsageQueryService({ db, getScheduleStatus = () => ({}) }
     return list(ctx, `SELECT u.id AS userId, u.username AS userName, u.username AS displayName, m.status AS memberStatus,
       COALESCE(stats.sessionCount,0) AS sessionCount, COALESCE(stats.activeDurationMs,0) AS activeDurationMs,
       COALESCE(stats.publishedSkillCount,0) AS publishedSkillCount, COALESCE(stats.skillInvocationCount,0) AS skillInvocationCount
-      FROM users u JOIN tenant_users m ON m.user_id = u.id AND m.tenant_id = @tenant
+      FROM users u JOIN (SELECT m.user_id,MAX(m.status) AS status FROM tenant_users m WHERE ${publishedTenantWhere('m')} GROUP BY m.user_id) m ON m.user_id=u.id
       LEFT JOIN (SELECT actor_id, ${metricSql} FROM report GROUP BY actor_id) stats ON stats.actor_id = u.id
       WHERE (@userId IS NULL OR u.id = @userId) AND u.username LIKE @search ESCAPE '\\'
       AND (@userSearch IS NULL OR u.username LIKE @userSearch ESCAPE '\\')
@@ -320,8 +396,8 @@ export function createAiUsageQueryService({ db, getScheduleStatus = () => ({}) }
       const dimensionSelect = reportView ? `${dimension} AS groupKey, MAX(${dimensionName}) AS groupLabel,` : '';
       const dimensionGroup = reportView ? `${dimension},` : byUser ? 'user_id,' : '';
       const conditions = hookConditions(hookId, filters);
-      const revision = db.prepare('SELECT data_revision FROM ai_usage_tenant_state WHERE tenant_id = ?').get(access.tenantId)?.data_revision ?? 0;
-      const privateCoverage = ctx.meta.batchId ? parseJson(batchFor(access, ctx.meta.batchId)?.coverage_json) : {};
+      const revision = access.tenantId === 'all' ? null : db.prepare('SELECT data_revision FROM ai_usage_tenant_state WHERE tenant_id = ?').get(access.tenantId)?.data_revision ?? 0;
+      const privateCoverage = access.tenantId !== 'all' && ctx.meta.batchId ? parseJson(batchFor(access, ctx.meta.batchId)?.coverage_json) : {};
       // Older daily summaries skipped number fields configured as display-only.
       // Until rebuilt overnight, use their already-redacted published records,
       // never raw Hook data, to provide complete statistics for every number.
@@ -398,8 +474,9 @@ export function createAiUsageQueryService({ db, getScheduleStatus = () => ({}) }
   const hookFieldStatistics = (access, filters) => hookStatistics(access, null, filters, true);
   const { code, codeRecords } = createCodeReport({ db, context: coreContext, list });
   const integrationDetails = createIntegrationDetails({ db, context });
+  const sessionDetails = createSessionDetails({ db, context });
   // A worker can publish through a different SQLite connection between two
   // SELECTs. Metadata, counts, totals and rows must share one read snapshot.
-  const queries = { status, context, overview, summary, trend, users, skills, code, codeRecords, integrationDetails, hooks, hookRecords, hookStatistics, hookFieldStatistics, hookExecutions, hookExecutionRecords, templates, templateApplications, templateSessions, analysis };
+  const queries = { status, context, overview, summary, trend, users, skills, code, codeRecords, integrationDetails, sessionDetails, hooks, hookRecords, hookStatistics, hookFieldStatistics, hookExecutions, hookExecutionRecords, templates, templateApplications, templateSessions, analysis };
   return Object.fromEntries(Object.entries(queries).map(([name, query]) => [name, db.transaction(query).deferred]));
 }

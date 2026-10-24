@@ -16,12 +16,12 @@ import { loadSqlCodeFacts } from './sqlCodeData';
 import ReportIdentity from './ReportIdentity';
 import ReportGrouping from './ReportGrouping';
 import { isTimeGroup, reportGroupLabel } from './groupingState';
-import type { UsageRow } from './types';
+import type { ReportTenantId, UsageRow } from './types';
 import Overlay from './ReportOverlay';
 import ReportTrend from './ReportTrend';
 
 export default function DemoCodeReport({ tenantId, batchId, filters, timeZone, onAccessError }: {
-  tenantId: number; batchId: string; filters: UsageFilters; timeZone: string; onAccessError: () => void;
+  tenantId: ReportTenantId; batchId: string; filters: UsageFilters; timeZone: string; onAccessError: () => void;
 }) {
   const { t } = useTranslation('aiUsage');
   const [view, setView] = useReportView('demo-code', JSON.stringify([tenantId, batchId, filters]), {

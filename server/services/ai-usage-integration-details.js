@@ -12,11 +12,11 @@ export function createIntegrationDetails({ db, context }) {
   return function integrationDetails(access, filters = {}) {
     if (filters.provider || filters.groupBy) throw aiUsageError(400, 'invalidFilter', 'Integration details do not support grouping or provider filters');
     const ctx = context(access, filters);
-    const order = reportOrder(filters, fields, 'statDate', 'd.id');
+    const order = reportOrder(filters, fields, 'statDate', 'd.tenant_id,d.id');
     if (ctx.meta.batchId && ctx.meta.coverage.integrationVersion !== 1) {
       throw aiUsageError(409, 'integrationNotReady', 'Integration details have not been published for this batch');
     }
-    const where = `d.tenant_id=@tenant AND @batch=(SELECT active_batch_id FROM ai_usage_tenant_state WHERE tenant_id=@tenant)
+    const where = `${ctx.tenantWhere('d')}
       AND d.stat_date BETWEEN @from AND @to
       AND (@self IS NULL OR d.user_id=@self)
       AND (@userId IS NULL OR d.user_id=@userId)

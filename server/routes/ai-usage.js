@@ -10,15 +10,17 @@ export function createAiUsageRouter({ db, getScheduleStatus = () => ({}), access
     try {
       const tenantId = req.query.tenantId ?? req.headers['x-tenant-id'] ?? req.tenant?.id;
       req.aiUsageAccess = accessService.resolve({ userId: req.user?.id ?? req.user?.userId, tenantId, scope: req.query.scope ?? req.body?.scope });
+      if (req.aiUsageAccess.tenantId === 'all' && /^\/exports(?:\/|$)/.test(req.path)) throw aiUsageError(400, 'allTenantExportJobsUnsupported', 'All-tenant background exports are not supported; use dashboard workbook export');
       res.setHeader('Cache-Control', 'private, no-store');
       next();
     } catch (error) { next(error); }
   });
-  router.get('/capabilities', (req, res) => res.json({ ...req.aiUsageAccess, exportConfigured: exportService.configured(), codeReportAvailable: true }));
+  router.get('/capabilities', (req, res) => res.json({ ...req.aiUsageAccess, exportConfigured: req.aiUsageAccess.tenantId !== 'all' && exportService.configured(), codeReportAvailable: true }));
   router.get('/status', (req, res) => res.json(queryService.status(req.aiUsageAccess, req.query.batchId)));
   for (const endpoint of ['overview', 'summary', 'trend', 'users', 'skills', 'hooks', 'templates', 'analysis', 'code']) {
     router.get(`/${endpoint}`, (req, res) => res.json(queryService[endpoint](req.aiUsageAccess, req.query)));
   }
+  router.get('/session-details', (req, res) => res.json(queryService.sessionDetails(req.aiUsageAccess, req.query)));
   router.get('/integration-details', (req, res) => res.json(queryService.integrationDetails(req.aiUsageAccess, req.query)));
   router.get('/code-records', (req, res) => res.json(queryService.codeRecords(req.aiUsageAccess, req.query)));
   router.get('/hook-field-statistics', (req, res) => res.json(queryService.hookFieldStatistics(req.aiUsageAccess, req.query)));

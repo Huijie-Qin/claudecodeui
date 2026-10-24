@@ -33,7 +33,7 @@ const textContent = (node: TestNode | string): string => typeof node === 'string
 const through = '2026-10-20';
 const shared = { from: '2026-09-01', to: '2026-10-10', userSearch: 'alice', workspaceSearch: 'analytics' };
 const tabs = [
-  ['usage', 'integration-details'], ['code', 'code'], ['skills', 'skills'], ['hooks', 'analysis'], ['templates', 'analysis'],
+  ['usage', 'session-details'], ['code', 'code'], ['skills', 'skills'], ['hooks', 'analysis'], ['templates', 'analysis'],
 ] as const;
 
 async function setup(t: TestContext, initialStorage: Record<string, string> = {}, withHook = false) {
@@ -55,11 +55,11 @@ async function setup(t: TestContext, initialStorage: Record<string, string> = {}
     const batchId = `published-${params.tenantId}`;
     if (endpoint === 'status') return { batchId, dataThroughDate: through, timeZone: 'Asia/Shanghai', coverage: 'complete' };
     if (endpoint === 'summary') return { batchId, summaryVersion: 1, scope: 'tenant', from: '2026-09-21', to: through, activityDate: through, mauFrom: '2026-09-21' };
-    assert.ok(['integration-details', 'code', 'skills', 'analysis', 'hooks/hook-a/field-statistics', 'hooks/hook-a/records'].includes(endpoint), `unexpected endpoint: ${endpoint}`);
+    assert.ok(['session-details', 'code', 'skills', 'analysis', 'hooks/hook-a/field-statistics', 'hooks/hook-a/records'].includes(endpoint), `unexpected endpoint: ${endpoint}`);
     const items = withHook && endpoint === 'analysis' && params.dataset === 'hooks'
       ? [{ groupKey: 'hook-a', groupLabel: 'Hook A', recordCount: 1 }] : [];
     return { batchId, items, total: items.length, page: 1, pageSize: 20, groupBy: params.groupBy, hookReportVersion: 1,
-      integrationDetailVersion: 1, codeReportVersion: 1, skillGroupingVersion: 1, summary: {}, trend: [] };
+      sessionDetailVersion: 1, codeReportVersion: 1, skillGroupingVersion: 1, summary: {}, trend: [] };
   };
   await act(async () => { tree = create(React.createElement(AiUsagePanel, { tenantId: 10 })); });
   const form = () => tree.root.findByProps({ 'aria-label': 'sharedFilters' });
@@ -82,7 +82,7 @@ async function setup(t: TestContext, initialStorage: Record<string, string> = {}
     await change('userName', shared.userSearch); await change('workspaceName', shared.workspaceSearch);
     await submit();
   };
-  const tenant = async (tenantId: number) => { await act(async () => tree.update(React.createElement(AiUsagePanel, { tenantId }))); };
+  const tenant = async (tenantId: number | 'all') => { await act(async () => tree.update(React.createElement(AiUsagePanel, { tenantId }))); };
   return { tree, requests, values, change, submit, select, latest, reset, applyShared, tenant, textInputs };
 }
 
@@ -130,8 +130,8 @@ test('direct form submission normalizes typed dates and rejects invalid or unpub
   await ui.change('from', '2026/9/1');
   await ui.change('to', '20261010');
   await ui.submit();
-  assert.equal(ui.latest('integration-details').from, '2026-09-01');
-  assert.equal(ui.latest('integration-details').to, '2026-10-10');
+  assert.equal(ui.latest('session-details').from, '2026-09-01');
+  assert.equal(ui.latest('session-details').to, '2026-10-10');
   assert.deepEqual(ui.textInputs().slice(0, 2).map((node: TestNode) => node.props.value), ['2026-09-01', '2026-10-10']);
   const appliedRequests = ui.requests.length;
   await ui.change('from', '2026-02-30'); await ui.submit();
@@ -146,13 +146,13 @@ test('applied shared filters persist across tenant switches without leaking into
   const ui = await setup(t);
   await ui.applyShared();
   await ui.tenant(20);
-  const other = ui.latest('integration-details');
+  const other = ui.latest('session-details');
   assert.equal(other.tenantId, 20);
   assert.equal(other.batchId, 'published-20');
   assert.equal(other.userSearch, '');
   assert.equal(other.workspaceSearch, '');
   await ui.tenant(10);
-  assertShared(ui.latest('integration-details'));
+  assertShared(ui.latest('session-details'));
 });
 
 
@@ -181,4 +181,21 @@ test('Hook details inherit shared filters instead of stale cached local filters 
   await openHook();
   assertShared(ui.latest('hooks/hook-a/field-statistics'), { ...shared, userSearch: 'bob' });
   assertShared(ui.latest('hooks/hook-a/records'), { ...shared, userSearch: 'bob' });
+});
+
+
+test('all-tenant scope and the same applied filters reach every tab', async t => {
+  const ui = await setup(t);
+  await ui.tenant('all');
+  await ui.applyShared();
+  for (const [tab, endpoint] of tabs) {
+    await ui.select(tab);
+    const params = ui.latest(endpoint);
+    assert.equal(params.tenantId, 'all');
+    assert.equal(params.batchId, 'published-all');
+    assert.equal(params.scope, 'tenant');
+    for (const key of ['from', 'to', 'userSearch', 'workspaceSearch'] as const) assert.equal(params[key], shared[key]);
+  }
+  await ui.tenant(10);
+  assert.notEqual(ui.textInputs()[2].props.value, shared.userSearch, 'all scope preferences do not leak into a single tenant');
 });

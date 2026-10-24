@@ -52,14 +52,15 @@ AI 合并后，五表行数之和可以小于宽表行数，这是粒度变化�
 
 | 内容 | 看板当前使用的来源 |
 | --- | --- |
-| AI 使用、会话趋势、DAU／MAU、概览中的会话与活跃人数 | ai_dashboard_ai_detail |
+| AI 使用 Tab 的八列会话明细 | ai_session_summary（日期按会话开始日） |
+| 会话趋势、DAU／MAU、概览中的会话与活跃人数 | ai_dashboard_ai_detail |
 | Skill 累计／期间发布、概览中的累计发布数 | ai_dashboard_skill_publication_detail |
 | Skill 调用次数及调用人数 | ai_dashboard_skill_invocation_detail（与发布表组合） |
 | SQL 生成行数 | ai_dashboard_sql_generation_detail |
 | CodeHub 提交行数及提交记录 | ai_dashboard_code_submission_detail |
 | Hook 执行、记录性 Hook、Agent 模板 | ai_usage_report_rows |
 
-接口地址、页面结构、筛选、排序、分页和导出格式保持不变。查询层只把五表映射成原接口 DTO，不读取宽表／原明细补齐这些指标；Hook／Agent 仍只查旧表。前端导出通过相同接口逐页取全部匹配结果，不限当前页。宽表继续保留对接与中间投影职责；ai_session_summary 仍供会话对接，不参与看板计算。不新增公开接口，不开放整个业务数据库。
+五表查询层只把主题表映射成原接口 DTO，不读取宽表／原明细补齐这些指标；Hook／Agent 仍查原明细。前端导出通过相同接口逐页取全部匹配结果，不限当前页。宽表继续保留对接与中间投影职责。AI 使用 Tab 通过新增 `/api/ai-usage/session-details` 读取已发布的 `ai_session_summary`；具体日期、会话粒度和删除过滤规则见 [会话汇总表](ai-session-summary.md#ai-使用-tab-查询)。这项展示修改不改变五表或夜间计算逻辑。系统管理员可用 `tenantId=all` 合并活跃租户当前已发布结果，各表仍使用同一公共筛选和发布快照校验。
 
 查询在同一只读事务内验证五表状态与当前发布批次一致。状态缺失、批次不一致或结构版本不为 4 时返回 409 / splitNotReady；不回退其他表、不在读请求里迁移或补写。已就绪但没有记录的租户是有效空结果。AI 同一日记录同时含交互与时长时，两者分别计入；秒转换为整数毫秒只用于兼容原接口，存储仍为秒。仅时长续算的记录不增加会话或活跃人数。
 

@@ -1,5 +1,7 @@
 import { SPLIT_SCHEMA_VERSION } from '../database/ai-dashboard-split-schema.js';
 
+import { publishedTenantWhere } from './ai-usage-tenant-scope.js';
+
 // Adapt the five published topic tables to the existing endpoint DTOs. These
 // aliases are query-local only: neither the wide table nor the old report is a
 // metric source here. The AI daily row can supply BOTH an interaction and time.
@@ -8,15 +10,16 @@ const source = (table, dataset, { user = 'd.user_id', subject = 'NULL', session 
     ${user} AS user_id,d.workspace_id,${subject} AS subject_id,${session} AS session_key,
     CASE WHEN d.occurred_at IS NOT NULL THEN replace(d.occurred_at,' ','T')||'+08:00' END AS occurred_at,
     '${dataset}' AS dataset,json_object(${values},'workspaceName',d.workspace_name) AS value_json
-  FROM ${table} d WHERE d.tenant_id=@tenant AND d.stat_date<=@to AND (${condition})`;
+  FROM ${table} d WHERE ${publishedTenantWhere('d')} AND d.stat_date<=@to AND (${condition})`;
 
 export const splitReportCte = `WITH RECURSIVE calendar(day) AS (
   SELECT @from UNION ALL SELECT date(day,'+1 day') FROM calendar WHERE day<@to
 ), split_snapshot AS (
-  SELECT tenant_id FROM ai_dashboard_split_state
-  WHERE tenant_id=@tenant AND batch_id=@batch AND schema_version=${SPLIT_SCHEMA_VERSION}
+  SELECT d.tenant_id FROM ai_dashboard_split_state d
+  WHERE ${publishedTenantWhere('d')} AND d.batch_id=(SELECT active_batch_id FROM ai_usage_tenant_state WHERE tenant_id=d.tenant_id)
+    AND d.schema_version=${SPLIT_SCHEMA_VERSION}
 ), split_ai AS (
-  SELECT * FROM ai_dashboard_ai_detail WHERE tenant_id=@tenant AND stat_date<=@to
+  SELECT d.* FROM ai_dashboard_ai_detail d WHERE ${publishedTenantWhere('d')} AND d.stat_date<=@to
 ), split_source AS (
   ${source('split_ai', 'interactions', {
     session: 'd.ai_session_id', values: "'userName',d.user_name", condition: 'd.has_ai_interaction=1',
@@ -60,8 +63,8 @@ export const splitReportCte = `WITH RECURSIVE calendar(day) AS (
     AND i.stat_date BETWEEN date(c.day,'-29 days') AND c.day AND i.user_id IS NOT NULL
   GROUP BY i.tenant_id,c.day,i.user_id,i.workspace_id
 ), split_report AS (
-  SELECT * FROM split_source WHERE EXISTS (SELECT 1 FROM split_snapshot)
-  UNION ALL SELECT * FROM split_activity WHERE EXISTS (SELECT 1 FROM split_snapshot)
+  SELECT * FROM split_source WHERE EXISTS (SELECT 1 FROM split_snapshot WHERE split_snapshot.tenant_id=split_source.tenant_id)
+  UNION ALL SELECT * FROM split_activity WHERE EXISTS (SELECT 1 FROM split_snapshot WHERE split_snapshot.tenant_id=split_activity.tenant_id)
 )`;
 
 // Fail closed for an ungenerated, obsolete or mismatched snapshot. A read never

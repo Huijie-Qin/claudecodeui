@@ -16,7 +16,9 @@ export function createAiUsageExportService({ db, accessService, queryService, di
   const configured = () => Boolean(directory && [...DATASETS].some((dataset) => typeof serializers[dataset]?.serialize === 'function'));
 
   function freshAccess(access) {
-    return accessService.resolve({ userId: access.userId, tenantId: access.tenantId, scope: access.scope });
+    const authorized = accessService.resolve({ userId: access.userId, tenantId: access.tenantId, scope: access.scope });
+    if (authorized.tenantId === 'all') throw aiUsageError(400, 'allTenantExportJobsUnsupported', 'All-tenant background exports are not supported; use dashboard workbook export');
+    return authorized;
   }
 
   function currentRevision(tenantId) {
