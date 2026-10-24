@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+
 import { resolveIncludeSubagents } from '../../shared/hookSubagents.js';
 
 const LEGACY_SQL_CHECK_HOOK_NAME = 'SQL 响应指标记录';
@@ -149,6 +150,7 @@ function publishedVersionConfigFromRow(row) {
     description: row.description || '',
     userVariables: parseHookJson(row.user_variables_json, []),
     eventName: row.event_name,
+    injectToContext: row.inject_to_context !== 0,
     includeSubagents: resolveIncludeSubagents({
       eventName: row.event_name,
       includeSubagents: row.include_subagents == null ? undefined : row.include_subagents === 1,
@@ -192,6 +194,7 @@ CREATE TABLE IF NOT EXISTS hooks (
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'disabled')),
   event_name TEXT NOT NULL,
   include_subagents INTEGER DEFAULT NULL CHECK (include_subagents IN (0, 1)),
+  inject_to_context INTEGER NOT NULL DEFAULT 1 CHECK (inject_to_context IN (0, 1)),
   matcher_json TEXT NOT NULL DEFAULT '{}',
   extension_logic_json TEXT NOT NULL DEFAULT 'null',
   post_actions_json TEXT NOT NULL DEFAULT '[]',
@@ -451,6 +454,9 @@ export function migrateHookConfigurationModel(database) {
       // NULL preserves the historical event-specific behavior. New API-created
       // Hooks explicitly store 0 until the administrator enables the switch.
       database.exec('ALTER TABLE hooks ADD COLUMN include_subagents INTEGER DEFAULT NULL CHECK (include_subagents IN (0, 1))');
+    }
+    if (!columns.some((column) => column.name === 'inject_to_context')) {
+      database.exec('ALTER TABLE hooks ADD COLUMN inject_to_context INTEGER NOT NULL DEFAULT 1 CHECK (inject_to_context IN (0, 1))');
     }
     if (!columns.some((column) => column.name === 'user_variables_json')) {
       database.exec("ALTER TABLE hooks ADD COLUMN user_variables_json TEXT NOT NULL DEFAULT '[]'");

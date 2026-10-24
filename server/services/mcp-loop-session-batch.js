@@ -1,5 +1,3 @@
-import { buildMcpLoopReplacement } from './mcp-loop-service.js';
-
 function readContentBlocks(message) {
   const content = message?.message?.content ?? message?.content;
   return Array.isArray(content) ? content : [];
@@ -66,10 +64,12 @@ export function buildMcpLoopBatchModelContent(jobs = []) {
       || String(left?.id || '').localeCompare(String(right?.id || ''))
   ));
   const resultBlocks = orderedJobs.flatMap((job) => {
-    const replacement = buildMcpLoopReplacement(job);
+    if (typeof job.resultFile !== 'string' || !job.resultFile) {
+      throw new Error('MCP loop result file must be saved before resuming the conversation');
+    }
     return [
-      `<ccui-mcp-loop-result job-id="${job.id}" tool-use-id="${job.toolUseId}" status="${job.status}">`,
-      JSON.stringify(replacement.payload),
+      `<ccui-mcp-loop-result job-id="${job.id}" tool-use-id="${job.toolUseId}">`,
+      JSON.stringify({ resultFile: job.resultFile }),
       '</ccui-mcp-loop-result>',
     ];
   });
@@ -79,8 +79,8 @@ export function buildMcpLoopBatchModelContent(jobs = []) {
     ...resultBlocks,
     '</ccui-mcp-loop-results>',
     '',
-    'Each payload above replaces the original MCP tool result for its referenced tool-use-id.',
-    'Continue the original user request using all final results.',
+    'Final MCP loop results are saved in the files above; only file paths are included here.',
+    'Read the files as needed to continue the original user request. Each file corresponds to its referenced tool-use-id.',
     'Do not repeat the completed MCP loops or call the same status tools again unless the user explicitly asks.',
   ].join('\n');
 }

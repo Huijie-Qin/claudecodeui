@@ -7,6 +7,7 @@ import { isRequiredHook } from './claude-hook-policy.js';
 import { isBuiltinHookSkillId, loadBuiltinHookSkill } from './hook-builtin-skills.js';
 import { completionReviewFailure } from './hook-completion-review.js';
 import { allowedClaudeOutputs, hookConfigService } from './hook-configs.js';
+import { filterHookContextResponse } from './hook-context-policy.js';
 import { callHookMcpTool } from './hook-mcp-client.js';
 import { executeHookScript } from './hook-script-executor.js';
 import { subagentHookTimeoutSeconds } from './hook-subagent-mcp-loop.js';
@@ -167,9 +168,22 @@ function assertClaudeOutputValue(pathName, value) {
 function buildClaudeHookOutput(hook, references) {
   const output = {};
   const allowedOutputs = allowedClaudeOutputs(hook.eventName);
+  const loopActionIds = new Set((hook.postActions || [])
+    .filter((action) => action.type === 'mcp_loop_run').map((action) => action.id));
+  // Response bindings may reference an entire actions object, not just one
+  // result field. Keep full results for audit/actions, but expose only file
+  // references from loops to every model-facing binding.
+  const modelReferences = loopActionIds.size === 0 ? references : {
+    ...references,
+    actions: Object.fromEntries(Object.entries(references.actions || {}).map(([id, action]) => {
+      if (!loopActionIds.has(id)) return [id, action];
+      const resultFile = action.output?.resultFile;
+      return [id, { ...action, output: typeof resultFile === 'string' && resultFile ? { resultFile } : {} }];
+    })),
+  };
   for (const [path, binding] of Object.entries(hook.claudeResponse?.bindings || {})) {
     if (!allowedOutputs.has(path)) throw new Error(`Claude response field ${path} is not valid for ${hook.eventName}`);
-    const value = resolveBinding(binding, references);
+    const value = resolveBinding(binding, modelReferences);
     if (value !== UNRESOLVED) {
       assertClaudeOutputValue(path, value);
       setPath(output, path, value);
@@ -516,7 +530,7 @@ async function executePostActions({
         input,
         signal,
         environment: references.ccui.env,
-        onProgress: event?.agent_id ? onLoopProgress : undefined,
+        onProgress: event?.agent_id || hook.injectToContext === false ? onLoopProgress : undefined,
       });
       if (event?.agent_id && Object.prototype.hasOwnProperty.call(schedulingResult || {}, 'toolUseResult')) {
         subagentMcpResults.push(schedulingResult.toolUseResult);
@@ -674,7 +688,9 @@ async function executePostActions({
       if (!messageText.trim()) {
         throw new Error(`Post action ${action.id} message is empty`);
       }
-      const schedulingResult = isSubagentStop(event)
+      const schedulingResult = hook.injectToContext === false
+        ? await context.executeIsolatedAgent({ hook, action, event, executionId, modelContent: messageText, signal, onLog })
+        : isSubagentStop(event)
         ? { deliveredTo: 'subagent', agentId: event.agent_id }
         : await context.enqueueAgentMessage({
         hook,
@@ -689,11 +705,11 @@ async function executePostActions({
         references.actions[action.id] = { output: { scheduled: false, reason: 'superseded_user_input' } };
         continue;
       }
-      if (isSubagentStop(event)) subagentFeedback.push(messageText);
+      if (isSubagentStop(event) && hook.injectToContext !== false) subagentFeedback.push(messageText);
       recoveryKeys.set(recoveryKey, context.isExecutionCurrent);
       references.actions[action.id] = {
         output: {
-          scheduled: true,
+          scheduled: hook.injectToContext !== false,
           messageLength: messageText.length,
           ...(isPlainObject(schedulingResult) ? schedulingResult : {}),
         },
@@ -757,7 +773,9 @@ async function executePostActions({
           isExecutionCurrent: context.isExecutionCurrent,
           displayCommand: context.redact(`/${action.config.skillName}${argumentsText ? ` ${argumentsText}` : ''}`),
         };
-        if (childRecovery) {
+        if (hook.injectToContext === false) {
+          schedulingResult = await context.executeIsolatedAgent({ ...recoveryRequest, signal, onLog });
+        } else if (childRecovery) {
           const content = await context.prepareSubagentSkillRecovery(recoveryRequest);
           if (typeof content !== 'string' || !content.trim()) {
             throw new Error('Subagent Skill recovery must provide nonempty content');
@@ -778,7 +796,7 @@ async function executePostActions({
       recoveryKeys.set(recoveryKey, context.isExecutionCurrent);
       references.actions[action.id] = {
         output: {
-          scheduled: true,
+          scheduled: hook.injectToContext !== false,
           skillName: action.config.skillName,
           ...(isPlainObject(schedulingResult) ? schedulingResult : {}),
         },
@@ -814,6 +832,9 @@ export function createHookRuntimeSession({
   prepareSubagentSkillRecovery = async () => {
     throw new Error('Subagent Skill recovery is not available in this runtime');
   },
+  executeIsolatedAgent = async () => {
+    throw new Error('Independent Hook execution is not available in this runtime');
+  },
   enqueueAgentMessage = async () => {
     throw new Error('Agent messaging is not available in this runtime');
   },
@@ -824,6 +845,7 @@ export function createHookRuntimeSession({
     throw new Error('Completion reviewer is not available in this runtime');
   },
   onSubagentLoopWait = () => {},
+  onExecutionWait = onSubagentLoopWait,
   onExecutionActivity = () => {},
   database = defaultDatabase,
   scriptExecutor = executeHookScript,
@@ -851,6 +873,7 @@ export function createHookRuntimeSession({
     skillContentLoader,
     enqueueSkillRecovery,
     prepareSubagentSkillRecovery,
+    executeIsolatedAgent,
     enqueueAgentMessage,
     enqueueMcpLoop,
     reviewCompletion,
@@ -1005,7 +1028,7 @@ export function createHookRuntimeSession({
         ),
       });
       const allowResponse = isExecutionCurrent();
-      const response = hook.eventName === 'StopFailure' || !allowResponse ? {} : buildClaudeHookOutput(hook, references);
+      let response = hook.eventName === 'StopFailure' || !allowResponse ? {} : buildClaudeHookOutput(hook, references);
       const completionReview = hook.postActions?.find((action) => action.type === 'review_completion');
       const reviewOutput = completionReview && references.actions[completionReview.id]?.output;
       if (reviewOutput && allowResponse) {
@@ -1041,6 +1064,7 @@ export function createHookRuntimeSession({
         response.decision = 'block';
         response.reason = [response.reason, ...subagentFeedback].filter(Boolean).join('\n\n');
       }
+      response = filterHookContextResponse(hook, response);
       if (Buffer.byteLength(JSON.stringify(response), 'utf8') > MAX_CLAUDE_OUTPUT_BYTES) {
         throw new Error('Claude Hook response is larger than 2 MB');
       }
@@ -1068,9 +1092,9 @@ export function createHookRuntimeSession({
       });
       return response;
     } catch (error) {
-      const response = isExecutionCurrent()
+      const response = filterHookContextResponse(hook, isExecutionCurrent()
         ? completionReviewFailureResponse(hook, completionReviewNumber || 1) || requiredHookFailureResponse(hook)
-        : {};
+        : {});
       completeExecution(database, executionId, {
         status: 'failed',
         startedAt,
@@ -1107,10 +1131,10 @@ export function createHookRuntimeSession({
     const completionReviewScope = effectiveHook?.eventName === 'Stop'
       && effectiveHook.postActions?.some((action) => action.type === 'review_completion')
       ? JSON.stringify([reviewEpoch, effectiveHook.id, stopBoundary?.inputRevision ?? null]) : null;
-    const waitId = effectiveHook && event.agent_id
-      && effectiveHook.postActions?.some((action) => action.type === 'mcp_loop_run')
-      ? `subagent-hook-${crypto.randomUUID()}` : null;
-    if (waitId) onSubagentLoopWait({ id: waitId, waiting: true });
+    const waitId = effectiveHook && (effectiveHook.injectToContext === false
+      || (event.agent_id && effectiveHook.postActions?.some((action) => action.type === 'mcp_loop_run')))
+      ? `hook-wait-${crypto.randomUUID()}` : null;
+    if (waitId) onExecutionWait({ id: waitId, waiting: true });
     try {
       return await executeHookWithAudit(hook, event, toolUseId, executionOptions, reviewEpoch);
     } catch (error) {
@@ -1118,15 +1142,21 @@ export function createHookRuntimeSession({
       if (effectiveHook?.eventName === 'Stop') {
         const reviewNumber = completionReviewCounts.get(completionReviewScope) || 1;
         const response = completionReviewFailureResponse(effectiveHook, reviewNumber, true);
-        if (response) return response;
+        if (response) return filterHookContextResponse(effectiveHook, response);
       }
-      if (!isRequiredHook(effectiveHook)) throw error;
+      if (!isRequiredHook(effectiveHook)) {
+        if (effectiveHook?.injectToContext === false) {
+          console.error(`[Hook:${hook.id}] Independent Hook could not persist its execution:`, error?.message || error);
+          return {};
+        }
+        throw error;
+      }
       // An audit/database failure must not turn a required check into a rejected
       // SDK callback, which the SDK can otherwise ignore as a Hook error.
       console.error(`[Hook:${hook.id}] Required ${effectiveHook.eventName} check could not persist its execution.`);
-      return requiredHookFailureResponse(effectiveHook, true);
+      return filterHookContextResponse(effectiveHook, requiredHookFailureResponse(effectiveHook, true));
     } finally {
-      if (waitId) onSubagentLoopWait({ id: waitId, waiting: false });
+      if (waitId) onExecutionWait({ id: waitId, waiting: false });
     }
   };
 

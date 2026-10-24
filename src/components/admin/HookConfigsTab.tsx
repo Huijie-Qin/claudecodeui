@@ -231,6 +231,7 @@ function statusVariant(status: HookConfig['status']) {
 function normalizeHookConfig(hook: HookConfig): HookConfig {
   return {
     ...hook,
+    injectToContext: hook.injectToContext !== false,
     boundUserCount: Number(hook.boundUserCount || 0),
     scopedUserCount: Number(hook.scopedUserCount || 0),
     boundTenantCount: Number(hook.boundTenantCount || 0),
@@ -1065,6 +1066,8 @@ export default function HookConfigsTab() {
           description: editor.description,
           userVariables: editor.userVariables,
           eventName: editor.eventName,
+          includeSubagents: editor.includeSubagents,
+          injectToContext: editor.injectToContext,
           matcher: editor.matcher,
           extensionLogic: editor.extensionLogic,
           postActions: editor.postActions,

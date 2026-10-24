@@ -90,6 +90,7 @@ export type HookConfigDraft = {
   userVariables?: HookUserVariable[];
   eventName: HookEventName;
   includeSubagents?: boolean;
+  injectToContext?: boolean;
   matcher: HookMatcher;
   extensionLogic: HookExtensionLogic | null;
   postActions: HookPostAction[];
