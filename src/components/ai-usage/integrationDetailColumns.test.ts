@@ -26,18 +26,18 @@ test('detail duration preserves hours/minutes/seconds while missing and known ze
   assert.equal(columns.find(column => column.key === 'aiActiveDurationMs')?.render?.({ aiActiveDurationMs: 3723000 }), '01:02:03');
 });
 
-test('first workbook tab exports the same raw detail filters/order, independent of obsolete grouped-view preferences', () => {
+test('first workbook tab replaces raw integration rows while ignoring obsolete view preferences', () => {
   const views = new SavedReportViews();
   views.set('usage', { queryKey: 'old', value: { groupBy: 'month', sort: { sortBy: 'sessionCount', sortDir: 'asc' } } });
   views.set('integration-details', { queryKey: 'new', value: { sort: { sortBy: 'refreshedAt', sortDir: 'asc' }, page: 3, pageSize: 20 } });
   views.set('filters:shared', { queryKey: '', value: { filters: { from: '2026-09-01', to: '2026-09-12', userName: 'alice', workspaceName: 'work' } } });
   const [spec] = workbookSpecs({ tenantId: 10, batchId: 'published', through: '2026-09-12', views, codeAvailable: true, t });
-  assert.equal(spec.endpoint, 'integration-details');
+  assert.equal(spec.endpoint, 'session-details');
   assert.equal(spec.params.userSearch, 'alice');
   assert.equal(spec.params.workspaceSearch, 'work');
-  assert.equal(spec.params.sortBy, 'refreshedAt');
-  assert.equal(spec.params.sortDir, 'asc');
+  assert.equal(spec.params.sortBy, 'startTime');
+  assert.equal(spec.params.sortDir, 'desc');
   assert.equal(spec.params.groupBy, undefined); assert.equal(spec.params.page, undefined);
-  assert.equal(spec.columns.find(column => column.key === 'aiActiveDurationMs')?.exportValue?.({ aiActiveDurationMs: 1250 }), 1.25);
+  assert.equal(spec.columns.find(column => column.key === 'activeDurationSeconds')?.exportValue?.({ activeDurationSeconds: 1.25 }), 1.25);
   assert.equal(spec.metrics, undefined);
 });

@@ -8,7 +8,7 @@ export function reportUserNameSql(actor = 'user_id') {
 }
 
 export const reportWorkspaceNameSql = `CASE WHEN report.workspace_id IS NOT NULL THEN COALESCE(
-  (SELECT NULLIF(TRIM(w.display_name),'') FROM workspaces w WHERE w.id=report.workspace_id AND w.tenant_id=@tenant),
+  (SELECT NULLIF(TRIM(w.display_name),'') FROM workspaces w WHERE w.id=report.workspace_id AND w.tenant_id=report.tenant_id),
   CASE WHEN json_type(value_json,'$.workspaceName')='text' THEN NULLIF(TRIM(json_extract(value_json,'$.workspaceName')),'') END) END`;
 
 export const reportIdentityColumns = `${reportUserNameSql()} AS userName, ${reportWorkspaceNameSql} AS workspaceName`;

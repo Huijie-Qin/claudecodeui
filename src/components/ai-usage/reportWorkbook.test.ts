@@ -41,7 +41,7 @@ test('all tab sheets share applied filters while preserving per-tab grouping and
   assert.equal(specs[5].params.fieldKey, 'lines');
   assert.equal(specs[5].metric, 'average');
   assert.ok(specs[0].columns.every(col => col.key !== 'activeUserCount'));
-  assert.equal(specs[0].columns.find(col => col.key === 'aiActiveDurationMs')?.exportValue?.({ aiActiveDurationMs: 1250 }), 1.25);
+  assert.equal(specs[0].columns.find(col => col.key === 'activeDurationSeconds')?.exportValue?.({ activeDurationSeconds: 1.25 }), 1.25);
   assert.doesNotMatch(JSON.stringify(specs), /hookExecutions|unapplied|old-batch/);
 });
 
@@ -78,34 +78,34 @@ test('changing shared filters invalidates old Hook detail filter overrides and k
   assert.equal(specs.find(spec => spec.params.templateId === 'sql')?.params.groupBy, 'day');
 });
 
-test('workbook exports all integration detail pages with nulls, exact units and Shanghai times, alongside other tabs', async () => {
+test('workbook exports all session pages with eight columns, seconds, literal skills and Shanghai dates', async () => {
   const views = new SavedReportViews(); const specs = workbookSpecs({ ...base, views });
   const seen: Record<string, number[]> = {};
   const request = (async (endpoint: string, params: Record<string, unknown> = {}) => {
     if (endpoint === 'capabilities') return { canExport: true, canViewTenant: true };
     if (endpoint === 'summary') { assert.deepEqual(params, { tenantId: 10, scope: 'tenant', batchId: 'published' }); return summary; }
     if (endpoint === 'status') return { batchId: 'published' };
-    assert.notEqual(endpoint, 'trend'); // The first tab now displays sparse detail rows.
+    assert.notEqual(endpoint, 'trend'); // Session details are full session snapshots, not daily grouped rows.
     (seen[endpoint] ||= []).push(Number(params.page));
-    const total = endpoint === 'integration-details' ? 205 : 1;
+    const total = endpoint === 'session-details' ? 205 : 1;
     const start = (Number(params.page) - 1) * 100;
-    return { batchId: 'published', groupBy: params.groupBy, total, integrationDetailVersion: 1, skillGroupingVersion: 1, codeReportVersion: 1,
-      items: Array.from({ length: Math.min(100, total - start) }, (_, i) => ({ id: `row-${start + i}`, statDate: '2026-09-12',
-        userName: `用户 ${start + i}`, aiActiveDurationMs: 1250, generatedSqlLines: 0, submittedCodeLines: null,
-        occurredAt: '2026-09-12 09:02:03', refreshedAt: '2026-09-13 02:10:00' })) };
+    return { batchId: 'published', groupBy: params.groupBy, total, sessionDetailVersion: 1, skillGroupingVersion: 1, codeReportVersion: 1,
+      items: Array.from({ length: Math.min(100, total - start) }, (_, i) => ({ id: `row-${start + i}`, userName: `用户 ${start + i}`, workspaceName: null, sessionId: `session-${start + i}`,
+        totalTokens: 0, skillList: ['SQL', '=HYPERLINK("https://invalid")', 'SQL'], activeDurationSeconds: 1.25,
+        startTime: '2026-09-12 09:02:03', endTime: '2026-09-13 02:10:00' })) };
   }) as typeof usageRequest;
   const sheets = await collectWorkbook({ ...base, specs, request, signal: signal() });
   assert.equal(sheets.length, 6);
-  assert.deepEqual(seen['integration-details'], [1, 2, 3]);
+  assert.deepEqual(seen['session-details'], [1, 2, 3]);
   assert.equal(sheets[0].title, 'summaryTitle');
   assert.deepEqual(sheets[0].rows[2], ['summarySessions', 999, '2026-08-14', '2026-09-12']);
   const detail = sheets[1];
   assert.equal(detail.detailRowCount, 205);
-  assert.equal(metadata(detail).groupBy, 'integration.factGrain');
-  assert.equal(detail.summaryHeaderRows!.length, 0); // Sparse facts are not relabeled as aggregate totals.
-  assert.deepEqual(detail.rows.at(-1)!.slice(0, 6), ['2026-09-12', '用户 204', null, 1.25, 0, null]);
-  assert.equal(detail.rows.at(-1)![10], shanghaiExcelTime('2026-09-12 09:02:03'));
-  assert.equal(detail.rows.at(-1)![11], shanghaiExcelTime('2026-09-13 02:10:00'));
+  assert.equal(metadata(detail).groupBy, 'sessionDetails.factGrain');
+  assert.equal(detail.summaryHeaderRows!.length, 0); // Whole-session snapshots are not relabeled as aggregate totals.
+  assert.equal(detail.rows[detail.detailHeaderRow!].length, 8);
+  assert.deepEqual(detail.rows.at(-1), ['用户 204', null, 'session-204', 0, 'SQL, =HYPERLINK("https://invalid")',
+    shanghaiExcelTime('2026-09-12 09:02:03'), shanghaiExcelTime('2026-09-13 02:10:00'), 1.25]);
   for (const sheet of sheets.slice(1)) {
     assert.deepEqual(sheet.headerRows, [sheet.detailHeaderRow]);
     assert.equal(sheet.rows.length, sheet.detailHeaderRow! + sheet.detailRowCount! + 1);
@@ -115,8 +115,11 @@ test('workbook exports all integration detail pages with nulls, exact units and 
   assert.equal(workbook.SheetNames.length, 6);
   assert.match(workbook.Sheets.usage.A1.v, /from：2026-08-14/);
   const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets.usage, { header: 1, defval: null });
-  const last = rows.find(row => row[1] === '用户 204')!;
-  assert.equal(last[3], 1.25); assert.equal(last[4], 0); assert.equal(last[5], null);
+  const last = rows.find(row => row[0] === '用户 204')!;
+  assert.equal(last[1], null); assert.equal(last[3], 0); assert.equal(last[7], 1.25);
+  const firstTime = Object.values(workbook.Sheets.usage).find(cell => cell?.w === '2026-09-12 09:02:03');
+  assert.equal(firstTime?.t, 'n');
+  assert.equal(firstTime?.z, 'yyyy-mm-dd hh:mm:ss');
 });
 
 test('permission loss, changed batch, incomplete pages and total limits abort the whole workbook', async () => {
@@ -392,7 +395,7 @@ test('sheet metadata uses shared filters, with explicit scoped Hook detail filte
     if (endpoint === 'status') return { batchId: 'published' };
     if (endpoint === 'trend') return { batchId: 'published', items: [] };
     return { batchId: 'published', groupBy: params.groupBy, total: 1, includeZeroUsers: true,
-      integrationDetailVersion: 1, skillGroupingVersion: 1, codeReportVersion: 1, hookReportVersion: 1,
+      sessionDetailVersion: 1, skillGroupingVersion: 1, codeReportVersion: 1, hookReportVersion: 1,
       summary: { sessionCount: 8, activeUserCount: 2, activeDurationMs: 1250, generatedLines: 17, submittedLines: 0 },
       items: [{ groupLabel: '小王', sessionCount: 1, activeDurationMs: 1000, average: 2.5, label: 'SQL 行数', key: 'sqlLines' }],
       ...(endpoint === 'code' ? { trend: [{ date: '2026-09-02', generatedLines: 17, submittedLines: 0 }] } : {}) };
@@ -455,4 +458,17 @@ test('narrow sheets wrap information without adding blank columns and filters co
   assert.deepEqual(sheet[`A${header + 1}`].s, sheet[`A${header + 2}`].s);
   assert.equal(book.Workbook?.Names?.find(name => name.Name === '_xlnm.Print_Titles')?.Ref, `'templates · sql'!$${header}:$${header}`);
   assert.equal(book.Workbook?.Names?.find(name => name.Name === '_xlnm.Print_Area')?.Ref, `'templates · sql'!$A$1:$B$${header + 30}`);
+});
+
+
+test('session export rejects a changed schema on subsequent pages of an all-tenant snapshot', async () => {
+  const [spec] = workbookSpecs({ ...base, tenantId: 'all', views: new SavedReportViews() });
+  const request = (async (endpoint: string, params: Record<string, unknown> = {}) => {
+    assert.equal(params.tenantId, 'all');
+    if (endpoint === 'capabilities') return { canExport: true, canViewTenant: true };
+    if (endpoint === 'summary') return summary;
+    return { batchId: base.batchId, total: 101, sessionDetailVersion: params.page === 1 ? 1 : undefined,
+      items: Array.from({ length: params.page === 1 ? 100 : 1 }, (_, i) => ({ id: i })) };
+  }) as typeof usageRequest;
+  await assert.rejects(collectWorkbook({ ...base, tenantId: 'all', specs: [spec], request, signal: signal() }), /exportChanged/);
 });

@@ -88,3 +88,15 @@ test('shared filters take precedence over legacy tabs; migration can use the nex
   assert.deepEqual(sharedReportFilters(store, '2026-09-12'), filters);
   assert.equal(store.has('filters:usage'), false);
 });
+
+
+test('all-tenant preferences are isolated from each tenant and from other accounts', () => {
+  const disk = storage(); const store = new SavedReportViews(disk);
+  store.bind('all', 1); saveSharedReportFilters(store, filters);
+  store.set('session-details', { queryKey: 'snapshot', value: { pageSize: 50, sort: { sortBy: 'totalTokens', sortDir: 'desc' } } });
+  store.bind(10, 1); assert.equal(store.size, 0);
+  store.bind('all', 2); assert.equal(store.size, 0);
+  store.bind('all', 1); assert.deepEqual(sharedReportFilters(store, '2026-09-12'), filters);
+  assert.equal(store.get('session-details')?.value.pageSize, 50);
+  store.clear(); assert.equal(disk.getItem('ai-report-views:v1:1:all'), null);
+});

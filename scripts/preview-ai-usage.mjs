@@ -54,6 +54,7 @@ import { createRoot } from 'react-dom/client';
 import { I18nextProvider } from 'react-i18next';
 import i18n from '/src/i18n/config.js';
 import AiUsagePanel from '/src/components/ai-usage/AiUsagePanel.tsx';
+import AdminAiUsagePanel from '/src/components/ai-usage/AdminAiUsagePanel.tsx';
 import '/src/index.css';
 function Preview() {
   const [tenantId, setTenantId] = useState(10);
@@ -70,7 +71,8 @@ function Preview() {
         React.createElement('option', { value: 1 }, '系统管理员'), React.createElement('option', { value: 2 }, '租户管理员'), React.createElement('option', { value: 3 }, '普通用户')),
       React.createElement('button', { onClick: () => { document.documentElement.classList.toggle('dark', !dark); setDark(!dark); }, style: { padding: 6, border: '1px solid #fdba74', borderRadius: 6 } }, dark ? '浅色' : '深色')
     ),
-    React.createElement(AiUsagePanel, { key: tenantId + ':' + userId, tenantId })
+    userId === 1 ? React.createElement(AdminAiUsagePanel, { key: tenantId + ':' + userId, currentTenantId: tenantId, userId, tenants: [{id: 10, name: '示例租户（已发布）'}, {id: 20, name: '空租户（尚未统计）'}] })
+      : React.createElement(AiUsagePanel, { key: tenantId + ':' + userId, tenantId })
   );
 }
 document.cookie = 'ai-usage-preview-user=2; Path=/; SameSite=Strict';

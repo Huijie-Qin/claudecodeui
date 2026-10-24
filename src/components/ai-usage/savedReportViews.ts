@@ -1,8 +1,9 @@
+import type { ReportTenantId } from './types';
 import type { UsageFilters } from './filterState';
 import type { ReportViewEntry, ReportViewStore } from './reportViewState';
 import { defaultUsageRange, validateUsageRange } from './usageUtils';
 
-const keys = /^(?:usage|integration-details|skills|hooks|templates|code|demo-code|filters:(?:shared|usage|skills|hooks|templates|code)|hook:[^\s]{1,200}|template:[^\s]{1,200})$/;
+const keys = /^(?:usage|integration-details|session-details|skills|hooks|templates|code|demo-code|filters:(?:shared|usage|skills|hooks|templates|code)|hook:[^\s]{1,200}|template:[^\s]{1,200})$/;
 const groups = ['user', 'workspace', 'day', 'week', 'month', 'skill', 'publisher', 'hook', 'template'];
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
@@ -63,7 +64,7 @@ function preferences(value: Record<string, unknown>): Record<string, unknown> {
 export class SavedReportViews extends Map<string, ReportViewEntry> {
   private storageKey = '';
   constructor(private storage?: StorageLike) { super(); }
-  bind(tenantId: number, userId?: number) {
+  bind(tenantId: ReportTenantId, userId?: number) {
     const key = userId ? `ai-report-views:v1:${userId}:${tenantId}` : '';
     if (key === this.storageKey) return;
     super.clear(); this.storageKey = key;

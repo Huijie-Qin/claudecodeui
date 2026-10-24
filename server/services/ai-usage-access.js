@@ -15,17 +15,24 @@ export function createAiUsageAccessService({ db }) {
     if (userId == null) throw aiUsageError(401, 'authenticationRequired', 'Active user required');
     const user = db.prepare('SELECT id, username, is_active, is_system_admin FROM users WHERE id = ?').get(positiveId(userId, 'userId'));
     if (!user || !user.is_active) throw aiUsageError(401, 'authenticationRequired', 'Active user required');
+    const systemAdmin = user.is_system_admin === 1;
+    if (tenantId === 'all') {
+      if (!systemAdmin) throw aiUsageError(403, 'tenantReportDenied', 'System administrator access required for all tenants');
+      if (scope != null && scope !== 'tenant') throw aiUsageError(400, 'invalidFilter', 'All tenants requires tenant scope');
+      return { tenantId: 'all', userId: user.id, scope: 'tenant', canViewTenant: true,
+        canViewAllTenants: true, canViewDefinitions: true, hookOwnerTenantId: null,
+        canExport: true, defaultScope: 'tenant' };
+    }
     const id = positiveId(tenantId);
     const tenant = db.prepare('SELECT id, status FROM tenants WHERE id = ?').get(id);
     if (!tenant || tenant.status !== 'active') throw aiUsageError(403, 'tenantAccessDenied', 'Tenant access denied');
     const membership = db.prepare('SELECT role, status FROM tenant_users WHERE tenant_id = ? AND user_id = ?').get(id, user.id);
-    const systemAdmin = user.is_system_admin === 1;
     if (!systemAdmin && membership?.status !== 'active') throw aiUsageError(403, 'tenantAccessDenied', 'Tenant access denied');
     const canViewTenant = systemAdmin || membership?.role === 'tenant_admin';
     const selectedScope = scope ?? (canViewTenant ? 'tenant' : 'self');
     if (!['self', 'tenant'].includes(selectedScope)) throw aiUsageError(400, 'invalidFilter', 'scope must be self or tenant');
     if (selectedScope === 'tenant' && !canViewTenant) throw aiUsageError(403, 'tenantReportDenied', 'Tenant report access required');
-    return { tenantId: id, userId: user.id, scope: selectedScope, canViewTenant, canViewDefinitions: systemAdmin,
+    return { tenantId: id, userId: user.id, scope: selectedScope, canViewTenant, canViewAllTenants: systemAdmin, canViewDefinitions: systemAdmin,
       // Ownership is separate from availability: Admin-distributed Hooks are
       // usable by tenant members but are not tenant-managed reporting resources.
       hookOwnerTenantId: !systemAdmin && canViewTenant ? id : null,
