@@ -113,8 +113,8 @@
 .ai-report-status-dot.partial { background:#b27a26; }
 .ai-report-status-label { color:hsl(var(--muted-foreground)); font-size:11px; }
 .ai-report-summary > header p { font-size:11px; }
-.ai-report-filters input[type=date] { width:132px; }
-.ai-report-filters input[type=text] { width:146px; }
+.ai-report-date-input { width:172px; }
+.ai-report-filters > label input[type=text] { width:146px; }
 .ai-report-filters > button { height:34px; padding:0 13px; }
 .ai-report-filters-note { white-space:nowrap; }
 .ai-report-section-head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px 18px; border-bottom:1px solid hsl(var(--border)); }
@@ -188,10 +188,10 @@ body.ai-report-preview #root > div > header :is(select,button) { background:#fff
 html.dark body.ai-report-preview #root > div > header { background:#191f2b!important; color:#a0acc0!important; border-color:#30394a!important; }
 html.dark body.ai-report-preview #root > div > header :is(select,button) { background:#202735; color:#e7ecf5; border-color:#30394a!important; }
 @media(max-width:900px) { .ai-report {padding:20px;} .ai-report-tab {padding-left:10px;padding-right:10px;} .ai-report-summary-card{padding:13px;} .ai-report-summary-card > div svg{display:none;} .ai-report-filters-note{display:none;} }
-@media(max-width:600px) { .ai-report {padding:14px;} .ai-report-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;} .ai-report-tab{flex:1 0 30%;justify-content:center;font-size:12px;} .ai-report-tab svg{display:none;} .ai-report-filters{gap:10px;padding:12px;} .ai-report-filters > label{flex:1 1 40%;min-width:0;} .ai-report-filters input{width:100%;} .ai-code-metrics{grid-template-columns:1fr;gap:15px;} .ai-code-metrics > div{border:0;display:grid;grid-template-columns:1fr auto;align-items:center;} .ai-code-metrics strong{font-size:26px;margin:0;} .ai-code-metrics p{grid-column:1/-1;} .ai-report-panel > form > span{width:100%;margin:0;} }
-@media(pointer:coarse) { .ai-report :is(button,input,select), .ai-report-dialog :is(button,input,select){min-height:44px;} .ai-report :is(input,select), .ai-report-dialog :is(input,select){font-size:16px;} }
+@media(max-width:600px) { .ai-report {padding:14px;} .ai-report-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;} .ai-report-tab{flex:1 0 30%;justify-content:center;font-size:12px;} .ai-report-tab svg{display:none;} .ai-report-filters{gap:10px;padding:12px;} .ai-report-filters > label,.ai-report-filters > .ai-report-date-input{flex:1 1 40%;min-width:0;} .ai-report-filters input{width:100%;} .ai-code-metrics{grid-template-columns:1fr;gap:15px;} .ai-code-metrics > div{border:0;display:grid;grid-template-columns:1fr auto;align-items:center;} .ai-code-metrics strong{font-size:26px;margin:0;} .ai-code-metrics p{grid-column:1/-1;} .ai-report-panel > form > span{width:100%;margin:0;} }
+@media(pointer:coarse) { .ai-report-date-input > div{min-height:44px;} .ai-report :is(button,input,select), .ai-report-dialog :is(button,input,select){min-height:44px;} .ai-report :is(input,select), .ai-report-dialog :is(input,select){font-size:16px;} }
 @media(max-width:900px) { .ai-report-appbar {margin:-20px -20px 20px;padding:13px 20px;} .ai-report-heading-actions{gap:4px;} .ai-report-status-label{display:none;} .ai-report-local-controls{justify-content:flex-start;} }
-@media(max-width:600px) { .ai-report-appbar{margin:-14px -14px 18px;padding:12px 14px;} .ai-report-breadcrumb{gap:7px;font-size:11px;} .ai-report-appbar-note{display:none;} .ai-report-filters input[type=date],.ai-report-filters input[type=text]{width:100%;} .ai-report-section-head{padding:14px;} .ai-report-local-controls{width:100%;gap:8px;} .ai-report-local-controls>label{flex-wrap:wrap;gap:4px;} .ai-report-totals{justify-content:flex-start;} .ai-report-totals>div{gap:8px 18px;} .ai-report-heading h2{font-size:24px;} .ai-report-heading-actions{width:100%;} .ai-report-heading-actions>button:first-child{padding-left:0;} }
+@media(max-width:600px) { .ai-report-appbar{margin:-14px -14px 18px;padding:12px 14px;} .ai-report-breadcrumb{gap:7px;font-size:11px;} .ai-report-appbar-note{display:none;} .ai-report-filters > label input[type=text]{width:100%;} .ai-report-section-head{padding:14px;} .ai-report-local-controls{width:100%;gap:8px;} .ai-report-local-controls>label{flex-wrap:wrap;gap:4px;} .ai-report-totals{justify-content:flex-start;} .ai-report-totals>div{gap:8px 18px;} .ai-report-heading h2{font-size:24px;} .ai-report-heading-actions{width:100%;} .ai-report-heading-actions>button:first-child{padding-left:0;} }
 
 /* Keep stored business dates/times readable while the integration table scrolls. */
 .ai-report-integration td:nth-child(1),

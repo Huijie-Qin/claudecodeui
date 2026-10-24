@@ -30,7 +30,7 @@ test('first workbook tab exports the same raw detail filters/order, independent 
   const views = new SavedReportViews();
   views.set('usage', { queryKey: 'old', value: { groupBy: 'month', sort: { sortBy: 'sessionCount', sortDir: 'asc' } } });
   views.set('integration-details', { queryKey: 'new', value: { sort: { sortBy: 'refreshedAt', sortDir: 'asc' }, page: 3, pageSize: 20 } });
-  views.set('filters:usage', { queryKey: '', value: { filters: { from: '2026-09-01', to: '2026-09-12', userName: 'alice', workspaceName: 'work' } } });
+  views.set('filters:shared', { queryKey: '', value: { filters: { from: '2026-09-01', to: '2026-09-12', userName: 'alice', workspaceName: 'work' } } });
   const [spec] = workbookSpecs({ tenantId: 10, batchId: 'published', through: '2026-09-12', views, codeAvailable: true, t });
   assert.equal(spec.endpoint, 'integration-details');
   assert.equal(spec.params.userSearch, 'alice');

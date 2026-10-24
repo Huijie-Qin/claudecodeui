@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { SavedReportViews, savedFilters } from './savedReportViews';
+import { SavedReportViews, savedFilters, sharedReportFilters, saveSharedReportFilters } from './savedReportViews';
 
 function storage() {
   const data = new Map<string, string>();
@@ -9,15 +9,14 @@ function storage() {
 }
 const filters = { from: '2026-09-01', to: '2026-09-12', userName: '小王', workspaceName: '研发' };
 
-test('applied per-tab and Hook preferences survive reload without credentials, results, batch or draft edits', () => {
+test('shared applied filters and per-tab/Hook preferences survive reload without credentials, results, batch or draft edits', () => {
   const disk = storage(); const store = new SavedReportViews(disk); store.bind(10, 2);
-  store.set('filters:usage', { queryKey: 'secret-batch', value: { filters } });
-  store.set('filters:skills', { queryKey: '', value: { filters: { ...filters, userName: '发布者' } } });
+  saveSharedReportFilters(store, filters);
   store.set('skills', { queryKey: 'secret-batch', value: { search: 'SQL', draft: 'not-applied', page: 9, token: 'secret-token', rows: ['secret-result'], groupBy: 'publisher' } });
-  store.set('hook:sql', { queryKey: '', value: { filters, metric: 'average', fieldKey: 'sqlLineCount', groupBy: 'workspace', hookName: 'SQL' } });
+  store.set('hook:sql', { queryKey: '', value: { filters, filterScope: JSON.stringify(filters), metric: 'average', fieldKey: 'sqlLineCount', groupBy: 'workspace', hookName: 'SQL' } });
   const restored = new SavedReportViews(disk); restored.bind(10, 2);
-  assert.deepEqual(restored.get('filters:usage')?.value.filters, filters);
-  assert.equal((restored.get('filters:skills')?.value.filters as typeof filters).userName, '发布者');
+  assert.deepEqual(sharedReportFilters(restored, '2026-09-12'), filters);
+  assert.equal(restored.get('hook:sql')?.value.filterScope, JSON.stringify(filters));
   assert.equal(restored.get('skills')?.value.draft, 'SQL');
   assert.equal(restored.get('skills')?.value.page, 1);
   assert.equal(restored.get('hook:sql')?.value.metric, 'average');
@@ -28,9 +27,11 @@ test('applied per-tab and Hook preferences survive reload without credentials, r
 test('preferences are isolated by both tenant and account; revocation clears only the active identity', () => {
   const disk = storage(); const store = new SavedReportViews(disk); store.bind(10, 2);
   store.set('usage', { queryKey: '', value: { groupBy: 'workspace' } });
+  saveSharedReportFilters(store, filters);
   store.bind(20, 2); assert.equal(store.size, 0);
   store.bind(10, 3); assert.equal(store.size, 0);
   store.bind(10, 2); assert.equal(store.get('usage')?.value.groupBy, 'workspace');
+  assert.deepEqual(sharedReportFilters(store, '2026-09-12'), filters);
   store.clear();
   assert.equal(disk.getItem('ai-report-views:v1:2:10'), null);
   store.bind(10); store.set('skills', { queryKey: '', value: { search: 'not persisted' } });
@@ -55,4 +56,35 @@ test('integration detail sorting and page size survive reload without retaining 
   first.set('integration-details', { queryKey: 'old-batch', value: { page: 4, pageSize: 50, sort: { sortBy: 'refreshedAt', sortDir: 'asc' }, items: [{ secret: 'not-persisted' }] } });
   const restored = new SavedReportViews(storage); restored.bind(10, 2);
   assert.deepEqual(restored.get('integration-details'), { queryKey: '', value: { page: 1, pageSize: 50, sort: { sortBy: 'refreshedAt', sortDir: 'asc' } } });
+});
+
+
+test('legacy tab filters migrate once, prefer the landing tab and never return after a shared reset', () => {
+  const disk = storage();
+  disk.setItem('ai-report-views:v1:2:10', JSON.stringify([
+    ['filters:skills', { filters: { ...filters, userName: '发布者' } }],
+    ['filters:usage', { filters }],
+    ['skills', { groupBy: 'publisher' }],
+  ]));
+  const store = new SavedReportViews(disk); store.bind(10, 2);
+  assert.deepEqual(sharedReportFilters(store, '2026-09-12'), filters);
+  assert.equal(store.has('filters:usage'), false);
+  assert.equal(store.has('filters:skills'), false);
+  assert.equal(store.get('skills')?.value.groupBy, 'publisher');
+  const restored = new SavedReportViews(disk); restored.bind(10, 2);
+  assert.deepEqual(sharedReportFilters(restored, '2026-09-12'), filters);
+  const cleared = savedFilters(undefined, '2026-09-12');
+  saveSharedReportFilters(restored, cleared);
+  const reset = new SavedReportViews(disk); reset.bind(10, 2);
+  assert.deepEqual(sharedReportFilters(reset, '2026-09-12'), cleared);
+});
+
+test('shared filters take precedence over legacy tabs; migration can use the next available tab', () => {
+  const store = new SavedReportViews();
+  store.set('filters:hooks', { queryKey: '', value: { filters: { ...filters, userName: 'Hook用户' } } });
+  store.set('filters:skills', { queryKey: '', value: { filters } });
+  assert.deepEqual(sharedReportFilters(store, '2026-09-12'), filters);
+  store.set('filters:usage', { queryKey: '', value: { filters: { ...filters, userName: '旧用户' } } });
+  assert.deepEqual(sharedReportFilters(store, '2026-09-12'), filters);
+  assert.equal(store.has('filters:usage'), false);
 });
