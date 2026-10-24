@@ -52,6 +52,15 @@ test('today and future ungenerated data cannot be silently queried as zero', () 
   assert.equal(validateUsageRange('2026-09-12', '2026-09-11', '2026-09-11'), 'order');
   assert.equal(validateUsageRange('2026-09-01', '2026-09-11', '2026-09-11'), null);
 });
+test('invalid date input is rejected before ordering or published-range checks', () => {
+  assert.equal(validateUsageRange('', '2026-09-11', '2026-09-11'), 'required');
+  assert.equal(validateUsageRange(' ', '2026-09-11', '2026-09-11'), 'required');
+  assert.equal(validateUsageRange('2026-02-30', '2026-09-11', '2026-09-11'), 'invalid');
+  assert.equal(validateUsageRange('2026-09-01', '2026-09-31', '2026-09-11'), 'invalid');
+  assert.equal(validateUsageRange('2026/9/1', '2026-09-11', '2026-09-11'), 'invalid');
+  assert.equal(validateUsageRange('2026-09-01', 'nonsense', '2026-09-11'), 'invalid');
+  assert.equal(validateUsageRange('2024-02-29', '2024-03-01', '2026-09-11'), null);
+});
 test('responses from another batch are rejected', () => {
   assert.throws(() => assertPublishedBatch({ batchId: 'old' }, 'new'), /batchMismatch/);
   assert.equal(assertPublishedBatch({ batchId: 'current' }, 'current').batchId, 'current');

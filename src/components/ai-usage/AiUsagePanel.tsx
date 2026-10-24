@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, AlertCircle, CalendarClock, ChevronDown, CircleHelp, Clock3, Code2, FileText, Layers3, RefreshCw, Sparkles, Webhook } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -17,7 +17,9 @@ import { ReportViewContext } from './ReportViewContext';
 import HookReportPanel from './HookReportPanel';
 import Overlay from './ReportOverlay';
 import { MetricDefinitionAccess } from './metricDefinitionAccess';
-import { browserReportViews, savedFilters } from './savedReportViews';
+import { browserReportViews, saveSharedReportFilters, sharedReportFilters } from './savedReportViews';
+import ReportDateInput from './ReportDateInput';
+import { normalizeUsageDate } from './dateInput';
 import WorkbookDownload from './WorkbookDownload';
 import { reportTabOrder } from './analysisState';
 import { usageFilterParams, type UsageFilters } from './filterState';
@@ -36,8 +38,6 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
   const [tab, setTab] = useState<ReportTab | 'code'>('usage');
   const [revision, setRevision] = useState(0);
   const { viewStore } = useMemo(() => ({ tenantId, viewStore: browserReportViews() }), [tenantId]);
-  const tabRef = useRef(tab);
-  tabRef.current = tab;
   const [filters, setFilterState] = useState<UsageFilters>({ from: '', to: '', userName: '', workspaceName: '' });
   const [draft, setDraft] = useState(filters);
   const [selectedHook, setSelectedHook] = useState<UsageRow | null>(null);
@@ -52,12 +52,11 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
   const through = status?.dataThroughDate || (status?.dataThrough ? dateInZone(new Date(new Date(status.dataThrough).getTime() - 1).toISOString(), status.timeZone) : '');
 
   const setFilters = (next: UsageFilters) => {
-    viewStore.set(`filters:${tab}`, { queryKey: '', value: { filters: next } });
+    saveSharedReportFilters(viewStore, next);
     setFilterState(next);
   };
   const selectTab = (next: ReportTab | 'code') => {
-    const restored = savedFilters(viewStore.get(`filters:${next}`)?.value.filters, through);
-    setTab(next); setFilterState(restored); setDraft(restored); setRangeError(''); setSelectedHook(null);
+    setTab(next); setSelectedHook(null);
   };
 
   const onAccessError = useCallback(() => {
@@ -87,7 +86,7 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
         if (controller.signal.aborted) return;
         setStatus(nextStatus);
         const date = nextStatus.dataThroughDate || (nextStatus.dataThrough ? dateInZone(new Date(new Date(nextStatus.dataThrough).getTime() - 1).toISOString(), nextStatus.timeZone) : '');
-        const next = savedFilters(viewStore.get(`filters:${tabRef.current}`)?.value.filters, date);
+        const next = sharedReportFilters(viewStore, date);
         setFilterState(next); setDraft(next);
         setError('');
       } catch (caught) {
@@ -143,8 +142,8 @@ export default function AiUsagePanel({ tenantId }: { tenantId: number }) {
     {error && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{t(error)}</p>}
     {status?.batchId && capabilities && <SummaryCards key={`${tenantId}:${status.batchId}:${capabilities.canViewTenant}:${revision}`} tenantId={tenantId} batchId={status.batchId} capabilities={capabilities} onAccessError={onAccessError} />}
     <div className="ai-report-tabs" role="tablist" aria-label={t('title')}>{visibleTabs.map((key) => { const Icon = { usage: Activity, code: Code2, skills: Sparkles, hookExecutions: Activity, hooks: Webhook, templates: FileText }[key]; return <button key={key} type="button" role="tab" id={`ai-report-tab-${key}`} aria-selected={tab === key} aria-controls="ai-usage-tab-panel" className="ai-report-tab" onClick={() => selectTab(key)}><Icon className="h-4 w-4" />{t(key === 'code' ? 'codeReport.tab' : key)}</button>; })}</div>
-    {status?.batchId && <form aria-label={t('sharedFilters')} className="ai-report-filters" onSubmit={(event) => { event.preventDefault(); const problem = validateUsageRange(draft.from, draft.to, through); setRangeError(problem ? `range.${problem}` : ''); if (!problem) { setFilters(draft); } }}>
-      {(['from', 'to'] as const).map((key) => <label key={key} className="flex flex-col gap-1.5 text-xs text-muted-foreground">{t(key)}<input type="date" className={inputClass} required max={through} value={draft[key]} onChange={(event) => setDraft({ ...draft, [key]: event.target.value })} /></label>)}
+    {status?.batchId && <form noValidate aria-label={t('sharedFilters')} className="ai-report-filters" onSubmit={(event) => { event.preventDefault(); const next = { ...draft, from: normalizeUsageDate(draft.from) ?? draft.from, to: normalizeUsageDate(draft.to) ?? draft.to }; setDraft(next); const problem = validateUsageRange(next.from, next.to, through); setRangeError(problem ? `range.${problem}` : ''); if (!problem) { setFilters(next); } }}>
+      {(['from', 'to'] as const).map((key) => <ReportDateInput key={key} label={t(key)} calendarLabel={t('chooseDate', { label: t(key) })} max={through} value={draft[key]} onChange={(value) => setDraft(old => ({ ...old, [key]: value }))} />)}
       <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">{t(tab === 'skills' ? 'publisherNameFilter' : 'userName')}<input className={`${inputClass} w-40`} type="text" maxLength={150} value={draft.userName} placeholder={t('nameSearchPlaceholder')} onChange={(event) => setDraft({ ...draft, userName: event.target.value })} /></label>
       <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">{t('workspaceName')}<input className={`${inputClass} w-40`} type="text" maxLength={150} value={draft.workspaceName} placeholder={t('nameSearchPlaceholder')} onChange={(event) => setDraft({ ...draft, workspaceName: event.target.value })} /></label>
       <Button type="submit" disabled={loading}>{t('apply')}</Button><Button type="button" variant="ghost" onClick={() => { const cleared = { ...defaultUsageRange(through), userName: '', workspaceName: '' }; setDraft(cleared); setFilters(cleared); setRangeError(''); }}>{t('resetFilters')}</Button><span className="ai-report-filters-note">{t('workbook.savedFilters')}</span>{rangeError && <p role="alert" className="w-full text-xs text-destructive">{t(rangeError)}</p>}

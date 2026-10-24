@@ -1,4 +1,5 @@
 import type { Coverage } from './types';
+import { normalizeUsageDate } from './dateInput';
 
 export function displayReportValue(value: unknown): string {
   if (value == null || value === '') return '—';
@@ -67,8 +68,9 @@ export function defaultUsageRange(lastDate: string): { from: string; to: string 
   return { from: first.toISOString().slice(0, 10), to: lastDate };
 }
 
-export function validateUsageRange(from: string, to: string, through: string): 'required' | 'order' | 'unpublished' | null {
-  if (!from || !to) return 'required';
+export function validateUsageRange(from: string, to: string, through: string): 'required' | 'invalid' | 'order' | 'unpublished' | null {
+  if (!from.trim() || !to.trim()) return 'required';
+  if (normalizeUsageDate(from) !== from || normalizeUsageDate(to) !== to) return 'invalid';
   if (from > to) return 'order';
   if (!through || to > through) return 'unpublished';
   return null;

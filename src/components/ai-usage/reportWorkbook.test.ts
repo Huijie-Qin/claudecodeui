@@ -7,7 +7,7 @@ import JSZip from 'jszip';
 
 import type { usageRequest } from './client';
 import { collectWorkbook, workbookBytes, workbookSpecs, shanghaiExcelTime, type WorkbookSheet, type WorkbookSpec } from './reportWorkbook';
-import { SavedReportViews } from './savedReportViews';
+import { SavedReportViews, saveSharedReportFilters } from './savedReportViews';
 
 const t = ((key: string) => key) as TFunction;
 const base = { tenantId: 10, batchId: 'published', through: '2026-09-12', codeAvailable: true, t };
@@ -16,19 +16,24 @@ const signal = () => new AbortController().signal;
 const metadata = (sheet: WorkbookSheet) => Object.fromEntries((sheet.metadataHeaderRows || [])
   .flatMap(row => sheet.rows[row].map((label, col) => [label, sheet.rows[row + 1][col]])));
 
-test('all report sheets use independent applied filters, current authorization/batch and saved grouping', () => {
+test('all tab sheets share applied filters while preserving per-tab grouping and scoped Hook details', () => {
   const views = new SavedReportViews();
-  views.set('filters:usage', { queryKey: '', value: { filters: { from: '2026-09-01', to: base.through, userName: '小王' } } });
+  const shared = { from: '2026-09-01', to: base.through, userName: '小王', workspaceName: '研发' };
+  saveSharedReportFilters(views, shared);
   views.set('filters:skills', { queryKey: '', value: { filters: { from: '2026-08-20', to: base.through, userName: '发布者' } } });
   views.set('skills', { queryKey: 'old-batch', value: { groupBy: 'publisher', search: 'SQL', draft: 'unapplied' } });
   views.set('hooks', { queryKey: '', value: { nameSearch: 'SQL Hook' } });
-  views.set('hook:sql', { queryKey: '', value: { groupBy: 'workspace', metric: 'average', fieldKey: 'lines', hookName: 'SQL', filters: { from: '2026-09-02', to: base.through, workspaceName: '数据' } } });
+  views.set('hook:sql', { queryKey: '', value: { groupBy: 'workspace', metric: 'average', fieldKey: 'lines', hookName: 'SQL', filterScope: JSON.stringify(shared), filters: { from: '2026-09-02', to: base.through, workspaceName: '数据' } } });
   const specs = workbookSpecs({ ...base, views });
   assert.equal(specs.length, 6);
   assert.ok(specs.every(spec => spec.params.tenantId === 10 && spec.params.batchId === 'published' && spec.params.scope === 'tenant'));
   assert.equal(specs[0].params.userSearch, '小王');
-  assert.equal(specs[1].params.from, '2026-08-14');
-  assert.equal(specs[2].params.userSearch, '发布者');
+  for (const spec of specs.slice(0, 5)) {
+    assert.equal(spec.params.from, shared.from);
+    assert.equal(spec.params.to, shared.to);
+    assert.equal(spec.params.userSearch, shared.userName);
+    assert.equal(spec.params.workspaceSearch, shared.workspaceName);
+  }
   assert.equal(specs[2].params.search, 'SQL');
   assert.equal(specs[2].params.groupBy, 'publisher');
   assert.equal(specs[3].params.search, 'SQL Hook');
@@ -38,6 +43,39 @@ test('all report sheets use independent applied filters, current authorization/b
   assert.ok(specs[0].columns.every(col => col.key !== 'activeUserCount'));
   assert.equal(specs[0].columns.find(col => col.key === 'aiActiveDurationMs')?.exportValue?.({ aiActiveDurationMs: 1250 }), 1.25);
   assert.doesNotMatch(JSON.stringify(specs), /hookExecutions|unapplied|old-batch/);
+});
+
+test('Hook detail filter scope matches the trimmed identity filters actually sent by the page', () => {
+  const views = new SavedReportViews();
+  const shared = { from: '2026-09-01', to: base.through, userName: ' 小王 ', workspaceName: ' 研发 ' };
+  saveSharedReportFilters(views, shared);
+  views.set('hook:sql', { queryKey: '', value: {
+    filterScope: JSON.stringify({ ...shared, userName: '小王', workspaceName: '研发' }),
+    filters: { ...shared, from: '2026-09-05' },
+  } });
+  const spec = workbookSpecs({ ...base, views }).find(spec => spec.endpoint.startsWith('hooks/'))!;
+  assert.equal(spec.params.from, '2026-09-05');
+  assert.equal(spec.params.userSearch, '小王');
+  assert.equal(spec.params.workspaceSearch, '研发');
+});
+
+test('changing shared filters invalidates old Hook detail filter overrides and keeps template exports in scope', () => {
+  const views = new SavedReportViews();
+  const shared = { from: '2026-09-01', to: base.through, userName: '当前用户', workspaceName: '当前工作区' };
+  saveSharedReportFilters(views, shared);
+  for (const [id, filterScope] of [['stale', JSON.stringify({ ...shared, userName: '旧用户' })], ['legacy', undefined]]) {
+    views.set(`hook:${id}`, { queryKey: '', value: { filterScope, filters: { ...shared, from: '2026-09-10', userName: '详情用户' }, fieldKey: 'lines', groupBy: 'workspace' } });
+  }
+  views.set('template:sql', { queryKey: '', value: { groupBy: 'day' } });
+  const specs = workbookSpecs({ ...base, views });
+  for (const spec of specs) {
+    assert.equal(spec.params.from, shared.from);
+    assert.equal(spec.params.to, shared.to);
+    assert.equal(spec.params.userSearch, shared.userName);
+    assert.equal(spec.params.workspaceSearch, shared.workspaceName);
+  }
+  assert.equal(specs.find(spec => spec.endpoint.includes('stale'))?.params.fieldKey, 'lines');
+  assert.equal(specs.find(spec => spec.params.templateId === 'sql')?.params.groupBy, 'day');
 });
 
 test('workbook exports all integration detail pages with nulls, exact units and Shanghai times, alongside other tabs', async () => {
@@ -341,11 +379,12 @@ test('worksheet print settings precede ignored errors as required by Excel OOXML
   }
 });
 
-test('each sheet retains its own filters and exact API totals above a separate detail section', async () => {
+test('sheet metadata uses shared filters, with explicit scoped Hook detail filters and exact API totals', async () => {
   const views = new SavedReportViews();
-  views.set('filters:usage', { queryKey: '', value: { filters: { from: '2026-09-01', to: base.through, userName: '小王' } } });
+  const shared = { from: '2026-09-01', to: base.through, userName: '小王', workspaceName: '研发' };
+  saveSharedReportFilters(views, shared);
   views.set('filters:code', { queryKey: '', value: { filters: { from: '2026-09-02', to: base.through, workspaceName: '研发' } } });
-  views.set('hook:sql', { queryKey: '', value: { groupBy: 'workspace', metric: 'average', fieldKey: 'sqlLines', hookName: 'SQL', filters: { from: '2026-09-03', to: base.through, userName: '小李' } } });
+  views.set('hook:sql', { queryKey: '', value: { groupBy: 'workspace', metric: 'average', fieldKey: 'sqlLines', hookName: 'SQL', filterScope: JSON.stringify(shared), filters: { from: '2026-09-03', to: base.through, userName: '小李' } } });
   const specs = workbookSpecs({ ...base, views });
   const request = (async (endpoint: string, params: Record<string, unknown> = {}) => {
     if (endpoint === 'capabilities') return { canExport: true, canViewTenant: true };
