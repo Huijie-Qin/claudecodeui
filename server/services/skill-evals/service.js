@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { accountCopyGuard } from '../account-copy-guard.js';
 
 import { ACTIVE, MAX_CASES, fail, hash, outcome, redact, validateStart, relativePath } from './contracts.js';
 import { atomicJson, createEvalFiles, treeHash, validateSnapshot } from './files.js';
@@ -65,7 +66,11 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
     } catch (error) { await fs.rm(dir, { recursive: true, force: true }); throw error; }
   }
   async function cleanReplaced() {
-    for (const id of repository.deletedIds()) await fs.rm(jobDir(id), { recursive: true, force: true });
+    for (const id of repository.deletedIds()) {
+      const scope = repository.jobScope?.(id) || {};
+      if (accountCopyGuard.blocked(scope)) continue;
+      await accountCopyGuard.run(scope, () => fs.rm(jobDir(id), { recursive: true, force: true }));
+    }
     repository.expireTombstones();
   }
   function checkActive(job, controller) {
@@ -218,7 +223,7 @@ export function createSkillEvaluationService({ repository, runtime, storageRoot,
       if (!recovered) { await recover(); recovered = true; }
       await cleanReplaced();
       const job = repository.queued()[0];
-      if (job) await execute(job);
+      if (job && !accountCopyGuard.blocked(job)) await accountCopyGuard.run(job, () => execute(job));
     } finally { working = false; }
   }
   async function latest(scope) {

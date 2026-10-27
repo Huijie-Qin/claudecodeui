@@ -5,6 +5,7 @@ import os from 'os';
 import { promises as fs } from 'fs';
 import crypto from 'crypto';
 import { userDb, apiKeysDb, githubTokensDb } from '../database/db.js';
+import { accountCopyGuard } from '../services/account-copy-guard.js';
 import { addProjectManually } from '../projects.js';
 import { queryClaudeSDK } from '../claude-sdk.js';
 import { spawnCursor } from '../cursor-cli.js';
@@ -37,7 +38,7 @@ const validateExternalApiKey = (req, res, next) => {
         return res.status(500).json({ error: 'Platform mode: No user found in database' });
       }
       req.user = user;
-      return next();
+      return accountCopyGuard.http(req, res, next);
     } catch (error) {
       console.error('Platform mode error:', error);
       return res.status(500).json({ error: 'Platform mode: Failed to fetch user' });
@@ -58,7 +59,7 @@ const validateExternalApiKey = (req, res, next) => {
   }
 
   req.user = user;
-  next();
+  accountCopyGuard.http(req, res, next);
 };
 
 /**
@@ -1200,8 +1201,10 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     if (cleanup && githubUrl) {
       // Only cleanup if we cloned a repo (not for existing project paths)
       const sessionIdForCleanup = writer.getSessionId();
-      setTimeout(() => {
-        cleanupProject(finalProjectPath, sessionIdForCleanup);
+      const releaseMigration = accountCopyGuard.enter({ userId: req.user.id, paths: [finalProjectPath] }, { allowDraining: true });
+      setTimeout(async () => {
+        try { await cleanupProject(finalProjectPath, sessionIdForCleanup); }
+        finally { releaseMigration(); }
       }, 5000);
     }
 
@@ -1211,7 +1214,7 @@ router.post('/', validateExternalApiKey, async (req, res) => {
     // Clean up on error
     if (finalProjectPath && cleanup && githubUrl) {
       const sessionIdForCleanup = writer ? writer.getSessionId() : null;
-      cleanupProject(finalProjectPath, sessionIdForCleanup);
+      await cleanupProject(finalProjectPath, sessionIdForCleanup);
     }
 
     if (stream) {

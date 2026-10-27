@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { aiUsageError } from './ai-usage-access.js';
+import { accountCopyGuard, ACCOUNT_COPY_SCHEMA } from './account-copy-guard.js';
 
 const DATASETS = new Set(['users', 'hooks', 'templates']);
 const ONE_DAY = 86400000;
@@ -10,6 +11,7 @@ const ONE_DAY = 86400000;
 // Serializers are code-owned presets, not request-controlled formats or file paths.
 // No default serializer is installed until product export fields have been approved.
 export function createAiUsageExportService({ db, accessService, queryService, directory, serializers = {}, now = () => new Date(), maxBytes = 10 * 1024 * 1024 }) {
+  db.exec(ACCOUNT_COPY_SCHEMA);
   let timer = null;
   let active = false;
   const instant = () => now().toISOString();
@@ -107,16 +109,21 @@ export function createAiUsageExportService({ db, accessService, queryService, di
     let job;
     let temporary;
     let finalFile;
+    let releaseMigration = () => {};
     try {
       const timestamp = instant();
       job = db.transaction(() => {
-        const candidate = db.prepare("SELECT * FROM ai_usage_export_jobs WHERE expires_at > ? AND (status = 'queued' OR (status = 'running' AND lease_until < ?)) ORDER BY created_at, id LIMIT 1").get(timestamp, timestamp);
+        const candidate = db.prepare(`SELECT * FROM ai_usage_export_jobs WHERE expires_at > ?
+          AND (status = 'queued' OR (status = 'running' AND lease_until < ?))
+          AND ${accountCopyGuard.sqlUnlocked('ai_usage_export_jobs.user_id')}
+          ORDER BY created_at, id LIMIT 1`).get(timestamp, timestamp);
         if (!candidate) return null;
         const token = crypto.randomUUID();
         db.prepare("UPDATE ai_usage_export_jobs SET status = 'running', lease_token = ?, lease_until = ?, updated_at = ? WHERE id = ?").run(token, new Date(now().getTime() + 30 * 60000).toISOString(), timestamp, candidate.id);
         return { ...candidate, lease_token: token };
       }).immediate();
       if (!job) return false;
+      releaseMigration = accountCopyGuard.enter(job, { allowDraining: true });
       const access = accessService.resolve({ userId: job.user_id, tenantId: job.tenant_id, scope: job.scope });
       checkHookScope(job, access);
       checkRevision(job);
@@ -152,6 +159,7 @@ export function createAiUsageExportService({ db, accessService, queryService, di
       // Only generated, exact job paths are removed; no user paths are accepted.
       if (temporary) await fs.unlink(temporary).catch(() => {});
       if (finalFile) await fs.unlink(finalFile).catch(() => {});
+      releaseMigration();
       active = false;
     }
   }

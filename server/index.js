@@ -107,6 +107,8 @@ import {canAccessHostFilesystem} from './services/host-filesystem-access.js';
 import {runtimeSweeper} from './services/runtime-sweeper.js';
 import {agentSessionRuntimeManager} from './services/agent-session-runtime.js';
 import {createScheduledSessionTaskService} from './services/scheduled-session-tasks.js';
+import {accountCopyGuard} from './services/account-copy-guard.js';
+import {recoverAccountCopyRuntimes} from './services/account-copy-recovery.js';
 import {createScheduledTaskLogger} from './services/scheduled-task-logger.js';
 import {scheduledTaskLogStore} from './services/scheduled-task-log-store.js';
 import {codeHubMrPoller} from './services/codehub-mr-poller.js';
@@ -747,7 +749,7 @@ app.use('/api/desktop-updates', desktopUpdatesRoutes);
 app.use('/api', noApiCache, validateApiKey);
 
 // Authentication routes (public)
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', (req, res, next) => accountCopyGuard.http(req, res, next), authRoutes);
 
 // Public synthetic demo datasets used by Agent Graph test skills. The route is
 // completely hidden when the Agent Graph feature flag is disabled.
@@ -2538,7 +2540,13 @@ app.post('/api/projects/:projectName/files/upload', authenticateToken, uploadFil
  * Proxy an authenticated client WebSocket to a plugin's internal WS server.
  * Auth is enforced by verifyClient before this function is reached.
  */
-function handlePluginWsProxy(clientWs, pathname) {
+function handlePluginWsProxy(clientWs, pathname, request) {
+    let releaseMigration;
+    try { releaseMigration = accountCopyGuard.enter(accountCopyGuard.requestScope(request)); }
+    catch { clientWs.close(4423, 'Account migration in progress'); return; }
+    // Plugin protocols have no common completion acknowledgement. Keep their
+    // connection in the drain barrier instead of guessing when work has finished.
+    clientWs.once('close', releaseMigration);
     const pluginName = pathname.replace('/plugin-ws/', '');
     if (!pluginName || /[^a-zA-Z0-9_-]/.test(pluginName)) {
         clientWs.close(4400, 'Invalid plugin name');
@@ -2592,7 +2600,7 @@ wss.on('connection', (ws, request) => {
     } else if (pathname === '/ws') {
         handleChatConnection(ws, request);
     } else if (pathname.startsWith('/plugin-ws/')) {
-        handlePluginWsProxy(ws, pathname);
+        handlePluginWsProxy(ws, pathname, request);
     } else {
         console.log('[WARN] Unknown WebSocket path:', pathname);
         ws.close();
@@ -2768,6 +2776,9 @@ function resolveSessionLimitLogUser({ userId, username, request, writer }) {
 }
 
 async function runLimitedProviderCommand({ data, provider, writer, run, logContext = null }) {
+    const providerRun = run;
+    run = () => accountCopyGuard.run({ userId: data.options?.userId ?? writer.userId,
+        workspaceId: data.options?.workspaceId, paths: [data.options?.cwd] }, providerRun);
     let activeCommandId = null;
     const startedAt = Date.now();
     if (logContext?.requestId) {
@@ -2815,6 +2826,7 @@ async function runLimitedProviderCommand({ data, provider, writer, run, logConte
         activeCommandId = `${provider}:${Date.now()}:${++activeProviderCommandCounter}`;
         activeProviderCommands.set(activeCommandId, {
             provider,
+            workspaceId: data.options?.workspaceId || null,
             sessionId: data.options?.sessionId || null,
             userId: data.options?.userId ?? writer.userId ?? null,
             requestId: logContext?.requestId || null,
@@ -2914,7 +2926,7 @@ function handleChatConnection(ws, request) {
         connectedClients.delete(ws);
     });
 
-    ws.on('message', async (message) => {
+    ws.on('message', accountCopyGuard.wrapMessage(request, async (message) => {
         let data;
         try {
             data = JSON.parse(message);
@@ -3157,7 +3169,7 @@ function handleChatConnection(ws, request) {
                 clientSessionId: data?.options?.clientSessionId || null,
             });
         }
-    });
+    }, error => safeSendWebSocket(ws, JSON.stringify({ type: 'error', error: error.message, code: error.code }))));
 
     ws.on('close', () => {
         console.log('🔌 Chat client disconnected');
@@ -3174,7 +3186,7 @@ function handleShellConnection(ws, request) {
     let urlDetectionBuffer = '';
     const announcedAuthUrls = new Set();
 
-    ws.on('message', async (message) => {
+    ws.on('message', accountCopyGuard.wrapMessage(request, async (message) => {
         try {
             const data = JSON.parse(message);
             console.log('📨 Shell message received:', data.type);
@@ -3196,6 +3208,7 @@ function handleShellConnection(ws, request) {
                         requireEdit: true,
                     });
                     projectPath = workspace.path;
+                    request.accountCopyShellWorkspace = workspaceId;
                 } catch (error) {
                     ws.send(JSON.stringify({ type: 'error', message: error.message }));
                     return;
@@ -3392,6 +3405,9 @@ function handleShellConnection(ws, request) {
                     console.log('🟢 Shell process started with PTY, PID:', shellProcess.pid);
 
                     ptySessionsMap.set(ptySessionKey, {
+                        userId: request?.user?.id ?? request?.user?.userId,
+                        workspaceId: request.accountCopyShellWorkspace,
+                        paths: [resolvedProjectPath],
                         pty: shellProcess,
                         ws: ws,
                         buffer: [],
@@ -3527,7 +3543,7 @@ function handleShellConnection(ws, request) {
                 }));
             }
         }
-    });
+    }, error => safeSendWebSocket(ws, JSON.stringify({ type: 'error', message: error.message, code: error.code }))));
 
     ws.on('close', () => {
         console.log('🔌 Shell client disconnected');
@@ -3989,6 +4005,7 @@ async function gracefulShutdown(signal) {
 
     isShuttingDown = true;
     isServerReady = false;
+    accountCopyGuard.stop();
     console.log(`[Shutdown] Received ${signal}; draining active work before exit`);
 
     await skillCreationService.stop();
@@ -4022,8 +4039,23 @@ async function gracefulShutdown(signal) {
 // Initialize database and start server
 async function startServer() {
     try {
+        await accountCopyGuard.recoverBeforeStartup(recoverAccountCopyRuntimes);
         // Initialize authentication database
         await initializeDatabase();
+        db.pragma('journal_mode = WAL');
+        accountCopyGuard.start({
+            onRecover: recoverAccountCopyRuntimes,
+            extraScopes: () => [...activeProviderCommands.values(), ...ptySessionsMap.values()],
+            onReleased: (scope) => {
+                clearProjectDirectoryCache();
+                for (const client of connectedClients) {
+                    if (!scope.userIds.includes(Number(client.userId))) continue;
+                    // Reconnect only affected users so stale tenant/session selections
+                    // are reloaded through the normal authenticated project fetch.
+                    client.close(1012, 'Account migration completed; reconnect');
+                }
+            },
+        });
         aiUsageService.start();
         await skillCreationService.ready();
         skillEvaluationService.startWorker();

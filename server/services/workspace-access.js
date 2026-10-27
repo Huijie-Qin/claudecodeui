@@ -1,6 +1,7 @@
 import path from 'path';
 
 import { multitenancyDb } from '../database/multitenancy-db.js';
+import { accountCopyGuard } from './account-copy-guard.js';
 
 function isUnderRoot(rootPath, targetPath) {
   const root = path.resolve(rootPath);
@@ -37,6 +38,7 @@ export function createWorkspaceAccessService(multitenancy = multitenancyDb) {
   }
 
   function requireWorkspace({ tenantId, userId, workspaceId, requireEdit = false }) {
+    accountCopyGuard.touch({ userId, workspaceId });
     const workspace = getWorkspaceOrNull(workspaceId);
     if (!workspace || workspace.status !== 'active' || Number(workspace.tenant_id) !== Number(tenantId)) {
       const error = new Error('Workspace not found');

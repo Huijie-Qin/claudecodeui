@@ -1,6 +1,8 @@
+import { accountCopyGuard, ACCOUNT_COPY_SCHEMA } from '../services/account-copy-guard.js';
 import { fail } from '../services/skill-evals/contracts.js';
 
 export function createSkillEvaluationDb(db) {
+  db.exec(ACCOUNT_COPY_SCHEMA);
   db.exec(`
     CREATE TABLE IF NOT EXISTS skill_eval_jobs (
       id TEXT PRIMARY KEY, tenant_id INTEGER NOT NULL, workspace_id INTEGER NOT NULL,
@@ -84,14 +86,15 @@ export function createSkillEvaluationDb(db) {
     .run(workspacePath, name.toLowerCase(), value.nextId, JSON.stringify(value.protectedIds), JSON.stringify(value.sources));
   return {
     latest, get, start, startAux, save, duplicate, meta, saveMeta,
+    jobScope: (id) => db.prepare('SELECT user_id,workspace_id FROM skill_eval_jobs WHERE id=?').get(id),
     activeGeneration: (scope) => decode(db.prepare("SELECT * FROM skill_eval_jobs WHERE tenant_id=? AND workspace_id=? AND skill_key=? AND deleted=0 AND status IN ('queued','running','cancelling') AND json_extract(data,'$.mode')='generate-cases' LIMIT 1").get(...key(scope))),
-    queued: () => db.prepare("SELECT * FROM skill_eval_jobs WHERE deleted=0 AND status='queued' ORDER BY created_at").all().map(decode),
+    queued: () => db.prepare(`SELECT * FROM skill_eval_jobs WHERE deleted=0 AND status='queued' AND ${accountCopyGuard.sqlUnlocked('skill_eval_jobs.user_id', 'skill_eval_jobs.workspace_id')} ORDER BY created_at`).all().map(decode),
     unfinished: () => db.prepare("SELECT * FROM skill_eval_jobs WHERE deleted=0 AND status IN ('running','cancelling')").all().map(decode),
     deletedIds: () => {
-      db.prepare("UPDATE skill_eval_jobs SET deleted=1,data=json_object('id',id) WHERE deleted=0 AND status NOT IN ('queued','running','cancelling') AND json_extract(data,'$.mode')='generate-cases' AND created_at<?").run(Date.now() - 86400000);
-      return db.prepare('SELECT id FROM skill_eval_jobs WHERE deleted=1').all().map((r) => r.id);
+      db.prepare(`UPDATE skill_eval_jobs SET deleted=1,data=json_object('id',id) WHERE deleted=0 AND status NOT IN ('queued','running','cancelling') AND json_extract(data,'$.mode')='generate-cases' AND created_at<? AND ${accountCopyGuard.sqlUnlocked('skill_eval_jobs.user_id','skill_eval_jobs.workspace_id')}`).run(Date.now() - 86400000);
+      return db.prepare(`SELECT id FROM skill_eval_jobs WHERE deleted=1 AND ${accountCopyGuard.sqlUnlocked('skill_eval_jobs.user_id','skill_eval_jobs.workspace_id')}`).all().map((r) => r.id);
     },
-    expireTombstones: () => db.prepare('DELETE FROM skill_eval_jobs WHERE deleted=1 AND created_at<?').run(Date.now() - 86400000),
+    expireTombstones: () => db.prepare(`DELETE FROM skill_eval_jobs WHERE deleted=1 AND created_at<? AND ${accountCopyGuard.sqlUnlocked('skill_eval_jobs.user_id','skill_eval_jobs.workspace_id')}`).run(Date.now() - 86400000),
     acquireLeader: (owner) => db.prepare(`INSERT INTO skill_eval_worker VALUES (1,?,?) ON CONFLICT(id)
       DO UPDATE SET owner=excluded.owner,expires=excluded.expires WHERE skill_eval_worker.expires<? OR skill_eval_worker.owner=excluded.owner`)
       .run(owner, Date.now() + 30000, Date.now()).changes > 0,

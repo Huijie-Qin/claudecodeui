@@ -1,4 +1,5 @@
 import { db } from '../database/db.js';
+import { accountCopyGuard, ACCOUNT_COPY_SCHEMA } from './account-copy-guard.js';
 
 const VALID_LEVELS = new Set(['debug', 'info', 'warn', 'error']);
 const VALID_PROVIDERS = new Set(['claude', 'codex', 'cursor', 'gemini']);
@@ -175,6 +176,7 @@ export function createScheduledTaskLogStore({
   cleanupEvery = DEFAULT_CLEANUP_EVERY,
   now = () => new Date(),
 } = {}) {
+  database.exec(ACCOUNT_COPY_SCHEMA);
   const configuredRetentionDays = parseConfiguredInteger(retentionDays, DEFAULT_RETENTION_DAYS, {
     min: 1,
     max: 365,
@@ -191,7 +193,10 @@ export function createScheduledTaskLogStore({
 
   function cleanup() {
     const cutoff = new Date(now().getTime() - configuredRetentionDays * 24 * 60 * 60 * 1_000).toISOString();
-    const expired = database.prepare('DELETE FROM scheduled_task_logs WHERE timestamp < ?').run(cutoff).changes;
+    const unlocked = accountCopyGuard.sqlUnlocked(
+      'COALESCE(scheduled_task_logs.user_id,(SELECT user_id FROM scheduled_session_tasks WHERE id=scheduled_task_logs.task_id))',
+      'COALESCE(scheduled_task_logs.workspace_id,(SELECT workspace_id FROM scheduled_session_tasks WHERE id=scheduled_task_logs.task_id))');
+    const expired = database.prepare(`DELETE FROM scheduled_task_logs WHERE timestamp < ? AND ${unlocked}`).run(cutoff).changes;
     const boundary = database.prepare(`
       SELECT id
       FROM scheduled_task_logs
@@ -199,7 +204,7 @@ export function createScheduledTaskLogStore({
       LIMIT 1 OFFSET ?
     `).get(configuredMaxRows - 1);
     const overflow = boundary
-      ? database.prepare('DELETE FROM scheduled_task_logs WHERE id < ?').run(boundary.id).changes
+      ? database.prepare(`DELETE FROM scheduled_task_logs WHERE id < ? AND ${unlocked}`).run(boundary.id).changes
       : 0;
     writesSinceCleanup = 0;
     return { expired, overflow };

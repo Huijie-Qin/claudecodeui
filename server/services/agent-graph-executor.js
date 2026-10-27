@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { accountCopyGuard } from './account-copy-guard.js';
 
 import { agentGraphArtifactWorkspace } from './agent-graph-artifact-workspace.js';
 import { agentGraphRunStore } from './agent-graph-run-store.js';
@@ -907,7 +908,10 @@ export function createAgentGraphExecutorService({
       activeRuns.delete(run.id);
       throw error;
     }
-    schedule(() => executeRun(run, abortController));
+    const releaseMigration = accountCopyGuard.enter({ userId, workspaceId, paths: [workspacePath] }, { allowDraining: true });
+    try {
+      schedule(async () => { try { return await executeRun(run, abortController); } finally { releaseMigration(); } });
+    } catch (error) { releaseMigration(); throw error; }
     return toPublicRun(run);
   }
 

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { accountCopyGuard, ACCOUNT_COPY_SCHEMA } from './account-copy-guard.js';
 
 import { db } from '../database/db.js';
 import { MCP_LOOP_JOB_SCHEMA_SQL } from '../database/hook-config-schema.js';
@@ -263,6 +264,7 @@ export function createMcpLoopService({
   logger = console,
 } = {}) {
   database.exec(MCP_LOOP_JOB_SCHEMA_SQL);
+  database.exec(ACCOUNT_COPY_SCHEMA);
   const jobColumns = new Set(database.prepare('PRAGMA table_info(mcp_loop_jobs)').all()
     .map((column) => column.name));
   if (!jobColumns.has('termination_script')) {
@@ -304,6 +306,7 @@ export function createMcpLoopService({
   const selectDue = database.prepare(`
     SELECT * FROM mcp_loop_jobs
     WHERE status = 'queued' AND next_poll_at_ms <= ?
+      AND ${accountCopyGuard.sqlUnlocked('mcp_loop_jobs.user_id', 'mcp_loop_jobs.workspace_id', { allowDraining: true })}
     ORDER BY next_poll_at_ms ASC
     LIMIT ?
   `);
@@ -693,7 +696,8 @@ export function createMcpLoopService({
 
     runningCount += claimed.length;
     try {
-      return await Promise.all(claimed.map((job) => runClaimedJob(job)));
+      return await Promise.all(claimed.map((job) => accountCopyGuard.run(job,
+        () => runClaimedJob(job), { allowDraining: true })));
     } finally {
       runningCount -= claimed.length;
     }

@@ -5,6 +5,7 @@ import {
   DockerCliClient,
 } from './agent-session-runtime.js';
 import { resolveRuntimeMonitorConfig } from './runtime-monitor.js';
+import { accountCopyGuard } from './account-copy-guard.js';
 
 const ZERO_RESULT = { inspected: 0, stopped: 0, failed: 0 };
 const SWEEP_BATCH_SIZE = 100;
@@ -50,6 +51,8 @@ export function createRuntimeSweeper({
         }
 
         for (const runtime of candidates) {
+          if (accountCopyGuard.blocked(runtime)) continue;
+          const releaseMigration = accountCopyGuard.enter(runtime);
           result.inspected += 1;
           try {
             const inspected = await docker.inspectContainer(runtime.container_name);
@@ -77,7 +80,7 @@ export function createRuntimeSweeper({
               containerName: runtime.container_name,
               error: error?.message,
             });
-          }
+          } finally { releaseMigration(); }
         }
 
         const lastCandidate = candidates.at(-1);

@@ -1,3 +1,4 @@
+import { accountCopyGuard } from './account-copy-guard.js';
 import { db } from '../database/db.js';
 import { queryClaudeSDK } from '../claude-sdk.js';
 import { spawnCursor } from '../cursor-cli.js';
@@ -720,34 +721,37 @@ export function createScheduledSessionTaskService({
     },
 
     claimDueTasks(limit = MAX_DUE_TASKS_PER_TICK) {
-      const now = new Date().toISOString();
-      const rows = db.prepare(`
-        SELECT
-          t.*,
-          w.slug AS workspace_slug,
-          w.path AS workspace_path,
-          w.status AS workspace_status
-        FROM scheduled_session_tasks t
-        JOIN workspaces w ON w.id = t.workspace_id
-        WHERE t.enabled = 1
-          AND t.next_run_at <= ?
-        ORDER BY t.next_run_at ASC, t.id ASC
-        LIMIT ?
-      `).all(now, limit);
+      return db.transaction(() => {
+        const now = new Date().toISOString();
+        const rows = db.prepare(`
+          SELECT
+            t.*,
+            w.slug AS workspace_slug,
+            w.path AS workspace_path,
+            w.status AS workspace_status
+          FROM scheduled_session_tasks t
+          JOIN workspaces w ON w.id = t.workspace_id
+          WHERE t.enabled = 1
+            AND t.next_run_at <= ?
+            AND ${accountCopyGuard.sqlUnlocked('t.user_id', 't.workspace_id')}
+          ORDER BY t.next_run_at ASC, t.id ASC
+          LIMIT ?
+        `).all(now, limit);
 
-      return rows.map((row) => {
-        const nextRunAt = computeNextRunAtAfterClaim(row);
-        db.prepare(`
-          UPDATE scheduled_session_tasks
-          SET next_run_at = ?,
-              updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(nextRunAt, row.id);
-        return {
-          ...row,
-          claimed_next_run_at: nextRunAt,
-        };
-      });
+        return rows.map((row) => {
+          const nextRunAt = computeNextRunAtAfterClaim(row);
+          db.prepare(`
+            UPDATE scheduled_session_tasks
+            SET next_run_at = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(nextRunAt, row.id);
+          return {
+            ...row,
+            claimed_next_run_at: nextRunAt,
+          };
+        });
+      }).immediate();
     },
 
     async runTask(task, { tickId = null } = {}) {
@@ -864,7 +868,8 @@ export function createScheduledSessionTaskService({
             tasks: dueTasks.map((task) => getTaskLogContext(task)),
           });
         }
-        await Promise.all(dueTasks.map((task) => service.runTask(task, { tickId })));
+        await Promise.all(dueTasks.map((task) => accountCopyGuard.run(task,
+          () => service.runTask(task, { tickId }), { allowDraining: true })));
         const completedDetails = {
           tickId,
           trigger,

@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { accountCopyGuard } from '../account-copy-guard.js';
 
 import matter from 'gray-matter';
 
@@ -138,7 +139,7 @@ export function createSkillCreationService({ db, creator, listSnippets, authoriz
         db.prepare('INSERT INTO skill_creation_jobs VALUES (?,?,?,?,?,?,?)').run(job.id, job.tenantId, job.workspaceId, job.userId, job.requestId, job.conversationKey, JSON.stringify(job));
         persistConversation(job);
       })();
-      const task = run(job); tasks.set(job.id, task); void task.finally(() => tasks.delete(job.id)).catch(() => {}); return publicJob(job);
+      const task = accountCopyGuard.run(job, () => run(job), { allowDraining: true }); tasks.set(job.id, task); void task.finally(() => tasks.delete(job.id)).catch(() => {}); return publicJob(job);
     },
     get(scope, id) { return publicJob(get(scope, id)); },
     list(scope, conversationKey) {

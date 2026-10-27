@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { userDb, appConfigDb } from '../database/db.js';
 import { IS_PLATFORM } from '../constants/config.js';
+import { accountCopyGuard } from '../services/account-copy-guard.js';
 
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
@@ -29,7 +30,7 @@ const authenticateToken = async (req, res, next) => {
         return res.status(500).json({ error: 'Platform mode: No user found in database' });
       }
       req.user = user;
-      return next();
+      return accountCopyGuard.http(req, res, next);
     } catch (error) {
       console.error('Platform mode error:', error);
       return res.status(500).json({ error: 'Platform mode: Failed to fetch user' });
@@ -69,7 +70,7 @@ const authenticateToken = async (req, res, next) => {
     }
 
     req.user = user;
-    next();
+    accountCopyGuard.http(req, res, next);
   } catch (error) {
     console.error('Token verification error:', error);
     return res.status(403).json({ error: 'Invalid token' });

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { accountCopyGuard } from './account-copy-guard.js';
 
 import { generateTopSkill, optimizeTopSkill } from './agent-graphs.js';
 
@@ -90,8 +91,11 @@ export function createTopSkillJobsService({
       error: null,
       request: { workspacePath, tenantId, userId, workspaceId, input },
     };
+    const releaseMigration = accountCopyGuard.enter({ userId, workspaceId, paths: [workspacePath] }, { allowDraining: true });
     jobs.set(job.id, job);
-    schedule(() => run(job));
+    try {
+      schedule(async () => { try { return await run(job); } finally { releaseMigration(); } });
+    } catch (error) { releaseMigration(); jobs.delete(job.id); throw error; }
     return publicJob(job);
   }
 

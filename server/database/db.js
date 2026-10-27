@@ -3,6 +3,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 
 import Database from 'better-sqlite3';
+import { accountCopyGuard } from '../services/account-copy-guard.js';
 
 import { findAppRoot, getModuleDir } from '../utils/runtime-paths.js';
 import { configureAiUsageTurnDatabase } from '../services/ai-usage-turns.js';
@@ -117,6 +118,7 @@ if (DB_PATH !== LEGACY_DB_PATH && !fs.existsSync(DB_PATH) && fs.existsSync(LEGAC
 
 // Create database connection
 const db = new Database(DB_PATH);
+accountCopyGuard.configure(db);
 
 // app_config must exist before any other module imports (auth.js reads the JWT secret at load time).
 // runMigrations() also creates this table, but it runs too late for existing installations
@@ -1906,6 +1908,7 @@ const aiMrSubmissionsDb = {
     FROM ai_mr_submissions
     WHERE status = 'pending'
       AND (next_check_at IS NULL OR next_check_at <= ?)
+      AND ${accountCopyGuard.sqlUnlocked('ai_mr_submissions.user_id', 'ai_mr_submissions.workspace_id')}
     ORDER BY created_at ASC
     LIMIT ?
   `).all(now.toISOString(), Number(limit)).map(hydrateAiMrSubmission),
@@ -2162,7 +2165,11 @@ const apiKeysDb = {
 
       if (row) {
         // Update last_used timestamp
-        db.prepare('UPDATE api_keys SET last_used = CURRENT_TIMESTAMP WHERE id = ?').run(row.api_key_id);
+        db.transaction(() => {
+          if (!accountCopyGuard.blocked({ userId: row.id })) {
+            db.prepare('UPDATE api_keys SET last_used = CURRENT_TIMESTAMP WHERE id = ?').run(row.api_key_id);
+          }
+        }).immediate();
       }
 
       return row;

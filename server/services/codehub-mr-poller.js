@@ -1,5 +1,6 @@
 import { aiMrSubmissionsDb } from '../database/db.js';
 import { codeHubMcpService } from './codehub-mcp.js';
+import { accountCopyGuard } from './account-copy-guard.js';
 
 const DEFAULT_INTERVAL_MINUTES = 5;
 const DEFAULT_BATCH_LIMIT = 50;
@@ -68,57 +69,61 @@ export function createCodeHubMrPoller({
     try {
       const submissions = submissionsDb.listPendingDue({ now, limit: batchLimit });
       for (const submission of submissions) {
-        const currentNow = new Date();
-        const expiresAt = toDate(submission.expires_at);
-        if (expiresAt && expiresAt.getTime() <= currentNow.getTime()) {
-          submissionsDb.markExpired({ submissionId: submission.id, checkedAt: currentNow });
-          continue;
-        }
-        if (!submission.mr_iid || !submission.mr_project_id) {
-          submissionsDb.updateMrStatus({
-            submissionId: submission.id,
-            status: 'pending',
-            mrState: submission.mr_state,
-            checkedAt: currentNow,
-            nextCheckAt: addMinutes(currentNow, intervalMinutes).toISOString(),
-            lastError: 'Missing merge request project id or iid',
-          });
-          continue;
-        }
-
+        if (accountCopyGuard.blocked(submission)) continue;
+        const releaseMigration = accountCopyGuard.enter(submission);
         try {
-          const info = await mcpService.getMergeRequestInfo({
-            userId: submission.user_id,
-            projectId: submission.mr_project_id,
-            mergeRequestIid: submission.mr_iid,
-          });
-          const mapped = mapMergeRequestStatus(info, currentNow);
-          const nextCheckAt = mapped.status === 'pending'
-            ? addMinutes(currentNow, intervalMinutes).toISOString()
-            : null;
-          submissionsDb.updateMrStatus({
-            submissionId: submission.id,
-            status: mapped.status,
-            mrState: info?.state || submission.mr_state,
-            mrCreatedAt: info?.created_at || null,
-            mrUpdatedAt: info?.updated_at || null,
-            mergedAt: mapped.mergedAt,
-            closedAt: mapped.closedAt,
-            checkedAt: currentNow,
-            nextCheckAt,
-            lastError: null,
-          });
-        } catch (error) {
-          const checkedAt = new Date();
-          submissionsDb.updateMrStatus({
-            submissionId: submission.id,
-            status: 'pending',
-            mrState: submission.mr_state,
-            checkedAt,
-            nextCheckAt: addMinutes(checkedAt, intervalMinutes).toISOString(),
-            lastError: error?.message || String(error),
-          });
-        }
+          const currentNow = new Date();
+          const expiresAt = toDate(submission.expires_at);
+          if (expiresAt && expiresAt.getTime() <= currentNow.getTime()) {
+            submissionsDb.markExpired({ submissionId: submission.id, checkedAt: currentNow });
+            continue;
+          }
+          if (!submission.mr_iid || !submission.mr_project_id) {
+            submissionsDb.updateMrStatus({
+              submissionId: submission.id,
+              status: 'pending',
+              mrState: submission.mr_state,
+              checkedAt: currentNow,
+              nextCheckAt: addMinutes(currentNow, intervalMinutes).toISOString(),
+              lastError: 'Missing merge request project id or iid',
+            });
+            continue;
+          }
+
+          try {
+            const info = await mcpService.getMergeRequestInfo({
+              userId: submission.user_id,
+              projectId: submission.mr_project_id,
+              mergeRequestIid: submission.mr_iid,
+            });
+            const mapped = mapMergeRequestStatus(info, currentNow);
+            const nextCheckAt = mapped.status === 'pending'
+              ? addMinutes(currentNow, intervalMinutes).toISOString()
+              : null;
+            submissionsDb.updateMrStatus({
+              submissionId: submission.id,
+              status: mapped.status,
+              mrState: info?.state || submission.mr_state,
+              mrCreatedAt: info?.created_at || null,
+              mrUpdatedAt: info?.updated_at || null,
+              mergedAt: mapped.mergedAt,
+              closedAt: mapped.closedAt,
+              checkedAt: currentNow,
+              nextCheckAt,
+              lastError: null,
+            });
+          } catch (error) {
+            const checkedAt = new Date();
+            submissionsDb.updateMrStatus({
+              submissionId: submission.id,
+              status: 'pending',
+              mrState: submission.mr_state,
+              checkedAt,
+              nextCheckAt: addMinutes(checkedAt, intervalMinutes).toISOString(),
+              lastError: error?.message || String(error),
+            });
+          }
+        } finally { releaseMigration(); }
       }
     } catch (error) {
       console.error('[CodeHub MR Poller] Failed to poll merge requests:', error);
