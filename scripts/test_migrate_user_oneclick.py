@@ -85,6 +85,13 @@ setInterval(() => {}, 1000);
         self.assertTrue(oneclick.engine.under(workspace, self.workspace_root))
         self.assertTrue(oneclick.engine.under(runtime, self.runtime_root))
 
+    def test_online_copy_preserves_legacy_admin_analytics_cache(self):
+        before = fixtures.seed_legacy_admin_analytics_cache(self.db)
+        result, _ = self.run_oneclick()
+        self.assertTrue(result['committed'])
+        self.assertEqual(before, oneclick.engine.rows(self.db, 'admin_analytics_cache'))
+        self.assertEqual(self.db.execute('SELECT phase FROM account_copy_jobs').fetchone()[0], 'complete')
+
     def test_only_scoped_runtime_paused_and_unpaused_never_server(self):
         inventory = [{'Id': RUNTIME, 'Name': '/container-1', 'State': {'Running': True}},
             {'Id': 'c' * 64, 'Name': '/container-2', 'State': {'Running': True, 'Paused': True}},

@@ -25,6 +25,24 @@ SESSION = '11111111-1111-4111-8111-111111111111'
 OTHER_SESSION = '22222222-2222-4222-8222-222222222222'
 
 
+def seed_legacy_admin_analytics_cache(db):
+    # Historical DDL from admin-analytics-cache.js before its removal in 993aa14a.
+    # Upgraded databases retain the table even though current schema setup does not.
+    db.execute("""CREATE TABLE admin_analytics_cache (
+        cache_key TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        refresh_interval_minutes INTEGER NOT NULL
+    )""")
+    for key, payload in (
+        ('summary:30', {'totalUsers': 3}),
+        ('users:rangeDays=30&page=1', {'users': [{'userId': uid} for uid in (1, 2, 3)]}),
+    ):
+        db.execute('INSERT INTO admin_analytics_cache VALUES (?, ?, ?, ?)',
+                   (key, json.dumps(payload), '2026-07-01T00:00:00Z', 30))
+    return migration.rows(db, 'admin_analytics_cache')
+
+
 class MigrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -272,6 +290,12 @@ createAccountCopyGuard({database: db}).installWriteFences(); raw.close();
         with self.assertRaisesRegex(ValueError, '其他账户'):
             self.run_migration()
         self.assertEqual(before, self.fingerprint())
+
+    def test_legacy_admin_analytics_cache_is_preserved(self):
+        before = seed_legacy_admin_analytics_cache(self.db)
+        self.run_migration()
+        self.assertEqual(before, migration.rows(self.db, 'admin_analytics_cache'))
+        self.assertEqual(self.db.execute('SELECT git_name FROM users WHERE id=2').fetchone()[0], 'old')
 
     def test_unknown_table_is_not_silently_skipped(self):
         self.db.execute('CREATE TABLE new_preferences(id INTEGER PRIMARY KEY,user_id INTEGER)')

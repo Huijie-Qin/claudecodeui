@@ -33,7 +33,10 @@ workspace_mcp_preset_installs workspace_skill_preset_installs
 workspace_agent_template_snapshots workspace_agent_template_mcp_installs
 workspace_skill_market_imports workspace_hook_assignments ai_skill_binding_history
 """.split())
+# The retired admin analytics cache is global and no longer read by the server
+# (removed in 993aa14a). Preserve its historical rows; it is not account data.
 SHARED_TABLES = set("""
+admin_analytics_cache
 account_copy_jobs account_copy_instances skill_snippets skill_snippet_audit skill_eval_worker
 tenants app_config vapid_keys claude_env_allowlist mcp_server_presets
 mcp_preset_helper_scripts agent_template_categories agent_templates tenant_skill_presets
