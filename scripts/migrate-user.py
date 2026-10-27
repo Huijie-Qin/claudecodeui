@@ -12,6 +12,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('ccui_account_copy', ROOT / 'scripts/migrate-user-data.py')
@@ -68,6 +69,69 @@ def find_database(settings, root=ROOT, home=None):
     if len(found) != 1:
         raise ValueError('未找到唯一数据库，请在项目 .env 中设置 DATABASE_PATH')
     return found.pop()
+
+
+def check_backend(root=ROOT, environ=None):
+    """Inspect the exact migration database without a lease or business writes."""
+    environ = os.environ if environ is None else environ
+    settings = load_settings(root, environ)
+    database = find_database(settings, root)
+    origin = ('环境变量 DATABASE_PATH' if environ.get('DATABASE_PATH') else
+              str(root / '.env') + ' 中的 DATABASE_PATH' if settings.get('DATABASE_PATH') else '自动查找')
+    print('数据库路径来源: ' + origin, flush=True)
+    print('脚本实际数据库: ' + str(database), flush=True)
+    problems = []
+    with closing(engine.connect(database)) as db:
+        journal = db.execute('PRAGMA journal_mode').fetchone()[0].lower()
+        print('SQLite 日志模式: ' + journal, flush=True)
+        if journal != 'wal':
+            problems.append('当前数据库未使用 WAL；核对后端实际数据库路径和启动日志。')
+        info = engine.schema(db)
+        try:
+            engine.inspect_schema(info)
+        except ValueError as error:
+            problems.append(str(error))
+        required = {'account_copy_instances', 'account_copy_jobs'}
+        missing = required - set(info)
+        if missing:
+            print('缺少在线迁移表: ' + ', '.join(sorted(missing)), flush=True)
+            problems.append('此数据库未完成在线迁移功能初始化；核对运行的构建产物和数据库路径。')
+        else:
+            def sample():
+                return [dict(row) for row in db.execute(
+                    'SELECT id, protocol, heartbeat_ms FROM account_copy_instances ORDER BY id')]
+            before = {row['id']: row['heartbeat_ms'] for row in sample()}
+            print('正在观察心跳是否持续更新（1 秒）…', flush=True)
+            time.sleep(1)
+            current = sample()
+            now = online.milliseconds()
+            live = [row for row in current if row['heartbeat_ms'] > now - online.FRESH_MS]
+            print('心跳记录: {}；最近 5 秒内: {}'.format(len(current), len(live)), flush=True)
+            for row in current:
+                print('实例 {}: protocol={}，心跳距今 {:.1f} 秒，采样期间{}'.format(
+                    row['id'], row['protocol'], (now - row['heartbeat_ms']) / 1000,
+                    '有更新' if row['heartbeat_ms'] > before.get(row['id'], -1) else '未更新'), flush=True)
+            if not current:
+                problems.append('此数据库没有心跳记录；可能是后端尚未启动完成、运行旧构建，或脚本连到了其他数据库。')
+            elif not live:
+                problems.append('心跳均已过期；检查运行进程、数据库路径以及后端 [AccountCopy] 错误日志。')
+            if any(row['protocol'] != 1 for row in live):
+                problems.append('存活后端的迁移协议不一致，需要统一所有副本的版本。')
+            if any(row['heartbeat_ms'] > now + online.FRESH_MS for row in current):
+                problems.append('发现未来时间的心跳；检查宿主机和后端时钟。')
+            if live and not any(row['heartbeat_ms'] > before.get(row['id'], -1) for row in live):
+                problems.append('采样期间没有新心跳；核对数据库是否为运行实例使用的文件，并检查后端是否阻塞。')
+            active = db.execute("SELECT COUNT(*) FROM account_copy_jobs WHERE phase IN ('draining','frozen','committing','recovering')").fetchone()[0]
+            print('进行中的迁移/恢复: ' + str(active), flush=True)
+            if active:
+                problems.append('已有迁移或恢复正在执行，请等待其完成。')
+    if problems:
+        for problem in problems:
+            print('待处理: ' + problem, flush=True)
+        print('只读检查结束，未执行迁移或暂停账号。', flush=True)
+        return False
+    print('数据库与心跳检查通过；账号范围、运行中任务和文件条件将在正式迁移时检查。', flush=True)
+    return True
 
 
 def command(args, allowed=(0,), timeout=60):
@@ -147,6 +211,7 @@ def migrate(source_selector, target_selector, root=ROOT, environ=None, timeout=3
                (args.data_root, args.runtime_root, args.backup_dir) for existing in scope['paths']):
             raise ValueError('副本或备份目录不能位于现有工作区/runtime 内')
         lease = online.Lease(engine, database, scope, timeout=timeout)
+        print('脚本实际数据库: ' + str(database), flush=True)
         lease.start(db)
         result, restored = None, False
         try:
@@ -204,7 +269,10 @@ def main():
     parser.add_argument('source', nargs='?', help='源用户名，或 id:123')
     parser.add_argument('target', nargs='?', help='目标用户名，或 id:456')
     parser.add_argument('--wait-seconds', type=int, default=300, help='等待相关在途操作结束的秒数，默认 300')
+    parser.add_argument('--check', action='store_true', help='只读检查数据库路径和后端心跳，不执行迁移')
     args = parser.parse_args()
+    if args.check:
+        return 0 if check_backend() else 1
     if args.wait_seconds < 1:
         raise ValueError('--wait-seconds 必须大于 0')
     source = args.source or input('源账号: ').strip()
@@ -220,7 +288,7 @@ def main():
 
 if __name__ == '__main__':
     try:
-        main()
+        sys.exit(main())
     except (OSError, ValueError, RuntimeError, sqlite3.Error, subprocess.SubprocessError, EOFError) as error:
         print('迁移失败: ' + str(error), file=sys.stderr)
         sys.exit(1)

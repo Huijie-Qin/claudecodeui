@@ -71,6 +71,71 @@ setInterval(() => {}, 1000);
             result = oneclick.migrate('old', 'new', root=self.root, environ={}, timeout=5)
             return result, commands.call_args_list
 
+    def test_readonly_check_observes_running_backend(self):
+        output = io.StringIO()
+        with patch.object(oneclick, 'docker_inventory', side_effect=AssertionError('no Docker access')), \
+                patch.object(oneclick.online.Lease, 'start', side_effect=AssertionError('no lease')), \
+                contextlib.redirect_stdout(output):
+            self.assertTrue(oneclick.check_backend(self.root, {}))
+        self.assertIn(str(self.database), output.getvalue())
+        self.assertIn('有更新', output.getvalue())
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM account_copy_jobs').fetchone()[0], 0)
+
+    def test_readonly_check_distinguishes_missing_expired_and_incompatible_heartbeats(self):
+        self.stop_server()
+        for case, age, protocol, expected in (
+            ('missing', None, 1, '没有心跳记录'),
+            ('expired', 20000, 1, '心跳均已过期'),
+            ('protocol', 100, 2, '迁移协议不一致'),
+            ('stuck', 100, 1, '采样期间没有新心跳'),
+            ('future', -20000, 1, '未来时间的心跳'),
+        ):
+            with self.subTest(case=case):
+                self.db.execute('DELETE FROM account_copy_instances')
+                if age is not None:
+                    self.db.execute('INSERT INTO account_copy_instances VALUES (?, ?, ?, ?)',
+                        ('replica', protocol, 100000 - age, '{"secret":"must-not-print"}'))
+                before = '\n'.join(self.db.iterdump())
+                output = io.StringIO()
+                with patch.object(oneclick.online, 'milliseconds', return_value=100000), \
+                        patch.object(oneclick.time, 'sleep'), contextlib.redirect_stdout(output):
+                    self.assertFalse(oneclick.check_backend(self.root, {}))
+                self.assertIn(expected, output.getvalue())
+                self.assertNotIn('must-not-print', output.getvalue())
+                self.assertEqual(before, '\n'.join(self.db.iterdump()))
+
+    def test_readonly_check_reports_missing_tables_and_env_override(self):
+        self.stop_server()
+        self.db.execute('DROP TABLE account_copy_instances')
+        self.db.execute('DROP TABLE account_copy_jobs')
+        (self.root / '.env').write_text('DATABASE_PATH=/wrong/database.db')
+        before = '\n'.join(self.db.iterdump())
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertFalse(oneclick.check_backend(self.root, {'DATABASE_PATH': str(self.database)}))
+        self.assertIn('环境变量 DATABASE_PATH', output.getvalue())
+        self.assertIn(str(self.database), output.getvalue())
+        self.assertIn('缺少在线迁移表', output.getvalue())
+        self.assertEqual(before, '\n'.join(self.db.iterdump()))
+
+    def test_readonly_check_reports_pending_recovery(self):
+        self.stop_server()
+        self.db.execute("INSERT INTO account_copy_jobs VALUES('pending','{}','recovering',0,0)")
+        before = '\n'.join(self.db.iterdump())
+        output = io.StringIO()
+        with patch.object(oneclick.time, 'sleep'), contextlib.redirect_stdout(output):
+            self.assertFalse(oneclick.check_backend(self.root, {}))
+        self.assertIn('进行中的迁移/恢复: 1', output.getvalue())
+        self.assertEqual(before, '\n'.join(self.db.iterdump()))
+
+    def test_check_cli_never_prompts_or_migrates_and_sets_exit_status(self):
+        for healthy in (True, False):
+            with patch.object(oneclick.sys, 'argv', ['migrate-user.py', '--check']), \
+                    patch.object(oneclick, 'check_backend', return_value=healthy), \
+                    patch('builtins.input', side_effect=AssertionError('no prompts')), \
+                    patch.object(oneclick, 'migrate', side_effect=AssertionError('no migration')):
+                self.assertEqual(oneclick.main(), 0 if healthy else 1)
+
     def test_online_copy_preserves_source_and_identity(self):
         source = oneclick.engine.collect(self.db, oneclick.engine.schema(self.db), 1)
         result, calls = self.run_oneclick()

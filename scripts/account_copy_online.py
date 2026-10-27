@@ -66,7 +66,7 @@ class Lease:
         with transaction(db):
             live = self.live_instances(db)
             if not live:
-                raise ValueError('未检测到支持在线迁移的后端心跳；请先升级并启动服务')
+                raise ValueError('未检测到支持在线迁移的后端心跳；请运行 bash scripts/migrate-user.sh --check，核对数据库路径、后端构建版本及启动状态')
             if db.execute("SELECT 1 FROM account_copy_jobs WHERE phase IN ('draining','frozen','committing','recovering')").fetchone():
                 raise ValueError('已有迁移或自动恢复正在执行，请等待完成')
             self.instances = {r['id'] for r in live}
